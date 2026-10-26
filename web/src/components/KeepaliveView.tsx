@@ -1,4 +1,14 @@
-import { HeartPulse, LoaderCircle, Plus, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
+import {
+  HeartPulse,
+  LoaderCircle,
+  MapPin,
+  Plus,
+  Power,
+  PowerOff,
+  RefreshCw,
+  Trash2,
+} from 'lucide-react'
+import { regionLabel } from '../regions'
 import type { Keepalive, Server } from '../types'
 import { Badge, Empty, Meter, statusLabel, statusTone } from './ui'
 
@@ -58,12 +68,12 @@ export default function KeepaliveView({
             // 保活开着的时候手动关机只会被下一轮立刻拉起来，还会伪造一条「保活拉起」，
             // 所以只在暂停 / 让位状态下放开手动启停
             const locked = item.enabled || inGroup
-            const powerHint = running ? '按节省停机模式关机' : '开机'
+            const powerHint = running ? '关机（优先节省停机，不支持时转普通停机）' : '开机'
             return (
               <div className="card server-card" key={item.id}>
                 <div className="head">
                   <Badge tone={statusTone(item.instance_status)} pulse={running && item.enabled}>
-                    {statusLabel(item.instance_status)}
+                    {statusLabel(item.instance_status, item.stopped_mode)}
                   </Badge>
                   <strong title={item.label}>{item.label}</strong>
                   <div className="actions">
@@ -101,7 +111,10 @@ export default function KeepaliveView({
 
                 <div className="meta-line">
                   <code>{item.instance_id || '未填实例 ID'}</code>
-                  <span className="grow">{item.region_id}</span>
+                  <span className="card-region" title={item.region_id}>
+                    <MapPin size={11} />
+                    {regionLabel(item.region_id)}
+                  </span>
                   <span className={`site-tag ${item.site === 'international' ? 'intl' : ''}`}>
                     {item.site === 'international' ? '国际站' : '中国站'}
                   </span>

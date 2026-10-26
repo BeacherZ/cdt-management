@@ -3,9 +3,13 @@
 文案是用户长期打磨的，措辞、emoji、分隔线、字段顺序一律照抄，不做「优化」。
 唯一改动过的地方，都是「成员多于两台时脚本的两块结构装不下」：
   · 换班完成：停止账号按成员数逐个列出（脚本只有两台，写死一块）
-  · 当前班次：两台用 AM / PM（脚本原样），三台以上补上当班机名，否则看不出是谁在跑
+  · 当前班次：两台用 AM / PM（脚本原样）；三台以上一律写成「机名（起–止）」，
+    因为三台轮班时每台都可能落在 AM 段，只写 AM / PM 根本看不出是谁
   · 临时换班：三台以上在「超限账号」之后再补「停止账号」
   · 全局熔断：两台说「双实例」，三台以上说「N 台实例」
+
+停机状态一律读实例真实返回的 StoppedMode（StopCharging 节省停机 / KeepCharging 普通停机），
+不按脚本写死「Stopped (StopCharging)」——普通停机照常收规格费，写错会误导。
 
 本模块只做拼装，不查库、不调接口，方便和脚本对着看。
 """
@@ -21,7 +25,26 @@ from . import notify
 
 SEP = "━━━━━━━━━━━━━━━"
 
+# 阿里云 StoppedMode 的两种取值，面板与通知统一用这套说法
+MODE_LABELS = {"StopCharging": "节省停机", "KeepCharging": "普通停机", "Stop": "普通停机"}
+
 _TAG_RE = re.compile(r"<[^>]+>")
+
+
+def mode_label(mode: str | None) -> str:
+    """StopCharging → 节省停机；KeepCharging → 普通停机；空值返回空串。"""
+    mode = str(mode or "").strip()
+    return MODE_LABELS.get(mode, mode) if mode else ""
+
+
+def stop_tail(servers: list[dict[str, Any]]) -> str:
+    """一句话说明这批机器到底是怎么停的，按实例返回的真实 StoppedMode。"""
+    modes = {_mode(s) for s in servers}
+    if modes == {"StopCharging"}:
+        return "均已节省停机"
+    if len(modes) == 1 and "" not in modes:
+        return f"均已{mode_label(next(iter(modes)))}"
+    return "均已停机"
 
 
 # --------------------------------------------------------------------------
@@ -46,9 +69,15 @@ def _mode(server: dict[str, Any]) -> str:
 
 
 def _status(server: dict[str, Any]) -> str:
-    """脚本里的 disp：Running 时不带括号，其它状态带上停机模式。"""
+    """脚本里的 disp：Running 时不带括号，其它状态带上停机模式。
+
+    模式还没读到（刚下发指令、实例还在 Stopping）时只写状态，不补空括号。
+    """
     status = str(server.get("instance_status") or "Unknown")
-    return status if status == "Running" else f"{status} ({_mode(server)})"
+    if status == "Running":
+        return status
+    mode = _mode(server)
+    return f"{status} ({mode})" if mode and mode != "-" else status
 
 
 def _used(server: dict[str, Any]) -> float:
@@ -118,7 +147,7 @@ def shift_done(
             f"🕒 <b>当前班次</b>：{period}\n{SEP}\n"
             + _join_blocks(
                 [running_block("运行账号", duty, ddns_status)]
-                + [stopped_block("停止账号", s, "Stopped (StopCharging)") for s in stopped]
+                + [stopped_block("停止账号", s, _status(s)) for s in stopped]
             ),
         )
     return _message(
@@ -128,7 +157,7 @@ def shift_done(
         f"🕒 <b>当前班次</b>：{period}\n{SEP}\n"
         + _join_blocks(
             [running_block("运行账号", duty, ddns_status)]
-            + [stopped_block("停止账号", s, "Stopped (StopCharging)") for s in stopped]
+            + [stopped_block("停止账号", s, _status(s)) for s in stopped]
         ),
     )
 
@@ -142,7 +171,7 @@ def shift_failover(
     """⚠️ 临时换班（故障转移）。两块是脚本原样，三台以上才补「停止账号」。"""
     parts = [running_block("接替账号", duty, ddns_status)]
     parts += [stopped_block("超限账号", s, _status(s), used=_used(s)) for s in over]
-    parts += [stopped_block("停止账号", s, "Stopped (StopCharging)") for s in standby]
+    parts += [stopped_block("停止账号", s, _status(s)) for s in standby]
     return _message(
         "shift_failover",
         "⚠️ <b>CDT 临时换班报告</b>",
@@ -152,11 +181,13 @@ def shift_failover(
 
 
 def breaker(servers: list[dict[str, Any]]) -> notify.Message:
-    """🚨 全局熔断。脚本原文含「到达到阈值」「“全局熔断”」，保持原样。"""
-    if len(servers) == 2:
-        warn = "双实例流量均已到达到阈值，“全局熔断”，均已节省停机。"
-    else:
-        warn = f"{len(servers)} 台实例流量均已到达到阈值，“全局熔断”，均已节省停机。"
+    """🚨 全局熔断。脚本原文含「到达到阈值」「“全局熔断”」，保持原样。
+
+    尾巴按真实停机模式写：脚本默认全是节省停机，但有的规格不支持，
+    会退化成普通停机（照常收规格费），这时候还说「均已节省停机」就是骗人。
+    """
+    count = "双实例" if len(servers) == 2 else f"{len(servers)} 台实例"
+    warn = f"{count}流量均已到达到阈值，“全局熔断”，{stop_tail(servers)}。"
     blocks = [
         "\n".join(
             [
@@ -290,8 +321,18 @@ def daily_report(servers: list[dict[str, Any]], timestamp: str) -> notify.Messag
     )
 
 
-def shift_period(label: str, shift_start: int, member_count: int, tz: Any) -> str:
-    """当前班次。两台照脚本写 AM / PM；三台以上补当班机名。"""
-    hour = dt.datetime.fromtimestamp(shift_start, tz).hour
-    period = "AM" if hour < 12 else "PM"
-    return period if member_count <= 2 else f"{period} · {label}"
+def shift_period(
+    label: str, shift_start: int, hours: float, member_count: int, tz: Any
+) -> str:
+    """当前班次。两台照脚本写 AM / PM；三台以上写成「机名（起–止）」。
+
+    三台轮班时 AM 段可能有好几台，只看 AM / PM 分不清谁在跑，所以补机名 + 班次时间段。
+    时间段就是换班组里给这台机器设的时长，起点是本班次开始时刻。
+    """
+    start = dt.datetime.fromtimestamp(shift_start, tz)
+    if member_count <= 2:
+        return "AM" if start.hour < 12 else "PM"
+    end = start + dt.timedelta(hours=float(hours or 12))
+    # 跨天班次标「次日」，否则 22:00–06:00 看着像时间倒流
+    tail = f"次日 {end:%H:%M}" if end.date() > start.date() else f"{end:%H:%M}"
+    return f"{html_lib.escape(label)}（{start:%H:%M}–{tail}）"

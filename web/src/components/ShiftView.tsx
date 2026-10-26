@@ -174,7 +174,7 @@ export default function ShiftView({
                           <div className="slot-name">{server.label}</div>
                           <div className="slot-line">
                             <Badge tone={statusTone(server.instance_status)}>
-                              {statusLabel(server.instance_status)}
+                              {statusLabel(server.instance_status, server.stopped_mode)}
                             </Badge>
                             <code>{server.instance_id || '未填实例'}</code>
                           </div>

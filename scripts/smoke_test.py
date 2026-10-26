@@ -431,14 +431,20 @@ status, body = call("POST", f"/api/v1/servers/{idle['id']}/actions/stop")
 check("闲散机器可手动关机", status == 200, f"HTTP {status} {str(body)[:120]}")
 check("关机后状态为 Stopped", body.get("status") == "Stopped", str(body.get("status")))
 check("闲散机器不带托管提示", not body.get("managed_note"), str(body.get("managed_note")))
+check(
+    "关机返回真实停机模式",
+    body.get("stopped_mode") == "StopCharging",
+    str(body.get("stopped_mode")),
+)
 
 status, body = call("POST", f"/api/v1/servers/{idle['id']}/actions/start")
 check("闲散机器可手动开机", status == 200 and body.get("status") == "Running", str(body)[:120])
 
 events = call("GET", "/api/v1/overview")[1]["events"]
 check(
+    # 事件标题带上真实停机模式，省得和普通停机混在一起看不出来
     "手动操作已记录事件",
-    any("手动节省停机" in e.get("title", "") for e in events),
+    any("手动停机（节省停机）" in e.get("title", "") for e in events),
     str([e.get("title") for e in events[:5]]),
 )
 

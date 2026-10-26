@@ -22,11 +22,22 @@ import ShiftView from './components/ShiftView'
 import ServerDialog from './components/ServerDialog'
 import GroupDialog from './components/GroupDialog'
 import SettingsDrawer from './components/SettingsDrawer'
-import { Badge, Empty, Modal, statusLabel, statusTone } from './components/ui'
+import ConfirmDialog from './components/ConfirmDialog'
+import { Badge, Empty, Modal, statusLabel, statusTone, stoppedModeLabel } from './components/ui'
 
 type Phase = 'loading' | 'setup' | 'login' | 'ready' | 'fatal'
 type View = 'dashboard' | 'keepalive' | 'shift' | 'servers'
 type Toast = { id: number; tone: 'success' | 'error' | 'info'; message: string }
+
+/** 删除这类不可撤销的操作，统一走应用内二次确认（window.confirm 在桌面壳里可能被吞掉） */
+type ConfirmRequest = {
+  title: string
+  message: string
+  hint?: string
+  confirmText?: string
+  failText?: string
+  run: () => Promise<void>
+}
 
 const REFRESH_MS = 10_000
 
@@ -94,6 +105,8 @@ export default function App() {
   })
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [keepalivePicker, setKeepalivePicker] = useState(false)
+  const [confirmBox, setConfirmBox] = useState<ConfirmRequest | null>(null)
+  const [confirmBusy, setConfirmBusy] = useState(false)
   const polling = useRef<number | null>(null)
 
   const toast = useCallback((message: string, tone: Toast['tone'] = 'info') => {
@@ -163,11 +176,22 @@ export default function App() {
   async function serverAction(serverId: number, action: 'start' | 'stop') {
     setBusyServer(serverId)
     try {
-      const result = await post<{ managed_note?: string }>(
-        `/api/v1/servers/${serverId}/actions/${action}`,
-      )
+      const result = await post<{
+        status?: string
+        stopped_mode?: string
+        managed_note?: string
+      }>(`/api/v1/servers/${serverId}/actions/${action}`)
       await loadAll()
-      toast(action === 'start' ? '已下发开机指令' : '已下发节省停机指令', 'success')
+      // 停机模式以实例真实返回为准：不支持节省停机的规格会退化成普通停机
+      const mode = stoppedModeLabel(result?.stopped_mode)
+      toast(
+        action === 'start'
+          ? '已下发开机指令'
+          : mode
+            ? `已下发停机指令（${mode}）`
+            : '已下发停机指令',
+        'success',
+      )
       if (result?.managed_note) {
         toast(`${result.managed_note}托管中，下一轮对账会按流程纠正`, 'info')
       }
@@ -209,15 +233,19 @@ export default function App() {
     }
   }
 
-  async function deleteServer(server: Server) {
-    if (!window.confirm(`删除服务器「${server.label}」？配置会一并删除，实例本身不受影响。`)) return
-    try {
-      await del(`/api/v1/servers/${server.id}`)
-      await loadAll()
-      toast('服务器已删除', 'success')
-    } catch (error) {
-      toast(error instanceof Error ? error.message : '删除失败', 'error')
-    }
+  function deleteServer(server: Server) {
+    setConfirmBox({
+      title: '删除服务器',
+      message: `确定删除「${server.label}」？`,
+      hint: '只删除本机保存的账号配置与密钥，阿里云上的实例本身不受影响，也不会被停机。',
+      confirmText: '删除服务器',
+      failText: '删除失败',
+      run: async () => {
+        await del(`/api/v1/servers/${server.id}`)
+        await loadAll()
+        toast('服务器已删除', 'success')
+      },
+    })
   }
 
   async function switchGroup(group: ShiftGroup) {
@@ -233,15 +261,19 @@ export default function App() {
     }
   }
 
-  async function deleteGroup(group: ShiftGroup) {
-    if (!window.confirm(`删除换班组「${group.name}」？服务器不会被删除。`)) return
-    try {
-      await del(`/api/v1/groups/${group.id}`)
-      await loadAll()
-      toast('换班组已删除', 'success')
-    } catch (error) {
-      toast(error instanceof Error ? error.message : '删除失败', 'error')
-    }
+  function deleteGroup(group: ShiftGroup) {
+    setConfirmBox({
+      title: '删除换班组',
+      message: `确定删除「${group.name}」？`,
+      hint: `组内 ${group.members.length} 台服务器只会变回闲散状态，不会被删除，也不会自动开机或停机。`,
+      confirmText: '删除换班组',
+      failText: '删除失败',
+      run: async () => {
+        await del(`/api/v1/groups/${group.id}`)
+        await loadAll()
+        toast('换班组已删除', 'success')
+      },
+    })
   }
 
   async function addKeepalive(serverId: number) {
@@ -264,14 +296,31 @@ export default function App() {
     }
   }
 
-  async function removeKeepalive(item: Keepalive) {
-    if (!window.confirm(`把「${item.label}」移出单机保活？`)) return
+  function removeKeepalive(item: Keepalive) {
+    setConfirmBox({
+      title: '移出单机保活',
+      message: `确定把「${item.label}」移出单机保活？`,
+      hint: '移出后这台机器不再自动拉起，服务器记录本身保留，可以随时重新加入。',
+      confirmText: '移出保活',
+      failText: '操作失败',
+      run: async () => {
+        await del(`/api/v1/keepalives/${item.id}`)
+        await loadAll()
+        toast('已移出保活', 'success')
+      },
+    })
+  }
+
+  async function runConfirm() {
+    if (!confirmBox) return
+    setConfirmBusy(true)
     try {
-      await del(`/api/v1/keepalives/${item.id}`)
-      await loadAll()
-      toast('已移出保活', 'success')
+      await confirmBox.run()
     } catch (error) {
-      toast(error instanceof Error ? error.message : '操作失败', 'error')
+      toast(error instanceof Error ? error.message : (confirmBox.failText ?? '操作失败'), 'error')
+    } finally {
+      setConfirmBusy(false)
+      setConfirmBox(null)
     }
   }
 
@@ -533,7 +582,7 @@ export default function App() {
                 >
                   <div className="slot-top">
                     <Badge tone={statusTone(server.instance_status)}>
-                      {statusLabel(server.instance_status)}
+                      {statusLabel(server.instance_status, server.stopped_mode)}
                     </Badge>
                   </div>
                   <div className="slot-name">{server.label}</div>
@@ -557,6 +606,18 @@ export default function App() {
             await loadAll()
             toast(message, 'success')
           }}
+        />
+      )}
+
+      {confirmBox && (
+        <ConfirmDialog
+          title={confirmBox.title}
+          message={confirmBox.message}
+          hint={confirmBox.hint}
+          confirmText={confirmBox.confirmText}
+          busy={confirmBusy}
+          onCancel={() => setConfirmBox(null)}
+          onConfirm={() => void runConfirm()}
         />
       )}
 

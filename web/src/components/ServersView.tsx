@@ -2,6 +2,7 @@ import {
   AlertTriangle,
   HeartPulse,
   LoaderCircle,
+  MapPin,
   Pencil,
   Plus,
   Power,
@@ -11,8 +12,9 @@ import {
   Server as ServerIcon,
   Trash2,
 } from 'lucide-react'
+import { regionLabel } from '../regions'
 import type { Billing, Server } from '../types'
-import { Badge, Empty, Meter, statusLabel, statusTone } from './ui'
+import { Badge, Empty, Meter, statusLabel, statusTone, stoppedModeLabel } from './ui'
 
 type Props = {
   servers: Server[]
@@ -48,7 +50,7 @@ export default function ServersView({
           <h1>服务器</h1>
           <p>
             这里登记的是「阿里云账号 + 一台 ECS 实例」。AccessKey Secret 用本机主密钥加密后存
-            SQLite，界面只显示打码值。
+            SQLite，界面上不显示，只在编辑弹窗里能换。
             {idleCount > 0 && ` 其中 ${idleCount} 台是闲散机器，可以直接手动开关机。`}
           </p>
         </div>
@@ -84,14 +86,14 @@ export default function ServersView({
             const lockHint = locked
               ? `${ownerText}托管中，先暂停或移出后再手动启停`
               : running
-                ? '按节省停机模式关机'
+                ? '关机（优先节省停机，不支持时转普通停机）'
                 : '开机'
 
             return (
               <div className="card server-card" key={server.id}>
                 <div className="head">
                   <Badge tone={statusTone(server.instance_status)} pulse={running}>
-                    {statusLabel(server.instance_status)}
+                    {statusLabel(server.instance_status, server.stopped_mode)}
                   </Badge>
                   <strong title={server.label}>{server.label}</strong>
                   <div className="actions">
@@ -120,18 +122,23 @@ export default function ServersView({
                   </div>
                 </div>
 
+                {/* 卡片只回答「这台是谁、在哪、多少流量、多少钱」。
+                    实例 ID 保留（提工单要对），地域给中文名，AccessKey 打码值对日常判断没用，
+                    编辑弹窗里能看到，就别占卡片位置了 */}
                 <div className="meta-line">
-                  <code>{server.instance_id || '未填实例 ID'}</code>
-                  <span className="grow">{server.region_id}</span>
+                  <code style={{ fontSize: 11 }}>{server.instance_id || '未填实例 ID'}</code>
+                </div>
+                <div className="meta-line">
+                  <span className="card-region" title={server.region_id}>
+                    <MapPin size={11} />
+                    {regionLabel(server.region_id)}
+                  </span>
                   <span className={`site-tag ${server.site === 'international' ? 'intl' : ''}`}>
                     {server.site === 'international' ? '国际站' : '中国站'}
                   </span>
-                </div>
-                <div className="meta-line">
-                  <span style={{ fontFamily: 'ui-monospace, Consolas, monospace' }}>
+                  <span className="card-ip" title="公网 IP">
                     {server.public_ip || '无公网 IP'}
                   </span>
-                  <span style={{ marginLeft: 'auto' }}>{server.access_key_masked}</span>
                 </div>
 
                 <Meter
@@ -146,9 +153,12 @@ export default function ServersView({
                   onRefresh={() => onBilling(server)}
                 />
 
-                {server.stopped_mode === 'StopCharging' && server.instance_status === 'Stopped' && (
-                  <div style={{ fontSize: 11, color: 'var(--muted)' }}>已按节省停机模式停机</div>
-                )}
+                {server.instance_status === 'Stopped' &&
+                  stoppedModeLabel(server.stopped_mode) === '普通停机' && (
+                    <div style={{ fontSize: 11, color: 'var(--amber)' }}>
+                      普通停机（KeepCharging）仍计实例规格费
+                    </div>
+                  )}
                 {server.remark && (
                   <div style={{ fontSize: 11.5, color: 'var(--muted-soft)' }}>{server.remark}</div>
                 )}

@@ -552,7 +552,7 @@ class Engine:
                 repo.add_event(
                     "breaker",
                     f"{name}：全局熔断",
-                    f"{len(fresh)} 台成员全部超限，均已节省停机",
+                    f"{len(fresh)} 台成员全部超限，{messages.stop_tail(fresh)}",
                     level="error",
                     group_id=group_id,
                 )
@@ -714,6 +714,7 @@ class Engine:
             period = messages.shift_period(
                 duty.get("label") or "",
                 int(slot_key),
+                _hours_of(group, duty),
                 len(others) + 1,
                 tz,
             )
@@ -815,9 +816,15 @@ class Engine:
             log.warning("手动启停后读取实例状态失败: %s", exc)
             info = None
 
-        label = "开机" if action == "start" else "节省停机"
+        label = "开机" if action == "start" else "停机"
         note = self._managed_note(server_id)
         detail = f"当前 {info.status}" if info else "指令已下发，状态待刷新"
+        # 实际停机模式以实例返回为准：不支持节省停机的规格会退化成普通停机，
+        # 事件里照旧写「节省停机」会让人以为没在花钱
+        mode_text = messages.mode_label(info.stopped_mode) if info is not None else ""
+        if action == "stop" and mode_text:
+            label = f"停机（{mode_text}）"
+            detail += f" · {mode_text}"
         if note:
             detail += f" · 由{note}托管，下一轮对账会按流程纠正"
 
@@ -830,7 +837,11 @@ class Engine:
             )
             payload = info.to_dict()
         else:
-            payload = {"status": server.get("instance_status") or "Unknown"}
+            payload = {
+                "status": server.get("instance_status") or "Unknown",
+                # 读状态失败也要把已知模式带回去，前端 toast 才好写真实结果
+                "stopped_mode": server.get("stopped_mode") or "",
+            }
 
         repo.add_event("manual", f"{server.get('label')}：手动{label}", detail, server_id=server_id)
         payload["managed_note"] = note
@@ -892,6 +903,14 @@ def _timezone(name: str) -> dt.tzinfo:
 
 def _encode_ids(servers: list[dict[str, Any]]) -> str:
     return json.dumps([int(s["id"]) for s in servers])
+
+
+def _hours_of(group: dict[str, Any], server: dict[str, Any]) -> float:
+    """这台机器在组里设的班次时长；读不到就按 12 小时，别让文案变成问号。"""
+    for member in group.get("members") or []:
+        if int(member.get("server_id") or 0) == int(server.get("id") or 0):
+            return float(member.get("hours") or 12)
+    return 12.0
 
 
 def _over_threshold(server: dict[str, Any]) -> bool:

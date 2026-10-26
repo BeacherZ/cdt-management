@@ -322,6 +322,32 @@ class Cdp {
     await cdp.shot('12-server-dialog-intl.png')
     await cdp.clickSelector('.modal .close')
 
+    // 7. 删除要二次确认。以前用 window.confirm，桌面壳里会被静默吞掉 → 点一下直接删了。
+    //    这里断言弹窗真的出现、标题对得上，再点「取消」保住演示数据。
+    await cdp.clickByText('.sidebar .nav-item', '服务器')
+    await cdp.clickSelector('.server-card .actions button[title="删除"]')
+    await cdp.waitSelector('.modal')
+    await sleep(300)
+    await cdp.shot('14-confirm-delete.png')
+    const confirmBox = await cdp.evaluate(`(() => {
+      const box = document.querySelector('.modal')
+      if (!box) return 'no-modal'
+      const pick = (selector) => {
+        const node = box.querySelector(selector)
+        return node ? node.textContent.trim() : ''
+      }
+      return [pick('.modal-head h3'), pick('.confirm-text'), pick('.confirm-hint')].join('|')
+    })()`)
+    if (!confirmBox.startsWith('删除服务器|确定删除')) {
+      throw new Error('删除确认弹窗不对劲：' + confirmBox)
+    }
+    console.log('  ✓ 删除服务器要二次确认（应用内弹窗）')
+    await cdp.clickByText('.modal-foot button', '取消')
+    if (await cdp.evaluate(`document.querySelector('.modal') ? 1 : 0`)) {
+      throw new Error('点取消后弹窗没关')
+    }
+    console.log('  ✓ 取消后弹窗关闭，演示数据没被删')
+
     // 7. 窄屏
     await cdp.viewport(MOBILE, true)
     await cdp.goto(BASE)

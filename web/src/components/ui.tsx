@@ -46,8 +46,24 @@ export const STATUS_LABEL: Record<string, string> = {
   Unknown: '未知',
 }
 
-export function statusLabel(status: string) {
-  return STATUS_LABEL[status] ?? status ?? '未知'
+/** 阿里云 StoppedMode。节省停机不计规格费，普通停机照常计费，必须分清楚 */
+export const STOPPED_MODE_LABEL: Record<string, string> = {
+  StopCharging: '节省停机',
+  KeepCharging: '普通停机',
+  Stop: '普通停机',
+}
+
+export function stoppedModeLabel(mode?: string | null): string {
+  const key = (mode ?? '').trim()
+  if (!key) return ''
+  return STOPPED_MODE_LABEL[key] ?? key
+}
+
+export function statusLabel(status: string, mode?: string | null) {
+  const base = STATUS_LABEL[status] ?? status ?? '未知'
+  // 停机时把真实模式一起显示：以前一律当节省停机，普通停机会被误认为不花钱
+  const detail = status === 'Stopped' ? stoppedModeLabel(mode) : ''
+  return detail ? `${base} · ${detail}` : base
 }
 
 export function phaseTone(phase: string): Tone {

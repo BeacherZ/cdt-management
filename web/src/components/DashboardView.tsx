@@ -209,7 +209,7 @@ export default function DashboardView({
                       <div className="slot-name">{duty.server.label}</div>
                       <div className="slot-line">
                         <Badge tone={statusTone(duty.server.instance_status)}>
-                          {statusLabel(duty.server.instance_status)}
+                          {statusLabel(duty.server.instance_status, duty.server.stopped_mode)}
                         </Badge>
                         <code>{duty.server.public_ip || '—'}</code>
                       </div>

@@ -85,19 +85,50 @@ class ShiftDone(unittest.TestCase):
         self.assertIn(f"🕒 <b>当前班次</b>：PM\n{SEP}", message.html)
 
     def test_three_members_adds_block_and_names_duty(self):
-        period = messages.shift_period(
-            A["label"], 0, 3, dt.timezone(dt.timedelta(hours=8))
-        )
+        tz = dt.timezone(dt.timedelta(hours=8))
+        start = dt.datetime(2026, 10, 26, 0, 0, tzinfo=tz).timestamp()
+        period = messages.shift_period(A["label"], int(start), 12, 3, tz)
         message = messages.shift_done(A, [B, C], period, "✅ 已同步")
         self.assertEqual(message.html.count("⚪ <b>停止账号 </b>"), 2)
-        self.assertIn(f"🕒 <b>当前班次</b>：AM · AliCloud-CDT-AM\n", message.html)
+        # 三台以上不能只写 AM：同一 AM 段可能有好几台，必须给出机名和班次时间段
+        self.assertIn(
+            f"🕒 <b>当前班次</b>：AliCloud-CDT-AM（00:00–12:00）\n", message.html
+        )
 
     def test_two_members_period_is_plain_am_pm(self):
         tz = dt.timezone(dt.timedelta(hours=8))
         morning = dt.datetime(2026, 10, 26, 0, 0, tzinfo=tz).timestamp()
         afternoon = dt.datetime(2026, 10, 26, 12, 0, tzinfo=tz).timestamp()
-        self.assertEqual(messages.shift_period(A["label"], int(morning), 2, tz), "AM")
-        self.assertEqual(messages.shift_period(A["label"], int(afternoon), 2, tz), "PM")
+        self.assertEqual(messages.shift_period(A["label"], int(morning), 12, 2, tz), "AM")
+        self.assertEqual(messages.shift_period(A["label"], int(afternoon), 12, 2, tz), "PM")
+
+    def test_period_marks_next_day(self):
+        # 跨天班次写「次日」，否则 22:00–06:00 看着像时间倒流
+        tz = dt.timezone(dt.timedelta(hours=8))
+        start = dt.datetime(2026, 10, 26, 22, 0, tzinfo=tz).timestamp()
+        self.assertEqual(
+            messages.shift_period(A["label"], int(start), 8, 3, tz),
+            "AliCloud-CDT-AM（22:00–次日 06:00）",
+        )
+
+    def test_stopped_block_uses_real_mode(self):
+        # 普通停机照常收规格费，不能跟着脚本写死 StopCharging
+        keep = {**B, "stopped_mode": "KeepCharging"}
+        self.assertIn(
+            "┃ ⚪ 状态：Stopped (KeepCharging)",
+            messages.shift_done(A, [keep], "AM", "✅ 已同步").html,
+        )
+
+    def test_breaker_says_real_mode(self):
+        keep = {**A, "instance_status": "Stopped", "stopped_mode": "KeepCharging"}
+        # 两台模式不一致时不下结论，只说「均已停机」
+        message = messages.breaker([keep, B])
+        self.assertIn("，均已停机。", message.html)
+        self.assertNotIn("均已节省停机", message.html)
+        # 全是普通停机时不能跟着脚本说「均已节省停机」
+        message = messages.breaker([keep, {**B, "stopped_mode": "KeepCharging"}])
+        self.assertIn("均已普通停机", message.html)
+        self.assertNotIn("均已节省停机", message.html)
 
     def test_no_usage_line_in_shift_report(self):
         # 脚本的换班报告里没有「已用」这一行，别被顺手加回来
@@ -142,14 +173,18 @@ class ShiftFailover(unittest.TestCase):
 
 
 class Breaker(unittest.TestCase):
+    # 熔断发生时每台都已经停机，测试数据也按真实状态造，别拿 Running 的机器凑数
+    OFF_A = {**A, "instance_status": "Stopped", "stopped_mode": "StopCharging"}
+    OFF_C = {**C, "instance_status": "Stopped", "stopped_mode": "StopCharging"}
+
     def test_two_members_wording(self):
-        message = messages.breaker([A, B])
+        message = messages.breaker([self.OFF_A, B])
         self.assertTrue(message.html.startswith("🚨 <b>CDT 全局熔断报告</b>\n\n"))
         self.assertIn("⚠ <b>警告：双实例流量均已到达到阈值，“全局熔断”，均已节省停机。</b>", message.html)
         self.assertIn("🖥 AliCloud-CDT-AM\n┃ 📦 实例：<code>i-aaa111</code>\n┃ 📈 已用：12.00 GB\n", message.html)
 
     def test_three_members_wording(self):
-        message = messages.breaker([A, B, C])
+        message = messages.breaker([self.OFF_A, B, self.OFF_C])
         self.assertIn("3 台实例流量均已到达到阈值", message.html)
         self.assertEqual(message.html.count("🖥 "), 3)
 
