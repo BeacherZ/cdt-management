@@ -122,7 +122,7 @@ class Engine:
                 results.extend(self.reconcile_keepalives(config, now, grouped))
             except Exception as exc:  # noqa: BLE001
                 log.exception("单机保活对账失败")
-                repo.add_event("error", "单机保活对账异常", str(exc), level="error")
+                repo.add_event("error", "单机保活同步异常", str(exc), level="error")
 
             for group in repo.list_groups():
                 try:
@@ -131,7 +131,7 @@ class Engine:
                     log.exception("换班组 %s 对账失败", group.get("id"))
                     repo.add_event(
                         "error",
-                        f"换班组 {group.get('name')} 对账异常",
+                        f"换班组 {group.get('name')} 同步异常",
                         str(exc),
                         level="error",
                         group_id=int(group["id"]),
@@ -728,7 +728,7 @@ class Engine:
         """立即跳到下一台：把轮换起点平移到当前班的结束时刻。"""
         # 和后台调度抢同一把锁：否则两边会同时给同一批实例下指令
         if not self._lock.acquire(timeout=30):
-            raise ValueError("后台正在对账，请稍后再试")
+            raise ValueError("后台正在同步，请稍后再试")
         try:
             group = repo.get_group(group_id)
             if group is None:
@@ -817,7 +817,7 @@ class Engine:
             label = f"停机（{mode_text}）"
             detail += f" · {mode_text}"
         if note:
-            detail += f" · 由{note}托管，下一轮对账会按流程纠正"
+            detail += f" · 由{note}托管，下一轮同步会按流程纠正"
 
         # 闲散机器也能绑域名：手动开机后立刻把解析指过来，不用等下一轮巡检
         if action == "start" and info is not None:

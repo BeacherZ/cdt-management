@@ -42,7 +42,7 @@ PHASE_LABELS = {
 SETTING_LABELS = {
     "timezone": "时区",
     "traffic_threshold_pct": "流量阈值",
-    "reconcile_interval": "对账间隔",
+    "reconcile_interval": "同步间隔",
     "daily_report_enabled": "每日汇总",
     "daily_report_time": "汇总时间",
     "notify_on_shift": "换班通知",
@@ -632,7 +632,7 @@ def register(app: FastAPI) -> None:
         if payload.get("reconcile_interval") is not None:
             interval = int(payload["reconcile_interval"])
             if not 30 <= interval <= 3600:
-                raise ValueError("对账间隔应在 30–3600 秒之间")
+                raise ValueError("同步间隔应在 30–3600 秒之间")
             updates["reconcile_interval"] = str(interval)
 
         put_bool("billing_enabled", payload.get("billing_enabled"))

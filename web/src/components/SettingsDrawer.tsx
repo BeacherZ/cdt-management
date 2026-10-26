@@ -187,7 +187,7 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
                   </select>
                 </div>
                 <div className="field">
-                  <label htmlFor="interval">对账间隔（秒）</label>
+                  <label htmlFor="interval">同步间隔（秒）</label>
                   <input
                     id="interval"
                     className="input"

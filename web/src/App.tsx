@@ -183,9 +183,9 @@ export default function App() {
     try {
       await post('/api/v1/reconcile')
       await loadAll()
-      toast('已触发一轮对账', 'success')
+      toast('已触发一轮同步', 'success')
     } catch (error) {
-      toast(error instanceof Error ? error.message : '对账失败', 'error')
+      toast(error instanceof Error ? error.message : '同步失败', 'error')
     }
   }
 
@@ -209,7 +209,7 @@ export default function App() {
         'success',
       )
       if (result?.managed_note) {
-        toast(`${result.managed_note}托管中，下一轮对账会按流程纠正`, 'info')
+        toast(`${result.managed_note}托管中，下一轮同步会按流程纠正`, 'info')
       }
     } catch (error) {
       toast(error instanceof Error ? error.message : '操作失败', 'error')
@@ -656,10 +656,10 @@ export default function App() {
           }}
         >
           <button className="btn ghost sm" onClick={reconcile}>
-            <RefreshCw size={12} /> 立即对账
+            <RefreshCw size={12} /> 立即同步
           </button>
           <span>
-            对账间隔 {settings.reconcile_interval} 秒 · {overview.timezone}
+            同步间隔 {settings.reconcile_interval} 秒 · {overview.timezone}
           </span>
           {!settings.sdk_ready && <Badge tone="amber">阿里云 SDK 未就绪</Badge>}
           {settings.dry_run && <Badge tone="amber">DRY RUN</Badge>}

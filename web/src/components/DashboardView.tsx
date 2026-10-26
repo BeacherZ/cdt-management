@@ -266,7 +266,7 @@ export default function DashboardView({
                 <Info size={20} />
               </div>
               <strong>暂无事件</strong>
-              <p>第一轮对账完成后，这里会出现换班与状态变化的记录。</p>
+              <p>第一轮同步完成后，这里会出现换班与状态变化的记录。</p>
             </div>
           ) : (
             <div className="events">
