@@ -854,28 +854,63 @@ class Engine:
         finally:
             self._lock.release()
 
+    def _managed_note(self, server_id: int) -> str:
+        """这台机器是否被自动化流程托管。托管时返回一句说明，闲散机器返回空串。"""
+        for group in repo.list_groups():
+            if not group.get("enabled"):
+                continue
+            for member in group.get("members") or []:
+                if member.get("enabled") and int(member["server_id"]) == server_id:
+                    return f"换班组「{group.get('name')}」"
+        for item in repo.list_keepalives():
+            if int(item["server_id"]) == server_id and item.get("enabled"):
+                return "单机保活"
+        return ""
+
     def manual_action(self, server_id: int, action: str) -> dict[str, Any]:
+        """手动开关机。闲散服务器（没编进任何自动化流程）可以随便用；
+        托管中的机器依旧允许操作，但会提示下一轮对账会按流程纠正。"""
+        if action not in ("start", "stop"):
+            raise ValueError("只支持 start / stop")
         server = repo.get_server(server_id, decrypt_secret=True)
         if server is None:
             raise ValueError("服务器不存在")
+        if not str(server.get("instance_id") or "").strip():
+            raise ValueError("这台服务器还没填实例 ID，无法启停")
+
         if action == "start":
             aliyun.start_instance(server)
-        elif action == "stop":
-            aliyun.stop_instance(server, "StopCharging")
         else:
-            raise ValueError("只支持 start / stop")
-        info = aliyun.get_instance(server)
-        repo.update_server_runtime(
-            server_id,
-            status=info.status,
-            stopped_mode=info.stopped_mode,
-            public_ip=info.public_ip,
-        )
+            # 部分规格不支持节省停机，退化成普通停机，别让手动关机直接报错
+            aliyun.stop_instance(server, "StopCharging", fallback=True)
+
+        try:
+            info = aliyun.get_instance(server)
+        except Exception as exc:  # noqa: BLE001
+            # 指令已经下发成功了，读状态失败不该让整个操作算失败
+            log.warning("手动启停后读取实例状态失败: %s", exc)
+            info = None
+
         label = "开机" if action == "start" else "节省停机"
-        repo.add_event(
-            "manual", f"{server.get('label')}：手动{label}", f"当前 {info.status}", server_id=server_id
-        )
-        return info.to_dict()
+        note = self._managed_note(server_id)
+        detail = f"当前 {info.status}" if info else "指令已下发，状态待刷新"
+        if note:
+            detail += f" · 由{note}托管，下一轮对账会按流程纠正"
+
+        if info is not None:
+            repo.update_server_runtime(
+                server_id,
+                status=info.status,
+                stopped_mode=info.stopped_mode,
+                public_ip=info.public_ip,
+            )
+            payload = info.to_dict()
+        else:
+            payload = {"status": server.get("instance_status") or "Unknown"}
+
+        repo.add_event("manual", f"{server.get('label')}：手动{label}", detail, server_id=server_id)
+        payload["managed_note"] = note
+        return payload
 
     def refresh(self, server_id: int) -> dict[str, Any]:
         server = repo.get_server(server_id, decrypt_secret=True)

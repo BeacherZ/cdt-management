@@ -84,14 +84,23 @@ def clear_flag(key: str) -> None:
 # --------------------------------------------------------------------------
 
 SERVER_COLUMNS = (
-    "id, label, access_key_id, access_key_secret, region_id, instance_id, "
+    "id, label, access_key_id, access_key_secret, region_id, site, instance_id, "
     "quota_gb, threshold_gb, remark, traffic_used, instance_status, stopped_mode, "
     "public_ip, traffic_checked_at, status_checked_at, created_at"
 )
 
+# 站点取值只有两个；其余一律归一到中国站，避免脏数据流到 endpoint 解析里
+SITE_TYPES = ("china", "international")
+
+
+def normalize_site(value: Any) -> str:
+    site = str(value or "").strip().lower()
+    return site if site in SITE_TYPES else "china"
+
 
 def _server_row(row: Any, decrypt_secret: bool = False) -> dict[str, Any]:
     item = dict(row)
+    item["site"] = normalize_site(item.get("site"))
     secret = item.pop("access_key_secret", "") or ""
     item["secret_configured"] = bool(secret)
     if decrypt_secret:
@@ -132,6 +141,7 @@ def upsert_server(payload: dict[str, Any]) -> int:
     ak = str(payload.get("access_key_id") or "").strip()
     sk = str(payload.get("access_key_secret") or "").strip()
     region = str(payload.get("region_id") or "").strip()
+    site = normalize_site(payload.get("site"))
     instance = str(payload.get("instance_id") or "").strip()
     quota = float(payload.get("quota_gb") or 200)
     threshold = float(payload.get("threshold_gb") or 188)
@@ -144,17 +154,20 @@ def upsert_server(payload: dict[str, Any]) -> int:
 
     if server_id:
         existing = db.query_one(
-            "SELECT access_key_id, access_key_secret FROM servers WHERE id=?", (server_id,)
+            "SELECT access_key_id, access_key_secret, site FROM servers WHERE id=?", (server_id,)
         )
         if existing is None:
             raise ValueError("服务器不存在")
         if not ak:
             ak = existing["access_key_id"]
+        if payload.get("site") is None:
+            # 老前端不传这个字段时保持原值，别把已有配置默默重置成中国站
+            site = normalize_site(existing["site"])
         encrypted = security.encrypt(sk) if sk else existing["access_key_secret"]
         db.execute(
             "UPDATE servers SET label=?, access_key_id=?, access_key_secret=?, region_id=?, "
-            "instance_id=?, quota_gb=?, threshold_gb=?, remark=? WHERE id=?",
-            (label or ak[-6:], ak, encrypted, region, instance, quota, threshold, remark, server_id),
+            "site=?, instance_id=?, quota_gb=?, threshold_gb=?, remark=? WHERE id=?",
+            (label or ak[-6:], ak, encrypted, region, site, instance, quota, threshold, remark, server_id),
         )
         return server_id
 
@@ -163,13 +176,14 @@ def upsert_server(payload: dict[str, Any]) -> int:
     if not sk:
         raise ValueError("新建服务器必须填写 AccessKey Secret")
     return db.insert(
-        "INSERT INTO servers(label, access_key_id, access_key_secret, region_id, instance_id, "
-        "quota_gb, threshold_gb, remark, created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO servers(label, access_key_id, access_key_secret, region_id, site, instance_id, "
+        "quota_gb, threshold_gb, remark, created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
         (
             label or ak[-6:],
             ak,
             security.encrypt(sk),
             region,
+            site,
             instance,
             quota,
             threshold,
@@ -249,7 +263,7 @@ def list_keepalives() -> list[dict[str, Any]]:
     rows = db.query(
         "SELECT k.id, k.server_id, k.enabled, k.created_at, s.label, s.instance_status, "
         "s.stopped_mode, s.public_ip, s.traffic_used, s.quota_gb, s.threshold_gb, "
-        "s.instance_id, s.region_id, s.status_checked_at "
+        "s.instance_id, s.region_id, s.site, s.status_checked_at "
         "FROM keepalives k JOIN servers s ON s.id=k.server_id ORDER BY k.id"
     )
     return [dict(row) for row in rows]
@@ -303,7 +317,7 @@ def get_group(group_id: int) -> dict[str, Any] | None:
 def list_members(group_id: int) -> list[dict[str, Any]]:
     rows = db.query(
         "SELECT m.id, m.group_id, m.server_id, m.position, m.hours, m.enabled, "
-        "s.label, s.instance_id, s.region_id, s.instance_status, s.stopped_mode, "
+        "s.label, s.instance_id, s.region_id, s.site, s.instance_status, s.stopped_mode, "
         "s.public_ip, s.traffic_used, s.quota_gb, s.threshold_gb, s.status_checked_at "
         "FROM shift_members m LEFT JOIN servers s ON s.id=m.server_id "
         "WHERE m.group_id=? ORDER BY m.position",

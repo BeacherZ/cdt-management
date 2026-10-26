@@ -53,6 +53,7 @@ SERVER_SPECS = [
     {
         "label": "香港-主力",
         "region_id": "cn-hongkong",
+        "site": "china",
         "instance_id": "i-demo00000000000001",
         "quota_gb": 200,
         "threshold_gb": 188,
@@ -69,6 +70,7 @@ SERVER_SPECS = [
     {
         "label": "新加坡-二线",
         "region_id": "ap-southeast-1",
+        "site": "international",
         "instance_id": "i-demo00000000000003",
         "quota_gb": 200,
         "threshold_gb": 180,
@@ -77,6 +79,7 @@ SERVER_SPECS = [
     {
         "label": "日本-临时",
         "region_id": "ap-northeast-1",
+        "site": "international",
         "instance_id": "i-demo00000000000004",
         "quota_gb": 100,
         "threshold_gb": 92,
@@ -89,6 +92,15 @@ SERVER_SPECS = [
         "quota_gb": 100,
         "threshold_gb": 90,
         "remark": "单机保活，长期待命",
+    },
+    {
+        "label": "德国-闲置",
+        "region_id": "eu-central-1",
+        "site": "international",
+        "instance_id": "i-demo00000000000006",
+        "quota_gb": 200,
+        "threshold_gb": 188,
+        "remark": "没编进任何流程，手动开关机",
     },
 ]
 

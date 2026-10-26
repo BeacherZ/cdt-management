@@ -250,12 +250,57 @@ class Cdp {
     await cdp.shot('10-group-dialog.png')
     await cdp.clickSelector('.modal .close')
 
-    // 6. 窄屏
+    // 6. 添加服务器：站点类型 + 按站点过滤的地域
+    await cdp.clickByText('.sidebar .nav-item', '服务器')
+    await cdp.clickByText('.page-actions button', '添加服务器')
+    await cdp.waitSelector('.modal')
+    await sleep(400)
+    await cdp.shot('11-server-dialog.png')
+
+    // 回归检查：以前 App 每秒重渲染会把焦点从 <select> 上抢走，
+    // 表现为地域下拉框点开就关。现在按住 1.6 秒焦点还在，说明真的修好了。
+    const focusKept = await cdp.evaluate(`(async () => {
+      const select = document.querySelector('#region')
+      if (!select) return 'no-select'
+      select.focus()
+      const before = document.activeElement && document.activeElement.id
+      await new Promise((resolve) => setTimeout(resolve, 1600))
+      const after = document.activeElement && document.activeElement.id
+      return before + '->' + after
+    })()`)
+    if (focusKept !== 'region->region') {
+      throw new Error('地域选择框焦点被抢走了：' + focusKept)
+    }
+    console.log('  ✓ 地域下拉框焦点稳定（1.6s 未被抢）')
+
+    // 国际站的地域列表不该出现中国大陆
+    const intlOk = await cdp.evaluate(`(() => {
+      const buttons = [...document.querySelectorAll('.segmented button')]
+      const button = buttons.find((item) => item.textContent.includes('国际站'))
+      if (!button) return 'no-button'
+      button.click()
+      return 'clicked'
+    })()`)
+    await sleep(300)
+    const intlRegions = await cdp.evaluate(`(() => {
+      const select = document.querySelector('#region')
+      if (!select) return 'no-select'
+      const values = [...select.querySelectorAll('option')].map((item) => item.value)
+      return values.filter((value) => value.startsWith('cn-') && value !== 'cn-hongkong').join(',')
+    })()`)
+    if (intlOk !== 'clicked' || intlRegions !== '') {
+      throw new Error('国际站仍出现中国大陆地域：' + intlRegions)
+    }
+    console.log('  ✓ 国际站已过滤掉中国大陆地域')
+    await cdp.shot('12-server-dialog-intl.png')
+    await cdp.clickSelector('.modal .close')
+
+    // 7. 窄屏
     await cdp.viewport(MOBILE, true)
     await cdp.goto(BASE)
     await cdp.waitSelector('.app-shell')
     await sleep(1000)
-    await cdp.shot('11-mobile.png')
+    await cdp.shot('13-mobile.png')
 
     console.log('\n截图已输出到 ' + OUT)
   } finally {

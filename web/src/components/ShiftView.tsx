@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { ArrowRight, Clock3, LoaderCircle, Pencil, Plus, RefreshCw, Repeat, Trash2 } from 'lucide-react'
 import type { ShiftGroup } from '../types'
 import { Badge, Empty, Meter, phaseTone, statusLabel, statusTone } from './ui'
@@ -5,7 +6,6 @@ import { Badge, Empty, Meter, phaseTone, statusLabel, statusTone } from './ui'
 type Props = {
   groups: ShiftGroup[]
   serverCount: number
-  nowTs: number
   busyId: number | null
   onAdd: () => void
   onEdit: (group: ShiftGroup) => void
@@ -25,13 +25,20 @@ function countdown(target: number, now: number): string {
 export default function ShiftView({
   groups,
   serverCount,
-  nowTs,
   busyId,
   onAdd,
   onEdit,
   onDelete,
   onSwitch,
 }: Props) {
+  // 秒级倒计时只需要在这一页重渲染。挂在 App 上会让整棵树每秒重置一次，
+  // 弹窗里的 <select>、输入框都会被反复打断。
+  const [nowTs, setNowTs] = useState(() => Math.floor(Date.now() / 1000))
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowTs(Math.floor(Date.now() / 1000)), 1000)
+    return () => window.clearInterval(timer)
+  }, [])
+
   return (
     <>
       <div className="page-head">

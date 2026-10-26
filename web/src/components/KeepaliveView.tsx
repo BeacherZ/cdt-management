@@ -1,4 +1,4 @@
-import { HeartPulse, LoaderCircle, Plus, Power, RefreshCw, Trash2 } from 'lucide-react'
+import { HeartPulse, LoaderCircle, Plus, Power, PowerOff, RefreshCw, Trash2 } from 'lucide-react'
 import type { Keepalive, Server } from '../types'
 import { Badge, Empty, Meter, statusLabel, statusTone } from './ui'
 
@@ -54,6 +54,11 @@ export default function KeepaliveView({
         <div className="server-grid">
           {keepalives.map((item) => {
             const running = item.instance_status === 'Running'
+            const inGroup = groupedIds.has(item.server_id)
+            // 保活开着的时候手动关机只会被下一轮立刻拉起来，还会伪造一条「保活拉起」，
+            // 所以只在暂停 / 让位状态下放开手动启停
+            const locked = item.enabled || inGroup
+            const powerHint = running ? '按节省停机模式关机' : '开机'
             return (
               <div className="card server-card" key={item.id}>
                 <div className="head">
@@ -74,13 +79,16 @@ export default function KeepaliveView({
                         <RefreshCw size={13} />
                       )}
                     </button>
-                    <button
-                      className="btn ghost icon sm"
-                      title={running ? '节省停机' : '开机'}
-                      onClick={() => onAction(item.server_id, running ? 'stop' : 'start')}
-                    >
-                      <Power size={13} />
-                    </button>
+                    {!locked && (
+                      <button
+                        className="btn ghost icon sm"
+                        title={powerHint}
+                        disabled={busyId === item.server_id}
+                        onClick={() => onAction(item.server_id, running ? 'stop' : 'start')}
+                      >
+                        {running ? <PowerOff size={13} /> : <Power size={13} />}
+                      </button>
+                    )}
                     <button
                       className="btn ghost icon sm"
                       title="移出保活"
@@ -94,6 +102,9 @@ export default function KeepaliveView({
                 <div className="meta-line">
                   <code>{item.instance_id || '未填实例 ID'}</code>
                   <span className="grow">{item.region_id}</span>
+                  <span className={`site-tag ${item.site === 'international' ? 'intl' : ''}`}>
+                    {item.site === 'international' ? '国际站' : '中国站'}
+                  </span>
                 </div>
                 <div className="meta-line">
                   <span style={{ fontFamily: 'ui-monospace, Consolas, monospace' }}>

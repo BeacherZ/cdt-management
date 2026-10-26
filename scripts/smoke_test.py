@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
 
 import requests
 
@@ -315,6 +316,127 @@ check(
 check(
     "另一个会话已被踢下线",
     other.get(BASE + "/api/v1/overview", timeout=10).status_code == 401,
+)
+
+print("\n== 15. 站点类型（中国站 / 国际站）==")
+site_server = call(
+    "POST",
+    "/api/v1/servers",
+    {
+        "label": "国际站-测试",
+        "access_key_id": "LTAI_DEMO_INTL",
+        "access_key_secret": "demo-secret-intl",
+        "region_id": "ap-southeast-1",
+        "site": "international",
+        "instance_id": "i-demo00000000000009",
+        "quota_gb": 200,
+        "threshold_gb": 188,
+    },
+)
+check("建国际站服务器", site_server[0] == 200, f"HTTP {site_server[0]}")
+items = {s["label"]: s for s in call("GET", "/api/v1/servers")[1]["items"]}
+check(
+    "站点已保存为 international",
+    items.get("国际站-测试", {}).get("site") == "international",
+    str(items.get("国际站-测试", {}).get("site")),
+)
+check(
+    "未指定站点的服务器默认 china",
+    all(s.get("site") in {"china", "international"} for s in items.values()),
+)
+
+dirty = call(
+    "POST",
+    "/api/v1/servers",
+    {
+        "id": items["国际站-测试"]["id"],
+        "label": "国际站-测试",
+        "region_id": "ap-southeast-1",
+        "site": "not-a-site",
+        "instance_id": "i-demo00000000000009",
+        "quota_gb": 200,
+        "threshold_gb": 188,
+    },
+)
+check("脏站点值被接受但不入库", dirty[0] == 200, f"HTTP {dirty[0]}")
+items = {s["label"]: s for s in call("GET", "/api/v1/servers")[1]["items"]}
+check(
+    "脏值归一到 china",
+    items["国际站-测试"]["site"] == "china",
+    str(items["国际站-测试"]["site"]),
+)
+
+# 端点解析：ECS / CDT 两个站一致，只有 BSS 分站点
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from app import aliyun  # noqa: E402
+
+check("ECS 域名按地域拼", aliyun.ecs_domain("cn-hongkong") == "ecs.cn-hongkong.aliyuncs.com")
+check("CDT 域名两站相同", aliyun.CDT_DOMAIN == "cdt.aliyuncs.com")
+check(
+    "中国站 BSS",
+    aliyun.bss_endpoint("china") == ("cn-hangzhou", "business.aliyuncs.com"),
+)
+check(
+    "国际站 BSS",
+    aliyun.bss_endpoint("international")
+    == ("ap-southeast-1", "business.ap-southeast-1.aliyuncs.com"),
+)
+check("未知站点回退中国站", aliyun.bss_endpoint("??") == aliyun.bss_endpoint("china"))
+
+print("\n== 16. 闲散服务器手动开关机 ==")
+items = {s["label"]: s for s in call("GET", "/api/v1/servers")[1]["items"]}
+idle = items["国际站-测试"]
+check("闲散机器 managed 为空", idle.get("managed") is None, str(idle.get("managed")))
+
+status, body = call("POST", f"/api/v1/servers/{idle['id']}/actions/stop")
+check("闲散机器可手动关机", status == 200, f"HTTP {status} {str(body)[:120]}")
+check("关机后状态为 Stopped", body.get("status") == "Stopped", str(body.get("status")))
+check("闲散机器不带托管提示", not body.get("managed_note"), str(body.get("managed_note")))
+
+status, body = call("POST", f"/api/v1/servers/{idle['id']}/actions/start")
+check("闲散机器可手动开机", status == 200 and body.get("status") == "Running", str(body)[:120])
+
+events = call("GET", "/api/v1/overview")[1]["events"]
+check(
+    "手动操作已记录事件",
+    any("手动节省停机" in e.get("title", "") for e in events),
+    str([e.get("title") for e in events[:5]]),
+)
+
+status, body = call("POST", f"/api/v1/servers/{idle['id']}/actions/reboot")
+check("非法动作被拒绝", status == 400, f"HTTP {status}")
+
+# 编进自动化流程后，managed 要如实反映出来
+call("POST", "/api/v1/keepalives", {"server_id": idle["id"]})
+items = {s["label"]: s for s in call("GET", "/api/v1/servers")[1]["items"]}
+managed = items["国际站-测试"].get("managed") or {}
+check("加入保活后标记为 keepalive", managed.get("kind") == "keepalive", str(managed))
+check("保活启用时 active 为真", managed.get("active") is True, str(managed))
+
+keepalive_id = next(
+    k["id"] for k in call("GET", "/api/v1/keepalives")[1]["items"] if k["server_id"] == idle["id"]
+)
+call("POST", f"/api/v1/keepalives/{keepalive_id}/toggle", {"enabled": False})
+items = {s["label"]: s for s in call("GET", "/api/v1/servers")[1]["items"]}
+managed = items["国际站-测试"].get("managed") or {}
+check("暂停后 active 为假（可手动接管）", managed.get("active") is False, str(managed))
+
+status, body = call("POST", f"/api/v1/servers/{idle['id']}/actions/stop")
+check("暂停保活后可手动关机", status == 200, f"HTTP {status}")
+check("暂停时不再提示托管", not body.get("managed_note"), str(body.get("managed_note")))
+
+# 重新启用后，手动操作要提醒「下一轮对账会纠正」
+call("POST", f"/api/v1/keepalives/{keepalive_id}/toggle", {"enabled": True})
+status, body = call("POST", f"/api/v1/servers/{idle['id']}/actions/stop")
+check("托管中操作会带提示", body.get("managed_note") == "单机保活", str(body.get("managed_note")))
+call("DELETE", f"/api/v1/keepalives/{keepalive_id}")
+
+grouped = [s for s in call("GET", "/api/v1/servers")[1]["items"] if (s.get("managed") or {}).get("kind") == "group"]
+check("换班组成员标记为 group", len(grouped) >= 1, f"实际 {len(grouped)} 台")
+check(
+    "组成员带换班组名字",
+    all((s.get("managed") or {}).get("name") for s in grouped),
+    str([s.get("managed") for s in grouped[:2]]),
 )
 
 print("\n" + "=" * 46)

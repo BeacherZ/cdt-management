@@ -46,6 +46,47 @@ class AliyunError(RuntimeError):
     pass
 
 
+# --------------------------------------------------------------------------
+# endpoint 解析
+#
+# 站点只影响 BSS（费用/余额）：
+#   中国站   business.aliyuncs.com             / cn-hangzhou
+#   国际站   business.ap-southeast-1.aliyuncs.com / ap-southeast-1
+# ECS 与 CDT 两个站用的是同一套域名（ecs.{region}.aliyuncs.com / cdt.aliyuncs.com），
+# 所以换站点不会影响保活与流量统计，只在接账单类接口时才需要区分。
+# 取值参考上游 wang4386/CDT-Monitor 的 bssEndpoint()。
+# --------------------------------------------------------------------------
+
+CDT_DOMAIN = "cdt.aliyuncs.com"
+# CDT 是中心化接口，与实例所在地域无关，固定用香港（上游同样如此）
+CDT_REGION = "cn-hongkong"
+
+BSS_ENDPOINTS: dict[str, tuple[str, str]] = {
+    "china": ("cn-hangzhou", "business.aliyuncs.com"),
+    "international": ("ap-southeast-1", "business.ap-southeast-1.aliyuncs.com"),
+}
+
+
+def ecs_domain(region: str) -> str:
+    return f"ecs.{region}.aliyuncs.com"
+
+
+def bss_endpoint(site: str) -> tuple[str, str]:
+    """返回 (region, domain)。目前没接费用接口，留给后续账单/余额功能直接用。"""
+    return BSS_ENDPOINTS.get(site, BSS_ENDPOINTS["china"])
+
+
+def _client(account: dict, region: str | None = None) -> "AcsClient":
+    if not _SDK_READY:
+        raise AliyunError("阿里云 SDK 未安装，无法调用真实接口")
+    return AcsClient(
+        account["access_key_id"],
+        account["access_key_secret"],
+        region or account["region_id"],
+        timeout=int(settings.HTTP_TIMEOUT),
+    )
+
+
 class InstanceInfo:
     __slots__ = ("status", "stopped_mode", "public_ip")
 
@@ -102,24 +143,13 @@ def _mock_set(account: dict, **fields: str) -> None:
         state.update(fields)
 
 
-def _client(account: dict) -> "AcsClient":
-    if not _SDK_READY:
-        raise AliyunError("阿里云 SDK 未安装，无法调用真实接口")
-    return AcsClient(
-        account["access_key_id"],
-        account["access_key_secret"],
-        account["region_id"],
-        timeout=int(settings.HTTP_TIMEOUT),
-    )
-
-
 def get_traffic_gb(account: dict) -> float:
     """CDT 当月出方向流量（GB）。与用户脚本一致：累加所有 TrafficDetails。"""
     if settings.DRY_RUN:
         return float(_mock(account)["traffic"])
-    client = _client(account)
+    client = _client(account, CDT_REGION)
     request = CommonRequest()
-    request.set_domain("cdt.aliyuncs.com")
+    request.set_domain(CDT_DOMAIN)
     request.set_version("2021-08-13")
     request.set_action_name("ListCdtInternetTraffic")
     request.set_method("POST")
@@ -176,8 +206,12 @@ def start_instance(account: dict) -> None:
         raise AliyunError(f"启动实例失败: {message}") from exc
 
 
-def stop_instance(account: dict, mode: str = "StopCharging") -> None:
-    """mode=StopCharging 为「节省停机」，不计实例规格费用。"""
+def stop_instance(account: dict, mode: str = "StopCharging", fallback: bool = False) -> None:
+    """mode=StopCharging 为「节省停机」，不计实例规格费用。
+
+    fallback=True 时，如果实例不支持节省停机（部分规格 / 包年包月按固定价），
+    自动退化成普通停机，避免手动关机直接报错没法用。
+    """
     if settings.DRY_RUN:
         log.info("[dry-run] stop %s mode=%s", account.get("instance_id"), mode)
         _mock_set(account, status="Stopped", stopped_mode=mode)
@@ -189,4 +223,12 @@ def stop_instance(account: dict, mode: str = "StopCharging") -> None:
     try:
         client.do_action_with_exception(request)
     except Exception as exc:
+        if fallback and mode != "Stop":
+            log.warning("节省停机失败，退化为普通停机: %s", exc)
+            request.set_StoppedMode("Stop")
+            try:
+                client.do_action_with_exception(request)
+                return
+            except Exception as retry_exc:  # noqa: BLE001
+                raise AliyunError(f"停止实例失败: {retry_exc}") from retry_exc
         raise AliyunError(f"停止实例失败: {exc}") from exc

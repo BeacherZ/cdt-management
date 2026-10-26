@@ -1,11 +1,20 @@
-import { LoaderCircle, Pencil, Plus, RefreshCw, Server as ServerIcon, Trash2 } from 'lucide-react'
+import {
+  HeartPulse,
+  LoaderCircle,
+  Pencil,
+  Plus,
+  Power,
+  PowerOff,
+  RefreshCw,
+  Repeat,
+  Server as ServerIcon,
+  Trash2,
+} from 'lucide-react'
 import type { Server } from '../types'
 import { Badge, Empty, Meter, statusLabel, statusTone } from './ui'
 
 type Props = {
   servers: Server[]
-  keepaliveIds: Set<number>
-  groupedIds: Set<number>
   busyId: number | null
   onAdd: () => void
   onEdit: (server: Server) => void
@@ -17,8 +26,6 @@ type Props = {
 
 export default function ServersView({
   servers,
-  keepaliveIds,
-  groupedIds,
   busyId,
   onAdd,
   onEdit,
@@ -27,6 +34,8 @@ export default function ServersView({
   onAction,
   onAddToKeepalive,
 }: Props) {
+  const idleCount = servers.filter((server) => !server.managed).length
+
   return (
     <>
       <div className="page-head">
@@ -35,6 +44,7 @@ export default function ServersView({
           <p>
             这里登记的是「阿里云账号 + 一台 ECS 实例」。AccessKey Secret 用本机主密钥加密后存
             SQLite，界面只显示打码值。
+            {idleCount > 0 && ` 其中 ${idleCount} 台是闲散机器，可以直接手动开关机。`}
           </p>
         </div>
         <div className="page-actions">
@@ -55,6 +65,23 @@ export default function ServersView({
         <div className="server-grid">
           {servers.map((server) => {
             const running = server.instance_status === 'Running'
+            const owner = server.managed ?? null
+            const busy = busyId === server.id
+            // 正在被自动化流程接管的机器不给手动启停：手动关机会被下一轮对账立刻拉起来，
+            // 还会额外触发一条假的「抢占恢复」通知
+            const locked = Boolean(owner?.active)
+            const ownerText =
+              owner?.kind === 'group'
+                ? `换班组「${owner.name}」`
+                : owner?.kind === 'keepalive'
+                  ? '单机保活'
+                  : ''
+            const lockHint = locked
+              ? `${ownerText}托管中，先暂停或移出后再手动启停`
+              : running
+                ? '按节省停机模式关机'
+                : '开机'
+
             return (
               <div className="card server-card" key={server.id}>
                 <div className="head">
@@ -65,27 +92,24 @@ export default function ServersView({
                   <div className="actions">
                     <button
                       className="btn ghost icon sm"
-                      title="刷新"
-                      disabled={busyId === server.id}
+                      title="刷新状态"
+                      disabled={busy}
                       onClick={() => onRefresh(server)}
                     >
-                      {busyId === server.id ? (
+                      {busy ? (
                         <LoaderCircle size={13} className="spin" />
                       ) : (
                         <RefreshCw size={13} />
                       )}
                     </button>
-                    <button
-                      className="btn ghost icon sm"
-                      title={running ? '节省停机' : '开机'}
-                      onClick={() => onAction(server, running ? 'stop' : 'start')}
-                    >
-                      <ServerIcon size={13} />
-                    </button>
                     <button className="btn ghost icon sm" title="编辑" onClick={() => onEdit(server)}>
                       <Pencil size={13} />
                     </button>
-                    <button className="btn ghost icon sm" title="删除" onClick={() => onDelete(server)}>
+                    <button
+                      className="btn ghost icon sm"
+                      title="删除"
+                      onClick={() => onDelete(server)}
+                    >
                       <Trash2 size={13} style={{ color: 'var(--red)' }} />
                     </button>
                   </div>
@@ -94,6 +118,9 @@ export default function ServersView({
                 <div className="meta-line">
                   <code>{server.instance_id || '未填实例 ID'}</code>
                   <span className="grow">{server.region_id}</span>
+                  <span className={`site-tag ${server.site === 'international' ? 'intl' : ''}`}>
+                    {server.site === 'international' ? '国际站' : '中国站'}
+                  </span>
                 </div>
                 <div className="meta-line">
                   <span style={{ fontFamily: 'ui-monospace, Consolas, monospace' }}>
@@ -102,7 +129,11 @@ export default function ServersView({
                   <span style={{ marginLeft: 'auto' }}>{server.access_key_masked}</span>
                 </div>
 
-                <Meter used={server.traffic_used} quota={server.quota_gb} threshold={server.threshold_gb} />
+                <Meter
+                  used={server.traffic_used}
+                  quota={server.quota_gb}
+                  threshold={server.threshold_gb}
+                />
 
                 {server.stopped_mode === 'StopCharging' && server.instance_status === 'Stopped' && (
                   <div style={{ fontSize: 11, color: 'var(--muted)' }}>已按节省停机模式停机</div>
@@ -111,19 +142,42 @@ export default function ServersView({
                   <div style={{ fontSize: 11.5, color: 'var(--muted-soft)' }}>{server.remark}</div>
                 )}
 
-                {groupedIds.has(server.id) ? (
-                  <Badge tone="blue">已在换班组 · 按班次自动启停</Badge>
-                ) : keepaliveIds.has(server.id) ? (
-                  <Badge tone="green">已在单机保活</Badge>
-                ) : (
-                  <button
-                    className="btn sm"
-                    style={{ alignSelf: 'flex-start' }}
-                    onClick={() => onAddToKeepalive(server)}
-                  >
-                    <Plus size={12} /> 加入单机保活
-                  </button>
-                )}
+                <div className="card-foot">
+                  <span className={`owner-tag${owner ? (locked ? ' locked' : ' paused') : ' free'}`}>
+                    {owner ? (
+                      <>
+                        {owner.kind === 'group' ? <Repeat size={10} /> : <HeartPulse size={10} />}
+                        {ownerText}
+                        {locked ? '托管' : '已暂停'}
+                      </>
+                    ) : (
+                      <>闲散 · 手动</>
+                    )}
+                  </span>
+
+                  <div className="foot-actions">
+                    {!owner && (
+                      <button className="btn ghost sm" onClick={() => onAddToKeepalive(server)}>
+                        <Plus size={12} /> 加入保活
+                      </button>
+                    )}
+                    <button
+                      className={`btn sm ${running ? 'danger' : 'primary'}`}
+                      title={lockHint}
+                      disabled={locked || busy}
+                      onClick={() => onAction(server, running ? 'stop' : 'start')}
+                    >
+                      {busy ? (
+                        <LoaderCircle size={12} className="spin" />
+                      ) : running ? (
+                        <PowerOff size={12} />
+                      ) : (
+                        <Power size={12} />
+                      )}
+                      {running ? '关机' : '开机'}
+                    </button>
+                  </div>
+                </div>
               </div>
             )
           })}

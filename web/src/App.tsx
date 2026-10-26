@@ -62,7 +62,6 @@ export default function App() {
   const [settings, setSettings] = useState<Settings | null>(null)
   const [fatal, setFatal] = useState('')
   const [toasts, setToasts] = useState<Toast[]>([])
-  const [tick, setTick] = useState(Date.now())
   const [busyServer, setBusyServer] = useState<number | null>(null)
   const [busyGroup, setBusyGroup] = useState<number | null>(null)
   const [serverDialog, setServerDialog] = useState<{ open: boolean; server: Server | null }>({
@@ -131,11 +130,6 @@ export default function App() {
     }
   }, [phase])
 
-  useEffect(() => {
-    const timer = window.setInterval(() => setTick(Date.now()), 1000)
-    return () => window.clearInterval(timer)
-  }, [])
-
   async function reconcile() {
     try {
       await post('/api/v1/reconcile')
@@ -149,9 +143,14 @@ export default function App() {
   async function serverAction(serverId: number, action: 'start' | 'stop') {
     setBusyServer(serverId)
     try {
-      await post(`/api/v1/servers/${serverId}/actions/${action}`)
+      const result = await post<{ managed_note?: string }>(
+        `/api/v1/servers/${serverId}/actions/${action}`,
+      )
       await loadAll()
       toast(action === 'start' ? '已下发开机指令' : '已下发节省停机指令', 'success')
+      if (result?.managed_note) {
+        toast(`${result.managed_note}托管中，下一轮对账会按流程纠正`, 'info')
+      }
     } catch (error) {
       toast(error instanceof Error ? error.message : '操作失败', 'error')
     } finally {
@@ -376,7 +375,6 @@ export default function App() {
           <ShiftView
             groups={overview.groups}
             serverCount={overview.servers.length}
-            nowTs={Math.floor(tick / 1000)}
             busyId={busyGroup}
             onAdd={() => setGroupDialog({ open: true, group: null })}
             onEdit={(group) => setGroupDialog({ open: true, group })}
@@ -388,8 +386,6 @@ export default function App() {
         {view === 'servers' && (
           <ServersView
             servers={overview.servers}
-            keepaliveIds={keepaliveIds}
-            groupedIds={groupedIds}
             busyId={busyServer}
             onAdd={() => setServerDialog({ open: true, server: null })}
             onEdit={(server) => setServerDialog({ open: true, server })}

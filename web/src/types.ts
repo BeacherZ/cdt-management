@@ -1,8 +1,20 @@
+export type SiteType = 'china' | 'international'
+
+/** 服务器被哪个自动化流程托管；null 表示闲散机器，可随时手动开关机 */
+export type Managed = {
+  kind: 'keepalive' | 'group'
+  name: string
+  active: boolean
+  group_id?: number
+  keepalive_id?: number
+}
+
 export type Server = {
   id: number
   label: string
   access_key_masked: string
   region_id: string
+  site: SiteType
   instance_id: string
   quota_gb: number
   threshold_gb: number
@@ -15,6 +27,7 @@ export type Server = {
   traffic_checked_at: number
   status_checked_at: number
   secret_configured: boolean
+  managed?: Managed | null
 }
 
 export type Keepalive = {
@@ -31,6 +44,7 @@ export type Keepalive = {
   threshold_gb: number
   instance_id: string
   region_id: string
+  site?: SiteType
   status_checked_at: number
 }
 
@@ -169,6 +183,7 @@ export function emptyServer(): Server {
     label: '',
     access_key_masked: '',
     region_id: 'cn-hongkong',
+    site: 'china',
     instance_id: '',
     quota_gb: 200,
     threshold_gb: 188,

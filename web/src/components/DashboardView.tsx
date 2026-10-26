@@ -13,7 +13,7 @@ import {
   Zap,
 } from 'lucide-react'
 import type { EventItem, Overview } from '../types'
-import { Badge, Meter, phaseTone, statusLabel, statusTone } from './ui'
+import { Badge, Meter, Ring, phaseTone, statusLabel, statusTone } from './ui'
 
 const EVENT_ICON: Record<string, typeof Info> = {
   shift_done: Zap,
@@ -84,38 +84,77 @@ export default function DashboardView({ overview }: { overview: Overview }) {
 
       <div className="stat-grid">
         <div className="stat">
-          <span className="label">
-            <ServerIcon size={11} /> 服务器
-          </span>
-          <span className="value">{overview.servers.length}</span>
-          <span className="sub">{running} 台运行中</span>
+          <div className="stat-main">
+            <span className="label">
+              <ServerIcon size={11} /> 服务器
+            </span>
+            <span className="value">{overview.servers.length}</span>
+            <span className="sub">{running} 台运行中</span>
+          </div>
+          <Ring
+            percent={overview.servers.length ? (running / overview.servers.length) * 100 : 0}
+            tone="accent"
+          />
         </div>
         <div className="stat">
-          <span className="label">
-            <Repeat size={11} /> 换班组
-          </span>
-          <span className="value">{overview.groups.length}</span>
-          <span className="sub">
-            {overview.groups.filter((group) => group.enabled).length} 个启用
-          </span>
+          <div className="stat-main">
+            <span className="label">
+              <Repeat size={11} /> 换班组
+            </span>
+            <span className="value">{overview.groups.length}</span>
+            <span className="sub">
+              {overview.groups.filter((group) => group.enabled).length} 个启用
+            </span>
+          </div>
+          <Ring
+            percent={
+              overview.groups.length
+                ? (overview.groups.filter((group) => group.enabled).length / overview.groups.length) *
+                  100
+                : 0
+            }
+            tone="blue"
+          />
         </div>
         <div className="stat">
-          <span className="label">
-            <HeartPulse size={11} /> 单机保活
-          </span>
-          <span className="value">{overview.keepalives.length}</span>
-          <span className="sub">
-            {overview.keepalives.filter((item) => item.enabled).length} 个运行中
-          </span>
+          <div className="stat-main">
+            <span className="label">
+              <HeartPulse size={11} /> 单机保活
+            </span>
+            <span className="value">{overview.keepalives.length}</span>
+            <span className="sub">
+              {overview.keepalives.filter((item) => item.enabled).length} 个运行中
+            </span>
+          </div>
+          <Ring
+            percent={
+              overview.keepalives.length
+                ? (overview.keepalives.filter((item) => item.enabled).length /
+                    overview.keepalives.length) *
+                  100
+                : 0
+            }
+            tone="accent"
+          />
         </div>
         <div className="stat">
-          <span className="label">
-            <Gauge size={11} /> 累计流量
-          </span>
-          <span className="value">{totalTraffic.toFixed(1)}</span>
-          <span className="sub">
-            GB {alarms > 0 ? `· ${alarms} 台超阈值` : '· 全部达标'}
-          </span>
+          <div className="stat-main">
+            <span className="label">
+              <Gauge size={11} /> 累计流量
+            </span>
+            <span className="value">
+              {totalTraffic.toFixed(1)}
+              <em>GB</em>
+            </span>
+            <span className="sub">{alarms > 0 ? `${alarms} 台超阈值` : '全部低于阈值'}</span>
+          </div>
+          <Ring
+            percent={alarms > 0 ? Math.min(100, (alarms / Math.max(1, overview.servers.length)) * 100) : 0}
+            tone={alarms > 0 ? 'red' : 'accent'}
+            size={46}
+          >
+            {alarms > 0 ? `${alarms}` : '稳'}
+          </Ring>
         </div>
       </div>
 

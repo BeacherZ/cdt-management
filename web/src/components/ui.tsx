@@ -59,6 +59,53 @@ export function phaseTone(phase: string): Tone {
   return 'gray'
 }
 
+/* -------------------------------------------------------------- 环形进度 */
+
+export function Ring({
+  percent,
+  size = 46,
+  stroke = 4,
+  tone = 'accent',
+  children,
+}: {
+  percent: number
+  size?: number
+  stroke?: number
+  tone?: 'accent' | 'amber' | 'red' | 'blue'
+  children?: ReactNode
+}) {
+  const safe = Math.max(0, Math.min(100, Number.isFinite(percent) ? percent : 0))
+  const radius = (size - stroke) / 2
+  const circumference = 2 * Math.PI * radius
+  return (
+    <div className={`ring ${tone}`} style={{ width: size, height: size }}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden="true">
+        <circle
+          className="ring-track"
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          strokeWidth={stroke}
+          fill="none"
+        />
+        <circle
+          className="ring-bar"
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          strokeWidth={stroke}
+          fill="none"
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={circumference * (1 - safe / 100)}
+          transform={`rotate(-90 ${size / 2} ${size / 2})`}
+        />
+      </svg>
+      <span className="ring-text">{children ?? `${Math.round(safe)}%`}</span>
+    </div>
+  )
+}
+
 /* -------------------------------------------------------------- 流量条 */
 
 export function Meter({ used, quota, threshold }: { used: number | null; quota: number; threshold: number }) {
@@ -69,6 +116,7 @@ export function Meter({ used, quota, threshold }: { used: number | null; quota: 
     <div className="meter">
       <div className="meter-track" title={`阈值线 ${thresholdPercent.toFixed(0)}%`}>
         <div className={`meter-fill ${tone}`} style={{ width: `${percent}%` }} />
+        <i className="meter-mark" style={{ left: `${thresholdPercent}%` }} />
       </div>
       <div className="meter-labels">
         <span>{used === null ? '未读取' : `${used.toFixed(2)} GB`}</span>
@@ -156,19 +204,26 @@ export function Modal({
   wide?: boolean
 }) {
   const ref = useRef<HTMLDivElement>(null)
+  // onClose 每次渲染都是新函数（父组件里是内联箭头），不能进依赖数组：
+  // 否则父组件每秒 setTick 重渲染一次，这个 effect 就每秒重跑一次，
+  // 每次都 focus() 一下会把 <select> 的原生下拉框顶掉——表现就是「点开闪一下就没了」。
+  const closeRef = useRef(onClose)
+  closeRef.current = onClose
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
+      if (event.key === 'Escape') closeRef.current()
     }
     document.addEventListener('keydown', onKey)
+    const previousOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
+    // 只在挂载时抢一次焦点，之后再不碰
     ref.current?.focus()
     return () => {
       document.removeEventListener('keydown', onKey)
-      document.body.style.overflow = ''
+      document.body.style.overflow = previousOverflow
     }
-  }, [onClose])
+  }, [])
 
   return (
     <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>

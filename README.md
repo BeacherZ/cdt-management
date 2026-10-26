@@ -11,6 +11,8 @@
 
 当班实例的公网 IP 会同步到 Cloudflare 的 A 记录，换班、故障转移、熔断、抢占恢复都会推一条结构化通知。
 
+没编进任何流程的**闲散服务器**照旧可以手动开关机：服务器页点「关机」按节省停机模式停（不计规格费），点「开机」拉起。托管中的机器按钮会灰掉，避免和自动流程互相拉扯。
+
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 ![python](https://img.shields.io/badge/python-3.13-blue)
 ![docker](https://img.shields.io/badge/docker-amd64%20%7C%20arm64-2496ed)
@@ -135,9 +137,26 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 
 ![编辑换班组](docs/screenshots/10-group-dialog.png)
 
-**服务器**：一台实例一张卡，AccessKey Secret 只回显打码值；已编进换班组的机器不再提供"加入单机保活"入口，避免两套流程互相拉扯。
+**服务器**：一台实例一张卡，AccessKey Secret 只回显打码值；卡片上标明中国站 / 国际站；已编进换班组的机器不再提供"加入单机保活"入口，避免两套流程互相拉扯。
+
+每张卡片底部都有一行「归属」标记，一眼看出这台机器现在归谁管：
+
+| 卡片底部标记 | 含义 | 手动开关机 |
+| --- | --- | --- |
+| `闲散 · 手动` | 没编进单机保活 / 换班组 | **可用**，点「开机」「关机」直接下发 |
+| `换班组「xxx」托管` | 正在按班次自动启停 | 灰掉，避免和自动流程打架 |
+| `单机保活托管` | 掉线会被自动拉起 | 灰掉，避免关掉又被拉起来 |
+| `xx 已暂停` | 流程被关掉了，机器暂时没人管 | 可用 |
+
+托管中的机器如果确实要手动干预，先把对应流程暂停或把机器移出，按钮就会恢复。这样设计是因为：对托管中的机器手动关机，下一轮对账（默认 60 秒）会立刻按流程纠正，还会额外推一条假的「抢占恢复」通知。
 
 ![服务器](docs/screenshots/05-servers.png)
+
+**添加服务器**：先选站点，地域列表跟着站点变——国际站不会出现中国大陆地域。
+
+| 中国站 | 国际站 |
+| --- | --- |
+| ![添加服务器](docs/screenshots/11-server-dialog.png) | ![国际站](docs/screenshots/12-server-dialog-intl.png) |
 
 设置抽屉分四页：常规 / DDNS / 通知 / 关于。
 
@@ -147,7 +166,7 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 
 窄屏也能用，导航收成两行：
 
-<img src="docs/screenshots/11-mobile.png" width="330" alt="移动端" />
+<img src="docs/screenshots/13-mobile.png" width="330" alt="移动端" />
 
 登录页与"关于"页（保留上游署名）：
 
@@ -185,6 +204,19 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 - 满足后**先同步 DDNS，再发通知**，保证通知里的解析状态是真的
 - 中途改成员或改时长，会以「现在」为新的轮换起点重算，避免时序错乱
 - 手动「立即换班」= 把轮换起点平移到当前班的结束时刻，直接跳下一台
+
+### 站点类型（中国站 / 国际站）
+
+阿里云有中国站（aliyun.com）和国际站（alibabacloud.com）两套账号体系。添加服务器时可以选，
+这个选择影响两件事：
+
+| 影响 | 说明 |
+| --- | --- |
+| 地域候选 | 国际站不提供中国大陆地域，选了国际站就只列港澳与海外 |
+| 费用接口 | 两站的 BSS（余额 / 账单）地址不同：中国站 `business.aliyuncs.com`，国际站 `business.ap-southeast-1.aliyuncs.com` |
+
+**保活和流量统计不受影响**：ECS 用 `ecs.{地域}.aliyuncs.com`、CDT 用 `cdt.aliyuncs.com`，
+两个站完全一致。站点先存进库，是为了将来接账单类接口时不用再迁数据。
 
 ### 流量保护
 
@@ -298,8 +330,8 @@ CDT_DRY_RUN=1 ./venv/bin/python -m app.main # 不调真实阿里云
 配套两个脚本（都只对本地 dry-run 实例、只用假数据）：
 
 ```bash
-python scripts/smoke_test.py http://127.0.0.1:8099   # 12 组端到端断言
-python scripts/seed_demo.py  http://127.0.0.1:8099   # 灌 5 台假服务器 + 换班组
+python scripts/smoke_test.py http://127.0.0.1:8099   # 16 组端到端断言
+python scripts/seed_demo.py  http://127.0.0.1:8099   # 灌 6 台假服务器 + 换班组
 node   scripts/screenshot.cjs http://127.0.0.1:8099  # 重新生成 docs/screenshots
 ```
 

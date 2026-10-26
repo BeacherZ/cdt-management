@@ -138,14 +138,48 @@ def _error(status: int, code: str, message: str) -> JSONResponse:
 # 序列化
 # --------------------------------------------------------------------------
 
-def server_summary(server: dict[str, Any]) -> dict[str, Any]:
+def _managed_map() -> dict[int, dict[str, Any]]:
+    """哪台服务器被哪个自动化流程接管。
+
+    换班组优先于单机保活：同一台机器同时在两处时，单机保活本来就会让位，
+    这里保持一致，免得界面给出两套互相矛盾的说明。
+    """
+    managed: dict[int, dict[str, Any]] = {}
+    for group in repo.list_groups():
+        for member in group.get("members") or []:
+            if not member.get("enabled"):
+                continue
+            managed[int(member["server_id"])] = {
+                "kind": "group",
+                "group_id": int(group["id"]),
+                "name": group.get("name") or "",
+                "active": bool(group.get("enabled")),
+            }
+    for item in repo.list_keepalives():
+        server_id = int(item["server_id"])
+        if server_id in managed:
+            continue
+        managed[server_id] = {
+            "kind": "keepalive",
+            "keepalive_id": int(item["id"]),
+            "name": item.get("label") or "",
+            "active": bool(item.get("enabled")),
+        }
+    return managed
+
+
+def server_summary(
+    server: dict[str, Any], managed: dict[int, dict[str, Any]] | None = None
+) -> dict[str, Any]:
     used = server.get("traffic_used")
     quota = float(server.get("quota_gb") or 0) or 1
+    owner = (managed or {}).get(int(server.get("id") or 0))
     return {
         "id": server.get("id"),
         "label": server.get("label") or "",
         "access_key_masked": server.get("access_key_masked") or "",
         "region_id": server.get("region_id") or "",
+        "site": repo.normalize_site(server.get("site")),
         "instance_id": server.get("instance_id") or "",
         "quota_gb": server.get("quota_gb") or 0,
         "threshold_gb": server.get("threshold_gb") or 0,
@@ -158,10 +192,17 @@ def server_summary(server: dict[str, Any]) -> dict[str, Any]:
         "traffic_checked_at": server.get("traffic_checked_at") or 0,
         "status_checked_at": server.get("status_checked_at") or 0,
         "secret_configured": server.get("secret_configured", False),
+        # None 表示闲散机器：没编进任何自动化流程，可以随时手动开关机
+        "managed": owner,
     }
 
 
-def _group_payload(group: dict[str, Any], config: dict[str, str], now_ts: float) -> dict[str, Any]:
+def _group_payload(
+    group: dict[str, Any],
+    config: dict[str, str],
+    now_ts: float,
+    managed: dict[int, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     members = active_members(group)
     picked = duty_at(group, now_ts)
     duty_id = int(picked[0]["server_id"]) if picked else 0
@@ -186,7 +227,7 @@ def _group_payload(group: dict[str, Any], config: dict[str, str], now_ts: float)
                 "hours": member["hours"],
                 "enabled": bool(member["enabled"]),
                 "is_duty": int(member["server_id"]) == duty_id,
-                "server": server_summary(server) if server else None,
+                "server": server_summary(server, managed) if server else None,
             }
         )
 
@@ -301,6 +342,7 @@ def register(app: FastAPI) -> None:
         now = dt.datetime.now(tz)
         channels = notify.enabled_channels(config)
         keepalives = repo.list_keepalives()
+        managed = _managed_map()
 
         return {
             "now": now.isoformat(),
@@ -309,9 +351,11 @@ def register(app: FastAPI) -> None:
             "version": settings.VERSION,
             "brand": settings.BRAND,
             "repo": settings.REPO,
-            "servers": [server_summary(s) for s in repo.list_servers()],
+            "servers": [server_summary(s, managed) for s in repo.list_servers()],
             "keepalives": keepalives,
-            "groups": [_group_payload(g, config, now.timestamp()) for g in repo.list_groups()],
+            "groups": [
+                _group_payload(g, config, now.timestamp(), managed) for g in repo.list_groups()
+            ],
             "ddns": {
                 "enabled": config.get("ddns_enabled") == "1",
                 "record": config.get("ddns_record") or "",
@@ -336,7 +380,8 @@ def register(app: FastAPI) -> None:
     # -- 服务器 ---------------------------------------------------------
     @app.get("/api/v1/servers")
     def servers(user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
-        return {"items": [server_summary(s) for s in repo.list_servers()]}
+        managed = _managed_map()
+        return {"items": [server_summary(s, managed) for s in repo.list_servers()]}
 
     @app.post("/api/v1/servers")
     def save_server(request: Request, payload: dict[str, Any], user: str = Depends(require_admin)):  # noqa: ANN202, ARG001

@@ -25,6 +25,10 @@ CREATE TABLE IF NOT EXISTS servers (
     access_key_id       TEXT    NOT NULL,
     access_key_secret   TEXT    NOT NULL,
     region_id           TEXT    NOT NULL,
+    -- 站点：china（中国站 aliyun.com）/ international（国际站 alibabacloud.com）。
+    -- ECS 与 CDT 的 endpoint 两个站完全相同，只有 BSS（费用/余额）不同，
+    -- 具体解析在 aliyun.py 的 _endpoints()。先存着，将来接账单接口不用再迁库。
+    site                TEXT    NOT NULL DEFAULT 'china',
     instance_id         TEXT    NOT NULL,
     quota_gb            REAL    NOT NULL DEFAULT 200,
     threshold_gb        REAL    NOT NULL DEFAULT 188,
@@ -179,6 +183,22 @@ def connect() -> sqlite3.Connection:
     return conn
 
 
+def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """补齐老库缺的列。CREATE TABLE IF NOT EXISTS 不会给已存在的表加字段。"""
+    additions = {
+        "servers": {"site": "TEXT NOT NULL DEFAULT 'china'"},
+    }
+    for table, columns in additions.items():
+        existing = _columns(conn, table)
+        for name, ddl in columns.items():
+            if name not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+
+
 def init_db() -> None:
     global _initialized
     with _init_lock:
@@ -186,6 +206,7 @@ def init_db() -> None:
             return
         conn = connect()
         conn.executescript(SCHEMA)
+        _migrate(conn)
         for key, value in DEFAULTS.items():
             conn.execute(
                 "INSERT INTO settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO NOTHING",
