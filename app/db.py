@@ -152,6 +152,8 @@ DEFAULTS: dict[str, str] = {
     "ddns_cf_email": "",
     "ddns_cf_key": "",
     "ddns_zone_id": "",
+    # 多条记录存 JSON 数组，第一条是默认记录（单机保活用它）
+    "ddns_records": "[]",
     "ddns_record": "",
     "ddns_ttl": "60",
     "ddns_proxied": "0",

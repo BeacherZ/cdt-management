@@ -144,7 +144,7 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 
 ![单机保活](docs/screenshots/03-keepalive.png)
 
-**换班组成员编辑**：顺序上下移、每台运行几小时、本组 DDNS 域名，都在这一屏改完；改完自动按新排班重新计时。
+**换班组成员编辑**：顺序上下移、每台运行几小时、本组 DDNS 域名（从已配好的记录名里下拉选），都在这一屏改完；改完自动按新排班重新计时。
 
 ![编辑换班组](docs/screenshots/10-group-dialog.png)
 
@@ -278,20 +278,24 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 - 只支持 Cloudflare A 记录，Token 与 Global API Key 两种认证
 - Zone ID 可以留空，按记录名自动反查根域
 - IP 没变就跳过 API 调用；多组用不同域名时缓存按记录名分开
-- 组级别的「本组 DDNS 记录」留空则用全局设置
+- **记录名可以配多条**（设置 → DDNS 里增删）：第一条是默认记录，单机保活和没单独指定域名的换班组都用它
+- 换班组编辑框里的「本组 DDNS 记录」是从这些记录名里下拉选的，不用手打；留空则跟随默认
 
 ### 通知类型
 
 | 事件 | 触发时机 |
 | --- | --- |
 | ✅ 换班完成 | 到点换班，且新当班 Running + 旧的全部节省停机 + DDNS 已同步 |
+| ✅ 换班成功（延迟恢复） | 同上，但本班次先发过「换班异常」，后来才达成 |
 | ⚠️ 临时换班 | 非换班时点因流量超限触发故障转移，新旧状态都就绪后 |
 | 🚨 全局熔断 | 全部成员流量达标，确认都已节省停机后，附真实状态参数 |
 | 🔴 超限停机 | 当班达标但换不了班，强制节省停机生效后 |
-| 🟢 抢占恢复 | 结算过的班次里当班被回收，自动拉起成功并同步解析后 |
+| 🟢 抢占恢复 | 结算过的班次里当班被回收，自动拉起成功并同步解析后；单机保活拉起停机实例也走这一版 |
 | ⚠️ 换班异常 | 班次开始 10 分钟仍未达到预期状态 |
-| 🟢 单机保活 | 单机保活的实例被拉起成功 |
 | 📊 每日汇总 | 到设定时间（默认 23:58）推全部服务器的流量与额度 |
+
+通知的标题、图标、字段顺序与分隔线全部照搬最初脚本 `cdt.py`，文案集中放在 `app/messages.py`，
+只有「成员多于两台、脚本的两块结构装不下」时才会补块（多台停止账号、当前班次补当班机名）。
 
 Telegram 走 HTML 富文本，邮件走 HTML，Webhook 支持 `{title}` `{text}` `{kind}` 占位符。三类渠道可同时开。
 
@@ -366,10 +370,11 @@ CDT_DRY_RUN=1 ./venv/bin/python -m app.main # 不调真实阿里云
 
 `CDT_DRY_RUN=1` 时阿里云调用走内存桩：实例状态会在 Stopped → Running 之间流转、流量给固定假值，整条换班链路都能在本地跑通，不会碰真实账号。
 
-配套两个脚本（都只对本地 dry-run 实例、只用假数据）：
+配套脚本（都只对本地 dry-run 实例、只用假数据）：
 
 ```bash
 python scripts/smoke_test.py http://127.0.0.1:8099   # 17 组端到端断言
+python scripts/test_messages.py                      # 通知文案逐字对照脚本原文
 python scripts/seed_demo.py  http://127.0.0.1:8099   # 灌 6 台假服务器 + 换班组
 node   scripts/screenshot.cjs http://127.0.0.1:8099  # 重新生成 docs/screenshots
 ```

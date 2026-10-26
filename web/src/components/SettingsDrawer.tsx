@@ -5,9 +5,11 @@ import {
   Download,
   Globe2,
   LoaderCircle,
+  Plus,
   Save,
   Send,
   SlidersHorizontal,
+  Trash2,
   TriangleAlert,
   X,
 } from 'lucide-react'
@@ -34,7 +36,15 @@ const TIMEZONES = [
 
 export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
   const [tab, setTab] = useState<Tab>('general')
-  const [form, setForm] = useState(() => structuredClone(settings))
+  const [form, setForm] = useState(() => {
+    const draft = structuredClone(settings)
+    // 老版本的响应里只有单条 record，补成数组，后面全按数组处理
+    if (!Array.isArray(draft.ddns.records)) draft.ddns.records = []
+    if (draft.ddns.records.length === 0 && draft.ddns.record) {
+      draft.ddns.records = [draft.ddns.record]
+    }
+    return draft
+  })
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [testing, setTesting] = useState('')
@@ -75,7 +85,7 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
           cf_email: form.ddns.cf_email,
           cf_key: (form.ddns as unknown as { cf_key?: string }).cf_key || '',
           zone_id: form.ddns.zone_id,
-          record: form.ddns.record,
+          records: form.ddns.records.map((name) => name.trim()).filter(Boolean),
           ttl: form.ddns.ttl,
           proxied: form.ddns.proxied,
         },
@@ -388,28 +398,75 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
                 </div>
               )}
 
-              <div className="grid-2">
-                <div className="field">
-                  <label htmlFor="record">记录名</label>
-                  <input
-                    id="record"
-                    className="input"
-                    value={form.ddns.record}
-                    onChange={(event) => patch((draft) => (draft.ddns.record = event.target.value))}
-                    placeholder="cdt.example.com"
-                  />
+              <div className="field">
+                <label htmlFor="record">记录名</label>
+                <div className="record-list">
+                  {(form.ddns.records.length ? form.ddns.records : ['']).map((name, index) => (
+                    <div className="record-row" key={index}>
+                      <input
+                        id={index === 0 ? 'record' : undefined}
+                        className="input"
+                        value={name}
+                        onChange={(event) =>
+                          patch((draft) => {
+                            const list = draft.ddns.records.length
+                              ? draft.ddns.records
+                              : ['']
+                            list[index] = event.target.value
+                            draft.ddns.records = list
+                          })
+                        }
+                        placeholder="cdt.example.com"
+                      />
+                      {index === 0 ? (
+                        <span className="record-tag">默认</span>
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn ghost icon sm"
+                          title="删除这条记录"
+                          onClick={() =>
+                            patch((draft) => {
+                              draft.ddns.records = draft.ddns.records.filter(
+                                (_, i) => i !== index,
+                              )
+                            })
+                          }
+                        >
+                          <Trash2 size={13} style={{ color: 'var(--red)' }} />
+                        </button>
+                      )}
+                    </div>
+                  ))}
                 </div>
-                <div className="field">
-                  <label htmlFor="ttl">TTL（秒）</label>
-                  <input
-                    id="ttl"
-                    className="input"
-                    type="number"
-                    min={1}
-                    value={form.ddns.ttl}
-                    onChange={(event) => patch((draft) => (draft.ddns.ttl = event.target.value))}
-                  />
+                <button
+                  type="button"
+                  className="btn sm"
+                  style={{ alignSelf: 'flex-start' }}
+                  onClick={() =>
+                    patch((draft) => {
+                      if (!draft.ddns.records.length) draft.ddns.records = ['']
+                      draft.ddns.records.push('')
+                    })
+                  }
+                >
+                  <Plus size={13} /> 添加记录名
+                </button>
+                <div className="hint">
+                  第一条是默认记录：单机保活、以及没单独指定域名的换班组都用它。换班组可以在组里另选一条。
                 </div>
+              </div>
+
+              <div className="field">
+                <label htmlFor="ttl">TTL（秒）</label>
+                <input
+                  id="ttl"
+                  className="input"
+                  type="number"
+                  min={1}
+                  value={form.ddns.ttl}
+                  onChange={(event) => patch((draft) => (draft.ddns.ttl = event.target.value))}
+                />
               </div>
 
               <div className="field">

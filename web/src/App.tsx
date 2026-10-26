@@ -502,6 +502,7 @@ export default function App() {
         <GroupDialog
           group={groupDialog.group}
           servers={overview.servers}
+          ddnsRecords={settings.ddns.records || []}
           onClose={() => setGroupDialog({ open: false, group: null })}
           onSaved={async (message) => {
             setGroupDialog({ open: false, group: null })

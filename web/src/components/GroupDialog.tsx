@@ -9,11 +9,12 @@ type Row = { server_id: number; hours: number; enabled: boolean }
 type Props = {
   group: ShiftGroup | null
   servers: Server[]
+  ddnsRecords: string[]
   onClose: () => void
   onSaved: (message: string) => void
 }
 
-export default function GroupDialog({ group, servers, onClose, onSaved }: Props) {
+export default function GroupDialog({ group, servers, ddnsRecords, onClose, onSaved }: Props) {
   const editing = Boolean(group && group.id)
   const [name, setName] = useState(group?.name ?? '联合换班')
   const [enabled, setEnabled] = useState(group?.enabled ?? true)
@@ -214,16 +215,29 @@ export default function GroupDialog({ group, servers, onClose, onSaved }: Props)
       </div>
 
       <div className="field">
-        <label htmlFor="ddnsRecord">本组 DDNS 记录（可选）</label>
-        <input
+        <label htmlFor="ddnsRecord">本组 DDNS 记录</label>
+        <select
           id="ddnsRecord"
-          className="input"
+          className="select"
           value={ddnsRecord}
           onChange={(event) => setDdnsRecord(event.target.value)}
-          placeholder="留空则用「设置 → DDNS」里的全局记录"
-        />
+          disabled={ddnsRecords.length === 0 && !ddnsRecord}
+        >
+          <option value="">
+            {ddnsRecords.length ? `跟随默认（${ddnsRecords[0]}）` : '跟随默认（还没配记录名）'}
+          </option>
+          {ddnsRecords.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+          {/* 换班组以前填过、但设置里已经删掉的记录名，保留一项免得被静默改掉 */}
+          {ddnsRecord && !ddnsRecords.includes(ddnsRecord) && (
+            <option value={ddnsRecord}>{ddnsRecord}（已不在记录名列表）</option>
+          )}
+        </select>
         <div className="hint">
-          多组各用不同域名时填这里；共用同一个域名就留空。
+          选项来自「设置 → DDNS」里的记录名，可以先去那里加多条，再回来给每个组挑一条。
         </div>
       </div>
 

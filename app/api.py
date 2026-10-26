@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 import threading
 import time
@@ -59,8 +60,10 @@ SETTING_LABELS = {
     "ddns_cf_key": "DDNS Global Key",
     "ddns_zone_id": "Zone ID",
     "ddns_record": "默认域名",
+    "ddns_records": "DDNS 记录名",
     "ddns_ttl": "TTL",
     "ddns_proxied": "CDN 代理",
+    "billing_enabled": "费用查询",
     "notify_tg_enabled": "Telegram 开关",
     "notify_tg_token": "Telegram Token",
     "notify_tg_chat_id": "Telegram Chat",
@@ -80,8 +83,12 @@ SETTING_LABELS = {
     "admin_password": "登录密码",
 }
 
+# 内部状态键不算「本次改动」，别让它们出现在事件摘要里
+SETTING_LABELS_SKIP = {"session_epoch", "initialized", "admin_username"}
+
 
 def _setting_labels(keys: list[str]) -> str:
+    keys = [key for key in keys if key not in SETTING_LABELS_SKIP]
     names = [SETTING_LABELS.get(key, key) for key in sorted(keys)]
     if len(names) > 8:
         return "、".join(names[:8]) + f" 等 {len(names)} 项"
@@ -360,7 +367,8 @@ def register(app: FastAPI) -> None:
             ],
             "ddns": {
                 "enabled": config.get("ddns_enabled") == "1",
-                "record": config.get("ddns_record") or "",
+                "record": ddns.default_record(config),
+                "records": ddns.records(config),
                 "last_ip": config.get("ddns_last_ip") or "",
                 "last_status": config.get("ddns_last_status") or "",
                 "last_at": int(config.get("ddns_last_at") or 0),
@@ -495,7 +503,8 @@ def register(app: FastAPI) -> None:
                 "cf_email": config.get("ddns_cf_email") or "",
                 "cf_key_configured": bool(config.get("ddns_cf_key")),
                 "zone_id": config.get("ddns_zone_id") or "",
-                "record": config.get("ddns_record") or "",
+                "record": ddns.default_record(config),
+                "records": ddns.records(config),
                 "ttl": config.get("ddns_ttl"),
                 "proxied": config.get("ddns_proxied") == "1",
                 "last_ip": config.get("ddns_last_ip") or "",
@@ -577,7 +586,25 @@ def register(app: FastAPI) -> None:
             put_str("ddns_cf_auth_mode", ddns_payload.get("cf_auth_mode"))
             put_str("ddns_cf_email", ddns_payload.get("cf_email"))
             put_str("ddns_zone_id", ddns_payload.get("zone_id"))
-            put_str("ddns_record", ddns_payload.get("record"))
+            records_payload = ddns_payload.get("records")
+            if records_payload is not None:
+                if not isinstance(records_payload, list):
+                    raise ValueError("DDNS 记录名需要是列表")
+                cleaned: list[str] = []
+                seen: set[str] = set()
+                for item in records_payload:
+                    name = str(item or "").strip()
+                    if not name or name.lower() in seen:
+                        continue
+                    if any(ch.isspace() for ch in name):
+                        raise ValueError(f"DDNS 记录名不能带空格：{name}")
+                    seen.add(name.lower())
+                    cleaned.append(name)
+                updates["ddns_records"] = json.dumps(cleaned, ensure_ascii=False)
+                # 兼容单记录时代的字段：默认域名永远等于第一条
+                updates["ddns_record"] = cleaned[0] if cleaned else ""
+            else:
+                put_str("ddns_record", ddns_payload.get("record"))
             put_str("ddns_ttl", ddns_payload.get("ttl"))
             put_bool("ddns_proxied", ddns_payload.get("proxied"))
             if ddns_payload.get("cf_token"):
@@ -624,8 +651,17 @@ def register(app: FastAPI) -> None:
             updates["session_epoch"] = str(bumped_epoch)
 
         if updates:
+            # 前端每次保存都会把整张表单发上来，直接按 updates 记事件会写成「等 33 项」。
+            # 只把值真的变了的字段记进去，事件里才是本次操作做了什么。
+            before = repo.get_settings()
+            changed = [
+                key
+                for key, value in updates.items()
+                if str(before.get(key, "")) != str(value) and key not in SETTING_LABELS_SKIP
+            ]
             repo.set_settings(updates)
-            repo.add_event("system", "配置已更新", _setting_labels(list(updates)))
+            if changed:
+                repo.add_event("system", "配置已更新", _setting_labels(changed))
 
         if bumped_epoch is not None:
             # 改密码的这个浏览器要留住，给它发一张新票据

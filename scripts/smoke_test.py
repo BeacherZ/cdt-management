@@ -221,6 +221,45 @@ check("保存设置", status == 200 and body.get("ok"), str(body))
 status, body = call("GET", "/api/v1/settings")
 check("Token 不回显原文", body["telegram"]["token_configured"] is True and "token" not in body["telegram"])
 check("DDNS Token 只回显配置标记", body["ddns"]["cf_token_configured"] is True)
+check(
+    "单条 record 自动当成一条记录名",
+    body["ddns"]["records"] == ["cdt.example.com"],
+    str(body["ddns"]["records"]),
+)
+
+status, body = call(
+    "POST",
+    "/api/v1/settings",
+    {"ddns": {"records": ["cdt.example.com", "cdn.example.com", "cdt.example.com"]}},
+)
+check("保存多条记录名", status == 200 and body.get("ok"), str(body)[:200])
+status, body = call("GET", "/api/v1/settings")
+check(
+    "重复记录名被去掉且保持顺序",
+    body["ddns"]["records"] == ["cdt.example.com", "cdn.example.com"],
+    str(body["ddns"]["records"]),
+)
+check("默认域名等于第一条", body["ddns"]["record"] == "cdt.example.com", body["ddns"]["record"])
+
+status, body = call("GET", "/api/v1/events?kind=system&limit=50")
+before_changed = len(body.get("items", []))
+call("POST", "/api/v1/settings", {"timezone": "Asia/Shanghai", "traffic_threshold_pct": 94})
+status, body = call("GET", "/api/v1/events?kind=system&limit=50")
+after_changed = len(body.get("items", []))
+check(
+    "没改任何值就不记「配置已更新」",
+    after_changed == before_changed,
+    f"{before_changed} → {after_changed}",
+)
+
+call("POST", "/api/v1/settings", {"traffic_threshold_pct": 93})
+status, body = call("GET", "/api/v1/events?kind=system&limit=50")
+latest = body["items"][0] if body.get("items") else {}
+check(
+    "只记本次真正改动的项",
+    latest.get("detail") == "流量阈值",
+    str(latest.get("detail")),
+)
 
 print("\n== 10. CSRF 防护 ==")
 raw = requests.Session(); raw.trust_env = False

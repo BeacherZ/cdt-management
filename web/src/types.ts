@@ -117,6 +117,7 @@ export type Overview = {
   ddns: {
     enabled: boolean
     record: string
+    records: string[]
     last_ip: string
     last_status: string
     last_at: number
@@ -153,6 +154,7 @@ export type Settings = {
     cf_key_configured: boolean
     zone_id: string
     record: string
+    records: string[]
     ttl: string
     proxied: boolean
     last_ip: string

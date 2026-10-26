@@ -165,7 +165,7 @@ code, _ = call(
             "cf_auth_mode": "token",
             "cf_email": "noreply@example.com",
             "zone_id": "0123456789abcdef0123456789abcdef",
-            "record": "cdt-demo.example.com",
+            "records": ["cdt-demo.example.com", "cdt-demo-2.example.com"],
             "ttl": "120",
             "proxied": False,
             "cf_token": "demo-cloudflare-token-not-real",

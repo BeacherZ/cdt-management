@@ -7,15 +7,13 @@
 from __future__ import annotations
 
 import datetime as dt
-import html as html_lib
 import json
 import logging
-import re
 import threading
 import time
 from typing import Any
 
-from . import aliyun, db as dbmod, ddns, notify, repo, settings
+from . import aliyun, db as dbmod, ddns, messages, notify, repo, settings
 
 log = logging.getLogger("cdt-management.engine")
 
@@ -96,51 +94,7 @@ def current_member_index(group: dict[str, Any], now_ts: float) -> int:
 # --------------------------------------------------------------------------
 # 文案
 # --------------------------------------------------------------------------
-
-_TAG_RE = re.compile(r"<[^>]+>")
-
-
-def strip_html(value: str) -> str:
-    return _TAG_RE.sub("", value)
-
-
-def _gb(value: float | None) -> str:
-    return "—" if value is None else f"{value:.2f} GB"
-
-
-def _usage_line(server: dict[str, Any]) -> str:
-    used = server.get("traffic_used")
-    quota = float(server.get("quota_gb") or 0) or 1
-    percent = (used or 0) / quota * 100
-    tone = "🟢 正常" if percent < 60 else ("🟡 注意" if percent < 90 else "🔴 危险")
-    return f"┃ 📈 已用：{_gb(used)}（{percent:.2f}%）{tone}"
-
-
-def server_block(
-    icon: str,
-    heading: str,
-    server: dict[str, Any],
-    status_text: str,
-    ddns_status: str | None = None,
-) -> str:
-    lines = [
-        f"{icon} <b>{heading}</b>",
-        f"┃ 🏷 别称：{html_lib.escape(str(server.get('label') or ''))}",
-        f"┃ 📦 实例：<code>{html_lib.escape(str(server.get('instance_id') or ''))}</code>",
-        f"┃ 🌐 ＩＰ：{server.get('public_ip') or '—'}",
-    ]
-    if ddns_status:
-        # 「⏸ DDNS 未启用」这类状态自带前缀，不要再叠一层 "DDNS："
-        label = ddns_status if "DDNS" in ddns_status else f"DDNS：{ddns_status}"
-        lines.append(f"┃ ☁️ {label}")
-    lines.append(_usage_line(server))
-    lines.append(f"┃ 🚧 状态：{status_text}")
-    return "\n".join(lines)
-
-
-def _message(kind: str, title: str, body: str) -> notify.Message:
-    raw = f"{title}\n{body}"
-    return notify.Message(kind=kind, title=strip_html(title), html=raw, text=strip_html(raw))
+# 全部挪到 messages.py：那里逐字对齐用户脚本 cdt.py，改文案只改那一个文件。
 
 
 # --------------------------------------------------------------------------
@@ -275,14 +229,17 @@ class Engine:
                 repo.clear_flag(f"keepalive_wait:{server_id}")
                 if config.get("notify_on_keepalive") == "1":
                     ddns_status = self._sync_ddns(server, config, None)
-                    body = (
-                        "\n\n实例此前处于停机状态，已自动拉起。\n\n"
-                        + server_block(
-                            "🖥", server.get("label") or "", server, "🟢 Running", str(ddns_status)
-                        )
-                        + "\n━━━━━━━━━━━━━━━"
+                    # 单机保活拉起的是停机实例，语义上就是脚本里的「抢占恢复」，
+                    # 所以共用同一套版式，只把「当班实例」换成「实例」。
+                    notify.send_all(
+                        config,
+                        messages.recovery(
+                            server,
+                            str(ddns_status),
+                            headline="实例疑被抢占，已自动恢复运行。",
+                            kind="keepalive",
+                        ),
                     )
-                    notify.send_all(config, _message("keepalive", "🟢 <b>CDT 单机保活报告</b>", body))
 
             results.append(
                 {
@@ -527,18 +484,17 @@ class Engine:
 
         # 正常结算只在班次第一次就绪时推；临时换班是本轮真的发生了切换才推
         if first_settle or failover:
-            self._notify_settled(group, config, duty, others, ddns_status, failover, slot_key)
+            # 用 failover_flag（本班次的粘性状态）决定模板，而不是本轮的 failover：
+            # 转移发生在上一轮、本轮才就绪时，模板也要是临时换班
+            self._notify_settled(
+                group, config, duty, others, ddns_status, failover_flag, slot_key
+            )
         elif (
             repo.get_flag(f"recovery:{group_id}:{slot_key}")
             and config.get("notify_on_recovery") == "1"
         ):
             repo.clear_flag(f"recovery:{group_id}:{slot_key}")
-            body = (
-                "\n\n当班实例疑被抢占，已自动恢复运行。\n\n"
-                + server_block("🖥", duty.get("label") or "", duty, "🟢 Running", str(ddns_status))
-                + "\n━━━━━━━━━━━━━━━"
-            )
-            notify.send_all(config, _message("recovery", "🟢 <b>CDT 抢占恢复报告</b>", body))
+            notify.send_all(config, messages.recovery(duty, str(ddns_status)))
             repo.add_event(
                 "recovery",
                 f"{name}：抢占恢复",
@@ -591,16 +547,7 @@ class Engine:
         if notify_enabled and config.get("notify_on_breaker") == "1" and not repo.get_flag(flag):
             fresh = [repo.get_server(int(s["id"])) or s for s in everyone]
             if all(s.get("instance_status") == "Stopped" for s in fresh):
-                blocks = "\n━━━━━━━━━━━━━━━\n".join(
-                    server_block("🖥", s.get("label") or "", s, "🔴 Stopped (StopCharging)")
-                    for s in fresh
-                )
-                body = (
-                    "\n\n⚠ <b>警告：所有实例流量均已到达阈值，「全局熔断」，均已节省停机。</b>\n\n"
-                    + blocks
-                    + "\n━━━━━━━━━━━━━━━"
-                )
-                notify.send_all(config, _message("breaker", "🚨 <b>CDT 全局熔断报告</b>", body))
+                notify.send_all(config, messages.breaker(fresh))
                 repo.set_flag(flag)
                 repo.add_event(
                     "breaker",
@@ -656,14 +603,7 @@ class Engine:
                 and fresh.get("stopped_mode") == "StopCharging"
                 and not repo.get_flag(flag)
             ):
-                body = (
-                    "\n\n当班实例流量超限且无法换班，已强制节省停机。\n\n"
-                    + server_block(
-                        "🖥", fresh.get("label") or "", fresh, "🔴 Stopped (StopCharging)"
-                    )
-                    + "\n━━━━━━━━━━━━━━━"
-                )
-                notify.send_all(config, _message("limit_stop", "🔴 <b>CDT 超限停机报告</b>", body))
+                notify.send_all(config, messages.limit_stop(fresh))
                 repo.set_flag(flag)
 
         repo.upsert_run(
@@ -697,29 +637,9 @@ class Engine:
         if repo.get_flag(flag):
             return
 
-        blocks = [
-            server_block(
-                "🚩",
-                "应当运行账号",
-                duty,
-                f"{duty.get('instance_status')} ({duty.get('stopped_mode') or '-'})",
-            )
-        ]
-        for server in others:
-            blocks.append(
-                server_block(
-                    "🚩",
-                    "应当停止账号",
-                    server,
-                    f"{server.get('instance_status')} ({server.get('stopped_mode') or '-'})",
-                )
-            )
-        body = (
-            f"\n\n⏳ <b>换班超时：已执行 {settings.SHIFT_TIMEOUT_MINUTES} 分钟，但状态未就绪。</b>\n\n"
-            + "\n━━━━━━━━━━━━━━━\n".join(blocks)
-            + "\n━━━━━━━━━━━━━━━"
+        notify.send_all(
+            config, messages.shift_error(duty, others, settings.SHIFT_TIMEOUT_MINUTES)
         )
-        notify.send_all(config, _message("shift_error", "⚠️ <b>CDT 换班异常报告</b>", body))
         repo.set_flag(flag)
         repo.add_event(
             "error",
@@ -734,12 +654,12 @@ class Engine:
         self, server: dict[str, Any], config: dict[str, str], record_override: str | None
     ) -> ddns.DDNSResult:
         ip = str(server.get("public_ip") or "")
-        if record_override:
-            config = {**config, "ddns_record": record_override}
-        record = (config.get("ddns_record") or "").strip()
+        record = (record_override or "").strip() or ddns.default_record(config)
         cache_key = f"ddns_last_ip:{record}" if record else "ddns_last_ip"
-        cached = repo.get_setting(cache_key) or ("" if record_override else config.get("ddns_last_ip") or "")
-        result = ddns.sync(ip, {**config, "ddns_last_ip": cached})
+        cached = repo.get_setting(cache_key) or (
+            "" if record_override else config.get("ddns_last_ip") or ""
+        )
+        result = ddns.sync(ip, {**config, "ddns_last_ip": cached}, record=record)
 
         update: dict[str, str] = {
             "ddns_last_status": result.status,
@@ -760,48 +680,52 @@ class Engine:
         duty: dict[str, Any],
         others: list[dict[str, Any]],
         ddns_status: ddns.DDNSResult,
-        failover: bool,
+        failover: int,
         slot_key: str,
     ) -> None:
         group_id = int(group["id"])
         name = group.get("name") or ""
-        kind = "shift_failover" if failover else "shift_done"
+        is_failover = bool(failover)
+        kind = "shift_failover" if is_failover else "shift_done"
         # 换班完成与临时换班共用同一个 slot，但要去重键必须分开，
         # 否则「已结算过又临时换班」时这条报告会被当成重复直接吞掉
-        flag = f"notify:{group_id}:{slot_key}:{'failover' if failover else 'settled'}"
+        flag = f"notify:{group_id}:{slot_key}:{'failover' if is_failover else 'settled'}"
         if repo.get_flag(flag):
             return
 
-        enabled_key = "notify_on_failover" if failover else "notify_on_shift"
+        enabled_key = "notify_on_failover" if is_failover else "notify_on_shift"
         if config.get(enabled_key) != "1":
             repo.set_flag(flag)
             return
 
-        if failover:
-            title = "⚠️ <b>CDT 临时换班报告</b>"
-            head = "\n\n📢 <b>故障转移</b>：当班流量超限，已启用备用实例。"
+        if is_failover:
+            # 引擎里被接管的那台一定在 others 里；流量读数缺失时退化成「第一台」，
+            # 免得报告只剩「接替账号」一块
+            over = [server for server in others if _over_threshold(server)]
+            if not over and others:
+                over = [others[0]]
+            taken = {id(server) for server in over}
+            standby = [server for server in others if id(server) not in taken]
+            message = messages.shift_failover(duty, over, standby, str(ddns_status))
         else:
-            title = "✅ <b>CDT 换班完成报告</b>"
-            head = f"\n\n🕒 <b>当前班次</b>：{duty.get('label')}（{_hours_of(group, duty)} 小时）"
-
-        blocks = [
-            server_block(
-                "🟢", "接替账号" if failover else "运行账号", duty, "🟢 Running", str(ddns_status)
+            # 本班次如果先发过「换班异常」，成功时按脚本换标题
+            delayed = bool(repo.get_flag(f"timeout:{group_id}:{slot_key}"))
+            tz = _timezone(config.get("timezone") or "Asia/Shanghai")
+            period = messages.shift_period(
+                duty.get("label") or "",
+                int(slot_key),
+                len(others) + 1,
+                tz,
             )
-        ]
-        for server in others:
-            blocks.append(
-                server_block(
-                    "⚪", "超限账号" if failover else "停止账号", server, "⚪ Stopped (StopCharging)"
-                )
-            )
-        body = head + "\n━━━━━━━━━━━━━━━\n" + "\n━━━━━━━━━━━━━━━\n".join(blocks) + "\n━━━━━━━━━━━━━━━"
+            message = messages.shift_done(duty, others, period, str(ddns_status), delayed=delayed)
+            if delayed:
+                repo.clear_flag(f"timeout:{group_id}:{slot_key}")
 
-        notify.send_all(config, _message(kind, title, body))
+        notify.send_all(config, message)
         repo.set_flag(flag)
         repo.add_event(
             kind,
-            f"{name}：{'临时换班' if failover else '换班完成'}",
+            f"{name}：{'临时换班' if is_failover else '换班完成'}",
             f"当班 {duty.get('label')} / 待机 {len(others)} 台 / {ddns_status}",
             group_id=group_id,
             server_id=int(duty["id"]),
@@ -944,18 +868,10 @@ class Engine:
         if not servers:
             return False
 
-        blocks = [
-            server_block(
-                "🖥",
-                server.get("label") or "",
-                server,
-                f"{server.get('instance_status')} ({server.get('stopped_mode') or '-'})",
-            )
-            for server in servers
-        ]
-        body = "\n\n" + "\n━━━━━━━━━━━━━━━\n".join(blocks) + "\n━━━━━━━━━━━━━━━"
-        body += f"\n⏰ 更新时间：{dt.datetime.now(tz).strftime('%Y-%m-%d %H:%M')}"
-        notify.send_all(config, _message("daily_report", "📊 <b>CDT 每日流量报告</b>", body))
+        message = messages.daily_report(
+            servers, dt.datetime.now(tz).strftime("%Y-%m-%d %H:%M")
+        )
+        notify.send_all(config, message)
         repo.set_flag(flag)
         repo.add_event("daily_report", "每日流量报告已推送", f"{len(servers)} 台服务器")
         return True
@@ -976,13 +892,6 @@ def _timezone(name: str) -> dt.tzinfo:
 
 def _encode_ids(servers: list[dict[str, Any]]) -> str:
     return json.dumps([int(s["id"]) for s in servers])
-
-
-def _hours_of(group: dict[str, Any], server: dict[str, Any]) -> str:
-    for member in group.get("members") or []:
-        if int(member.get("server_id") or 0) == int(server.get("id") or 0):
-            return f"{float(member.get('hours') or 0):g}"
-    return "?"
 
 
 def _over_threshold(server: dict[str, Any]) -> bool:

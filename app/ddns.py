@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import logging
 import socket
 import time
@@ -38,6 +39,50 @@ class DDNSResult:
 
     def __str__(self) -> str:  # 直接塞进通知文案
         return self.status
+
+
+# --------------------------------------------------------------------------
+# 记录名
+# --------------------------------------------------------------------------
+
+def records(config: dict[str, str]) -> list[str]:
+    """全部 DDNS 记录名。第一条是默认记录：单机保活和没单独指定域名的换班组都用它。
+
+    ddns_records 存 JSON 数组；老库里只有单条 ddns_record 时自动当成一条，
+    所以升级不需要迁移脚本。
+    """
+    raw = (config.get("ddns_records") or "").strip()
+    items: list[str] = []
+    if raw:
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            # 手改过配置文件、写成一行一条的也认
+            parsed = raw.splitlines()
+        if isinstance(parsed, list):
+            items = [str(item).strip() for item in parsed]
+    items = [item for item in items if item]
+    if not items:
+        single = (config.get("ddns_record") or "").strip()
+        if single:
+            items = [single]
+    # 去重但保留顺序
+    seen: set[str] = set()
+    unique: list[str] = []
+    for item in items:
+        if item.lower() not in seen:
+            seen.add(item.lower())
+            unique.append(item)
+    return unique
+
+
+def default_record(config: dict[str, str]) -> str:
+    items = records(config)
+    return items[0] if items else ""
+
+
+def _record_of(config: dict[str, str], record: str | None = None) -> str:
+    return (record or "").strip() or default_record(config)
 
 
 def _headers(config: dict[str, str]) -> dict[str, str]:
@@ -78,11 +123,10 @@ def _root_domain(record: str) -> str:
     return ".".join(parts[-2:]) if len(parts) >= 2 else record
 
 
-def _resolve_zone_id(headers: dict[str, str], config: dict[str, str]) -> str:
+def _resolve_zone_id(headers: dict[str, str], config: dict[str, str], record: str) -> str:
     zone_id = (config.get("ddns_zone_id") or "").strip()
     if zone_id:
         return zone_id
-    record = (config.get("ddns_record") or "").strip()
     if not record:
         raise ValueError("DDNS 记录名未配置")
     root = _root_domain(record)
@@ -115,13 +159,18 @@ def _find_record_id(headers: dict[str, str], zone_id: str, record: str) -> str |
     return None
 
 
-def sync(ip: str, config: dict[str, str], force: bool = False) -> DDNSResult:
-    """把 ip 同步到 Cloudflare A 记录。"""
+def sync(
+    ip: str, config: dict[str, str], force: bool = False, record: str | None = None
+) -> DDNSResult:
+    """把 ip 同步到 Cloudflare A 记录。
+
+    record 为空时用默认记录（第一条）；换班组可以指定自己那一条。
+    """
     if config.get("ddns_enabled") != "1":
         return DDNSResult(STATUS_DISABLED, ip=ip)
 
-    record = (config.get("ddns_record") or "").strip()
-    if not record:
+    name = _record_of(config, record)
+    if not name:
         return DDNSResult(STATUS_ERROR, "记录名未配置", ip=ip)
     if not is_public_ipv4(ip):
         log.warning("DDNS 跳过：IP 不可用 (%s)", ip)
@@ -139,7 +188,7 @@ def sync(ip: str, config: dict[str, str], force: bool = False) -> DDNSResult:
     # 认证/Zone 这类配置问题重试也没用，先一次性判掉，别白等 6 秒
     try:
         headers = _headers(config)
-        zone_id = _resolve_zone_id(headers, config)
+        zone_id = _resolve_zone_id(headers, config, name)
     except ValueError as exc:
         return DDNSResult(STATUS_ERROR, str(exc), ip=ip)
     except Exception as exc:  # noqa: BLE001 - 网络异常
@@ -149,7 +198,7 @@ def sync(ip: str, config: dict[str, str], force: bool = False) -> DDNSResult:
     last_error = ""
     for attempt in range(1, 4):
         try:
-            record_id = _find_record_id(headers, zone_id, record)
+            record_id = _find_record_id(headers, zone_id, name)
             if not record_id:
                 last_error = "记录不存在或查询失败"
                 time.sleep(2)
@@ -160,7 +209,7 @@ def sync(ip: str, config: dict[str, str], force: bool = False) -> DDNSResult:
                 headers=headers,
                 json={
                     "type": "A",
-                    "name": record,
+                    "name": name,
                     "content": ip,
                     "ttl": int(config.get("ddns_ttl") or 60),
                     "proxied": config.get("ddns_proxied") == "1",
@@ -169,8 +218,8 @@ def sync(ip: str, config: dict[str, str], force: bool = False) -> DDNSResult:
             )
             payload = response.json() if response.content else {}
             if response.status_code == 200 and payload.get("success"):
-                log.info("DDNS 更新成功 %s -> %s", record, ip)
-                return DDNSResult(STATUS_SYNCED, f"{record} → {ip}", changed=True, ip=ip)
+                log.info("DDNS 更新成功 %s -> %s", name, ip)
+                return DDNSResult(STATUS_SYNCED, f"{name} → {ip}", changed=True, ip=ip)
             last_error = f"HTTP {response.status_code}"
             log.warning("DDNS 第 %s 次更新失败: %s", attempt, last_error)
         except Exception as exc:  # noqa: BLE001
@@ -186,14 +235,18 @@ def sync(ip: str, config: dict[str, str], force: bool = False) -> DDNSResult:
 
 
 def test(config: dict[str, str]) -> DDNSResult:
-    """连通性自检：只读，不改记录。"""
+    """连通性自检：只读，不改记录。多条记录逐条查一遍。"""
+    names = records(config)
+    if not names:
+        return DDNSResult(STATUS_ERROR, "记录名未配置")
     try:
         headers = _headers(config)
-        zone_id = _resolve_zone_id(headers, config)
-        record = (config.get("ddns_record") or "").strip()
-        record_id = _find_record_id(headers, zone_id, record)
-        if not record_id:
-            return DDNSResult(STATUS_NO_RECORD_ID, f"{record} 未找到 A 记录")
-        return DDNSResult("✅ 连接正常", f"Zone {zone_id[:8]}… / 记录已就绪")
+        zone_id = _resolve_zone_id(headers, config, names[0])
     except Exception as exc:  # noqa: BLE001
         return DDNSResult(STATUS_ERROR, str(exc))
+
+    missing = [name for name in names if not _find_record_id(headers, zone_id, name)]
+    if missing:
+        return DDNSResult(STATUS_NO_RECORD_ID, f"{'、'.join(missing)} 未找到 A 记录")
+    detail = f"Zone {zone_id[:8]}… / {names[0]} 已就绪" if len(names) == 1 else f"{len(names)} 条记录均就绪"
+    return DDNSResult("✅ 连接正常", detail)
