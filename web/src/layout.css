@@ -99,14 +99,102 @@
   gap: 1px;
 }
 
-.sidebar-group {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--muted-soft);
-  padding: 15px 12px 6px;
+.sidebar .nav-group + .nav-group {
+  margin-top: 12px;
+}
+
+/* 总菜单：概览 / 保活。两者同一套字号字重，视觉上并排成两级 */
+.nav-parent {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 11px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 620;
+  letter-spacing: -0.014em;
+  text-align: left;
   user-select: none;
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+
+button.nav-parent {
+  cursor: pointer;
+}
+
+button.nav-parent:hover {
+  background: var(--panel-inset);
+}
+
+.nav-parent svg {
+  flex-shrink: 0;
+  opacity: 0.78;
+  transition: opacity var(--t-fast) var(--ease);
+}
+
+button.nav-parent:hover svg,
+.nav-parent.on svg {
+  opacity: 1;
+}
+
+.nav-parent.on {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.nav-parent.on::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 2.5px;
+  height: 16px;
+  margin-top: -8px;
+  border-radius: 0 3px 3px 0;
+  background: var(--accent-grad);
+}
+
+/* 保活：不是页面，只作标签，没有 hover 反馈，别让人以为能点 */
+.nav-parent.label {
+  color: var(--ink-soft);
+  cursor: default;
+}
+
+/* 子项：缩进挂在总菜单下面，左侧一条导轨把层级画出来 */
+.nav-sub {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 1px 0 0 26px;
+  padding-left: 12px;
+  border-left: 1px solid var(--line);
+}
+
+.nav-sub .nav-item {
+  padding: 6px 10px;
+  font-size: 12.4px;
+}
+
+/* 选中时导轨那一小段点亮，而不是在缩进里再飘一根 */
+.nav-sub .nav-item.on::before {
+  left: -13px;
+  width: 2px;
+  height: 14px;
+  margin-top: -7px;
+  border-radius: 2px;
+}
+
+/* 保活分组整组高亮时，标题也跟着变色，方便看出当前在哪个大菜单 */
+.nav-group.is-active > .nav-parent.label {
+  color: var(--ink-soft);
 }
 
 .nav-item {
@@ -322,10 +410,6 @@
     display: none;
   }
 
-  .sidebar-group {
-    display: none;
-  }
-
   /* 第一行：品牌 + 设置/退出图标；第二行：导航整行可横向滚动 */
   .sidebar .nav-list {
     order: 3;
@@ -341,9 +425,30 @@
     display: none;
   }
 
-  /* 窄屏两组导航合并成一条横向滚动的颗粒 */
-  .sidebar .nav-group {
+  /* 小屏不画层级：总菜单和子项摊平成同一排横滑的颗粒 */
+  .sidebar .nav-group,
+  .sidebar .nav-sub {
     display: contents;
+  }
+
+  /* 保活只是标签，横排里没有位置，藏掉 */
+  .sidebar .nav-parent.label {
+    display: none;
+  }
+
+  /* 概览本身是页面，必须留着，样式跟普通颗粒一致 */
+  .sidebar .nav-parent {
+    width: auto;
+    flex-shrink: 0;
+    padding: 6px 9px;
+    font-size: 12.5px;
+    font-weight: 600;
+    gap: 5px;
+    border-radius: 9px;
+  }
+
+  .sidebar .nav-parent.on::before {
+    display: none;
   }
 
   .nav-item {

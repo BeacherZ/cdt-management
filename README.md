@@ -121,7 +121,15 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 
 ## 界面
 
-登录后左侧分成两组：**总览**（概览、服务器）和 **保活**（单机保活、联合换班）。
+登录后左侧只有两个总菜单，子项缩进挂在下面：
+
+```
+概览              ← 点进去是总览页
+  └ 服务器
+保活              ← 分组标题，点了没反应
+  ├ 单机保活
+  └ 联合换班
+```
 
 ![总览](docs/screenshots/02-dashboard.png)
 

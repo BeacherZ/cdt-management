@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  Activity,
   AlertTriangle,
   Gauge,
   HeartPulse,
@@ -29,25 +30,43 @@ type Toast = { id: number; tone: 'success' | 'error' | 'info'; message: string }
 
 const REFRESH_MS = 10_000
 
-type NavItem = { key: View; label: string; icon: typeof Gauge }
-type NavGroup = { title: string; items: NavItem[] }
+type NavLeaf = { key: View; label: string; icon: typeof Gauge }
 
-const NAV_GROUPS: NavGroup[] = [
+/**
+ * 侧栏只有两个总菜单：概览 / 保活。
+ * 带 key 的总菜单本身就是页面（概览可点），不带的只作分组标签（保活）。
+ * 子项统一缩进挂在总菜单下面。
+ */
+type NavSection = {
+  title: string
+  key?: View
+  icon?: typeof Gauge
+  children: NavLeaf[]
+}
+
+const NAV_SECTIONS: NavSection[] = [
   {
-    title: '总览',
-    items: [
-      { key: 'dashboard', label: '概览', icon: Gauge },
-      { key: 'servers', label: '服务器', icon: ServerIcon },
-    ],
+    title: '概览',
+    key: 'dashboard',
+    icon: Gauge,
+    children: [{ key: 'servers', label: '服务器', icon: ServerIcon }],
   },
   {
     title: '保活',
-    items: [
+    icon: Activity,
+    children: [
       { key: 'keepalive', label: '单机保活', icon: HeartPulse },
       { key: 'shift', label: '联合换班', icon: Repeat },
     ],
   },
 ]
+
+function navCount(key: View, overview: Overview): number {
+  if (key === 'servers') return overview.servers.length
+  if (key === 'keepalive') return overview.keepalives.length
+  if (key === 'shift') return overview.groups.length
+  return 0
+}
 
 export default function App() {
   const [phase, setPhase] = useState<Phase>('loading')
@@ -310,33 +329,50 @@ export default function App() {
         </div>
 
         <nav className="nav-list" aria-label="主视图">
-          {NAV_GROUPS.map((group) => (
-            <div className="nav-group" key={group.title}>
-              <div className="sidebar-group">{group.title}</div>
-              {group.items.map((item) => {
-                const Icon = item.icon
-                const count =
-                  item.key === 'keepalive'
-                    ? overview.keepalives.length
-                    : item.key === 'shift'
-                      ? overview.groups.length
-                      : item.key === 'servers'
-                        ? overview.servers.length
-                        : 0
-                return (
+          {NAV_SECTIONS.map((section) => {
+            const parentKey = section.key
+            const ParentIcon = section.icon
+            const sectionActive =
+              parentKey === view || section.children.some((leaf) => leaf.key === view)
+            return (
+              <div
+                className={`nav-group${sectionActive ? ' is-active' : ''}`}
+                key={section.title}
+              >
+                {parentKey && ParentIcon ? (
                   <button
-                    key={item.key}
-                    className={`nav-item${view === item.key ? ' on' : ''}`}
-                    onClick={() => setView(item.key)}
+                    className={`nav-parent${view === parentKey ? ' on' : ''}`}
+                    aria-current={view === parentKey ? 'page' : undefined}
+                    onClick={() => setView(parentKey)}
                   >
-                    <Icon size={15} />
-                    <span className="nav-text">{item.label}</span>
-                    {count > 0 && <span className="nav-count">{count}</span>}
+                    <ParentIcon size={15} />
+                    <span className="nav-text">{section.title}</span>
                   </button>
-                )
-              })}
-            </div>
-          ))}
+                ) : (
+                  <div className="nav-parent label">{section.title}</div>
+                )}
+
+                <div className="nav-sub">
+                  {section.children.map((item) => {
+                    const Icon = item.icon
+                    const count = navCount(item.key, overview)
+                    return (
+                      <button
+                        key={item.key}
+                        className={`nav-item${view === item.key ? ' on' : ''}`}
+                        aria-current={view === item.key ? 'page' : undefined}
+                        onClick={() => setView(item.key)}
+                      >
+                        <Icon size={14} />
+                        <span className="nav-text">{item.label}</span>
+                        {count > 0 && <span className="nav-count">{count}</span>}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            )
+          })}
         </nav>
 
         <div className="sidebar-foot">
