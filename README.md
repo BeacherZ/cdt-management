@@ -18,7 +18,6 @@
 ![python](https://img.shields.io/badge/python-3.13-blue)
 ![docker](https://img.shields.io/badge/docker-amd64%20%7C%20arm64-2496ed)
 
-> 界面与交互参考 [wang4386/CDT-Monitor](https://github.com/wang4386/CDT-Monitor)（MIT，作者 **青柠**）。换班、DDNS、通知逻辑为本项目独立实现。详见 [NOTICE.md](NOTICE.md)。
 
 ## 界面
 
