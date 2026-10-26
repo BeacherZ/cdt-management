@@ -22,6 +22,20 @@ function countdown(target: number, now: number): string {
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
 }
 
+// 班次时间段：白班（00:00–12:00）；跨天时结束标「次日」；没填时刻就返回空串
+function slotPeriod(name: string, start: string, end: string): string {
+  const s = (start || '').trim()
+  const e = (end || '').trim()
+  if (!s && !e) return ''
+  const toMin = (t: string) => {
+    const [h, m] = t.split(':').map(Number)
+    return h * 60 + m
+  }
+  const tail = e && toMin(e) <= toMin(s) ? `次日 ${e}` : e
+  const span = e ? `${s}–${tail}` : s
+  return name.trim() ? `${name.trim()}（${span}）` : span
+}
+
 export default function ShiftView({
   groups,
   serverCount,
@@ -167,7 +181,12 @@ export default function ShiftView({
                       >
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 7, minWidth: 0 }}>
                           <div className="slot-top">
-                            <span>第 {member.position + 1} 位 · {member.hours} 小时</span>
+                            <span>
+                              第 {member.position + 1} 位
+                              {slotPeriod(member.slot_name, member.start_time, member.end_time)
+                                ? ` · ${slotPeriod(member.slot_name, member.start_time, member.end_time)}`
+                                : ` · ${member.hours} 小时`}
+                            </span>
                             {member.is_duty && <span className="duty-tag">当班</span>}
                             {!member.enabled && <Badge tone="gray">已禁用</Badge>}
                           </div>

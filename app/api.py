@@ -498,6 +498,20 @@ def register(app: FastAPI) -> None:
         require_csrf(request)
         return {"id": repo.upsert_server(payload)}
 
+    @app.post("/api/v1/servers/reorder")
+    def reorder_servers(request: Request, payload: dict[str, Any], user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
+        """手动排序：前端拖拽后把完整的有序 id 列表传回来持久化。"""
+        require_csrf(request)
+        ids = payload.get("ids")
+        if not isinstance(ids, list) or not ids:
+            raise HTTPException(status_code=400, detail="ids 必须是非空的有序数组")
+        try:
+            ordered = [int(i) for i in ids]
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="ids 里的元素必须是数字") from None
+        repo.reorder_servers(ordered)
+        return {"ok": True}
+
     @app.delete("/api/v1/servers/{server_id}")
     def remove_server(request: Request, server_id: int, user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
         require_csrf(request)

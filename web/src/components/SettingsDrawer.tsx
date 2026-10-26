@@ -135,7 +135,14 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
         `/api/v1/settings/test/${channel}`,
         form,
       )
-      setTestResult(`${result.ok ? '✅' : '❌'} ${result.status || result.detail}`)
+      // DDNS 后端返回的 status 已带 emoji（如「✅ 连接正常」「❌ DDNS 异常」），
+      // 真正的原因在 detail 里，得一起露出来；其它渠道只有不带 emoji 的 detail。
+      const status = result.status || ''
+      const detail = result.detail && result.detail !== status ? `：${result.detail}` : ''
+      const text = status
+        ? `${status}${detail}`
+        : `${result.ok ? '✅' : '❌'} ${result.detail || '测试完成'}`
+      setTestResult(text)
     } catch (err) {
       setTestResult(`❌ ${err instanceof Error ? err.message : '测试失败'}`)
     } finally {

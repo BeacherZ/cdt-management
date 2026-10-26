@@ -650,11 +650,17 @@ class Engine:
             )
             return summary
 
-        # 换班完成：确认全部到位，把进行中的事件打上完成标志（只在首次 settle 时做，
-        # 之后每轮 reconcile 维持 settled 状态，不再重复追加进度、重复 finish）
+        # 换班完成：确认全部到位，把进行中的事件改写为最终标题并打上完成标志
+        # （只在首次 settle 时做，之后每轮 reconcile 维持 settled 状态，不再重复追加、重复 finish）。
+        # 复用「换班进行中」这条 running 事件而不是另开一条，这样事件全程耗时才是真实的换班过程。
         if first_settle and event_id:
             repo.add_event_progress(event_id, "非当班均已节省停机")
             repo.add_event_progress(event_id, "全部状态确认完毕")
+            repo.update_event(
+                event_id,
+                title=f"{name}：{'临时换班' if failover_flag else '换班完成'}",
+                kind="shift_failover" if failover_flag else "shift_done",
+            )
             repo.finish_event(event_id, "done")
 
         if not notify_enabled:
@@ -735,15 +741,17 @@ class Engine:
 
         flag = f"breaker:{group_id}:{slot_key}"
         if notify_enabled and config.get("notify_on_breaker") == "1" and not repo.get_flag(flag):
-            fresh = [repo.get_server(int(s["id"])) or s for s in everyone]
-            # 全部成员物理停机到位即发通知；真实停机模式由 stop_tail 如实呈现
-            if _all_stopped_any_mode(fresh):
-                notify.send_all(config, messages.breaker(fresh, group_name=name))
+            # 全部成员物理停机到位才发通知。everyone 是 reconcile 开头 _refresh
+            # 实时拉过的状态：本轮刚下发停机、实例可能还在 Stopping 中间态，
+            # _all_stopped_any_mode 判定为 False，本轮不发，等下一轮 _refresh
+            # 经 API 确认全部 Stopped 后再发，避免「指令下发≠状态到位」就误报。
+            if _all_stopped_any_mode(everyone):
+                notify.send_all(config, messages.breaker(everyone, group_name=name))
                 repo.set_flag(flag)
                 repo.add_event(
                     "breaker",
                     f"{name}：全局熔断",
-                    f"{len(fresh)} 台成员全部超限，{messages.stop_tail(fresh)}",
+                    f"{len(everyone)} 台成员全部超限，{messages.stop_tail(everyone)}",
                     level="error",
                     group_id=group_id,
                 )
@@ -794,15 +802,16 @@ class Engine:
                         server_id=int(duty["id"]),
                     )
         else:
-            fresh = repo.get_server(int(duty["id"])) or duty
             flag = f"limit_stop:{group_id}:{slot_key}"
             if (
                 notify_enabled
                 and config.get("notify_on_limit_stop") == "1"
-                and _is_stopped_any_mode(fresh)
+                and _is_stopped_any_mode(duty)
                 and not repo.get_flag(flag)
             ):
-                notify.send_all(config, messages.limit_stop(fresh, group_name=name))
+                # duty 是 reconcile 开头 _refresh 实时拉过的状态，物理停机到位才发；
+                # 不再用 repo.get_server 的旧快照覆盖，确保「API 确认到位」后才报告。
+                notify.send_all(config, messages.limit_stop(duty, group_name=name))
                 repo.set_flag(flag)
 
         repo.upsert_run(
@@ -948,13 +957,25 @@ class Engine:
 
         notify.send_all(config, message)
         repo.set_flag(flag)
-        repo.add_event(
-            kind,
-            f"{name}：{'临时换班' if is_failover else '换班完成'}",
-            f"当班 {duty.get('label')} / 待机 {len(others)} 台 / {ddns_status}",
-            group_id=group_id,
-            server_id=int(duty["id"]),
-        )
+        # 换班过程的那条 running 事件已经在 reconcile 里改题、finish 过了；
+        # 这里只补一份结算摘要，不再另开一条 0 秒完成的 done 事件。
+        run = repo.get_run(group_id, slot_key) or {}
+        event_id = int(run.get("event_id") or 0)
+        if event_id:
+            repo.update_event(
+                event_id,
+                detail=f"当班 {duty.get('label')} / 待机 {len(others)} 台 / {ddns_status}",
+            )
+        else:
+            # 兜底：理论上不会走到（_shift_event 一定先建了 running 事件），
+            # 万一 run 里丢了 event_id，仍补一条结果事件，别让通知发了却无迹可寻
+            repo.add_event(
+                kind,
+                f"{name}：{'临时换班' if is_failover else '换班完成'}",
+                f"当班 {duty.get('label')} / 待机 {len(others)} 台 / {ddns_status}",
+                group_id=group_id,
+                server_id=int(duty["id"]),
+            )
 
     # -- 手动操作 ---------------------------------------------------------
     def manual_switch(self, group_id: int) -> dict[str, Any]:
@@ -1251,12 +1272,15 @@ def _refresh(server: dict[str, Any]) -> None:
         status=info.status,
         stopped_mode=info.stopped_mode,
         public_ip=info.public_ip,
+        region_id=info.region_id,
     )
     repo.add_sample(int(server["id"]), traffic, info.status)
     server["traffic_used"] = traffic
     server["instance_status"] = info.status
     server["stopped_mode"] = info.stopped_mode
     server["public_ip"] = info.public_ip
+    if info.region_id:
+        server["region_id"] = info.region_id
 
 
 engine = Engine()

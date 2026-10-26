@@ -1,7 +1,11 @@
+import { useState } from 'react'
 import {
   AlertTriangle,
+  GripVertical,
   Globe2,
   HeartPulse,
+  LayoutGrid,
+  List,
   LoaderCircle,
   MapPin,
   Pencil,
@@ -28,7 +32,10 @@ type Props = {
   onAction: (server: Server, action: 'start' | 'stop') => void
   onAddToKeepalive: (server: Server) => void
   onBilling: (server: Server) => void
+  onReorder: (orderedIds: number[]) => void
 }
+
+type ViewMode = 'card' | 'list'
 
 export default function ServersView({
   servers,
@@ -41,8 +48,34 @@ export default function ServersView({
   onAction,
   onAddToKeepalive,
   onBilling,
+  onReorder,
 }: Props) {
   const idleCount = servers.filter((server) => !server.managed).length
+  const [viewMode, setViewMode] = useState<ViewMode>('card')
+  // 拖拽排序：记录当前被拖的 id 与悬停目标 id，用于视觉反馈与松手换位
+  const [dragId, setDragId] = useState<number | null>(null)
+  const [overId, setOverId] = useState<number | null>(null)
+
+  function handleDrop(targetId: number) {
+    if (dragId === null || dragId === targetId) {
+      setDragId(null)
+      setOverId(null)
+      return
+    }
+    const next = [...servers]
+    const from = next.findIndex((server) => server.id === dragId)
+    const to = next.findIndex((server) => server.id === targetId)
+    if (from < 0 || to < 0) {
+      setDragId(null)
+      setOverId(null)
+      return
+    }
+    const [moved] = next.splice(from, 1)
+    next.splice(to, 0, moved)
+    onReorder(next.map((server) => server.id))
+    setDragId(null)
+    setOverId(null)
+  }
 
   return (
     <>
@@ -56,6 +89,26 @@ export default function ServersView({
           </p>
         </div>
         <div className="page-actions">
+          {servers.length > 1 && (
+            <div className="view-toggle" role="group" aria-label="视图切换">
+              <button
+                type="button"
+                className={`btn sm${viewMode === 'card' ? ' primary' : ''}`}
+                title="卡片视图"
+                onClick={() => setViewMode('card')}
+              >
+                <LayoutGrid size={13} /> 卡片
+              </button>
+              <button
+                type="button"
+                className={`btn sm${viewMode === 'list' ? ' primary' : ''}`}
+                title="列表视图"
+                onClick={() => setViewMode('list')}
+              >
+                <List size={13} /> 列表
+              </button>
+            </div>
+          )}
           <button className="btn primary" onClick={onAdd}>
             <Plus size={14} /> 添加服务器
           </button>
@@ -69,14 +122,24 @@ export default function ServersView({
             只读权限的 RAM 子账号。
           </Empty>
         </div>
+      ) : viewMode === 'list' ? (
+        <ServerTable
+          servers={servers}
+          busyId={busyId}
+          billingId={billingId}
+          onEdit={onEdit}
+          onDelete={onDelete}
+          onRefresh={onRefresh}
+          onAction={onAction}
+          onAddToKeepalive={onAddToKeepalive}
+          onBilling={onBilling}
+        />
       ) : (
         <div className="server-grid">
           {servers.map((server) => {
             const running = server.instance_status === 'Running'
             const owner = server.managed ?? null
             const busy = busyId === server.id
-            // 正在被自动化流程接管的机器不给手动启停：手动关机会被下一轮对账立刻拉起来，
-            // 还会额外触发一条假的「抢占恢复」通知
             const locked = Boolean(owner?.active)
             const ownerText =
               owner?.kind === 'group'
@@ -91,8 +154,37 @@ export default function ServersView({
                 : '开机'
 
             return (
-              <div className="card server-card" key={server.id}>
+              <div
+                className={`card server-card${dragId === server.id ? ' dragging' : ''}${
+                  overId === server.id ? ' drag-over' : ''
+                }`}
+                key={server.id}
+                draggable
+                onDragStart={(event) => {
+                  setDragId(server.id)
+                  event.dataTransfer.effectAllowed = 'move'
+                  // Firefox 需要设置 data 才会真正启动拖拽
+                  event.dataTransfer.setData('text/plain', String(server.id))
+                }}
+                onDragOver={(event) => {
+                  event.preventDefault()
+                  event.dataTransfer.dropEffect = 'move'
+                  if (overId !== server.id) setOverId(server.id)
+                }}
+                onDragLeave={() => {
+                  if (overId === server.id) setOverId(null)
+                }}
+                onDrop={(event) => {
+                  event.preventDefault()
+                  handleDrop(server.id)
+                }}
+                onDragEnd={() => {
+                  setDragId(null)
+                  setOverId(null)
+                }}
+              >
                 <div className="head">
+                  <GripVertical size={13} className="drag-handle" aria-hidden />
                   <Badge tone={statusTone(server.instance_status)} pulse={running}>
                     {statusLabel(server.instance_status, server.stopped_mode)}
                   </Badge>
@@ -123,9 +215,6 @@ export default function ServersView({
                   </div>
                 </div>
 
-                {/* 卡片只回答「这台是谁、在哪、多少流量、多少钱」。
-                    实例 ID 保留（提工单要对），地域给中文名，AccessKey 打码值对日常判断没用，
-                    编辑弹窗里能看到，就别占卡片位置了 */}
                 <div className="meta-line">
                   <code style={{ fontSize: 11 }}>{server.instance_id || '未填实例 ID'}</code>
                 </div>
@@ -215,6 +304,172 @@ export default function ServersView({
   )
 }
 
+/** 表格视图：一屏看全所有服务器的核心字段，适合机器多的时候快速对比 */
+function ServerTable({
+  servers,
+  busyId,
+  billingId,
+  onEdit,
+  onDelete,
+  onRefresh,
+  onAction,
+  onAddToKeepalive,
+  onBilling,
+}: {
+  servers: Server[]
+  busyId: number | null
+  billingId: number | null
+  onEdit: (server: Server) => void
+  onDelete: (server: Server) => void
+  onRefresh: (server: Server) => void
+  onAction: (server: Server, action: 'start' | 'stop') => void
+  onAddToKeepalive: (server: Server) => void
+  onBilling: (server: Server) => void
+}) {
+  return (
+    <div className="card server-table-card">
+      <table className="server-table">
+        <thead>
+          <tr>
+            <th>服务器</th>
+            <th>状态</th>
+            <th>地域 / 站点</th>
+            <th>实例 ID</th>
+            <th>公网 IP</th>
+            <th>流量 / 配额</th>
+            <th>本月 / 余额</th>
+            <th>归属</th>
+            <th style={{ textAlign: 'right' }}>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {servers.map((server) => {
+            const running = server.instance_status === 'Running'
+            const owner = server.managed ?? null
+            const busy = busyId === server.id
+            const locked = Boolean(owner?.active)
+            const ownerText =
+              owner?.kind === 'group'
+                ? `换班「${owner.name}」${locked ? '托管' : '已暂停'}`
+                : owner?.kind === 'keepalive'
+                  ? `保活${locked ? '托管' : '已暂停'}`
+                  : '闲散 · 手动'
+            return (
+              <tr key={server.id}>
+                <td>
+                  <strong className="server-table-name" title={server.label}>
+                    {server.label}
+                  </strong>
+                </td>
+                <td>
+                  <Badge tone={statusTone(server.instance_status)} pulse={running}>
+                    {statusLabel(server.instance_status, server.stopped_mode)}
+                  </Badge>
+                </td>
+                <td>
+                  <span className="server-table-cell">
+                    <MapPin size={11} />
+                    {regionLabel(server.region_id)}
+                  </span>
+                  <span
+                    className={`site-tag ${server.site === 'international' ? 'intl' : ''}`}
+                    style={{ marginLeft: 6 }}
+                  >
+                    {server.site === 'international' ? '国际' : '中国'}
+                  </span>
+                </td>
+                <td>
+                  <code style={{ fontSize: 11 }}>{server.instance_id || '—'}</code>
+                </td>
+                <td>
+                  <span className="server-table-mono">{server.public_ip || '—'}</span>
+                </td>
+                <td>
+                  <div className="server-table-meter">
+                    <span className="server-table-mono">
+                      {(server.traffic_used ?? 0).toFixed(1)}
+                    </span>
+                    <span className="server-table-muted"> / {server.quota_gb} GB</span>
+                    {(server.traffic_used ?? 0) >= server.threshold_gb && (
+                      <AlertTriangle size={11} style={{ color: 'var(--red)' }} />
+                    )}
+                  </div>
+                </td>
+                <td>
+                  <CostRow
+                    billing={server.billing}
+                    busy={billingId === server.id}
+                    onRefresh={() => onBilling(server)}
+                    compact
+                  />
+                </td>
+                <td>
+                  <span className={`owner-tag${owner ? (locked ? ' locked' : ' paused') : ' free'}`}>
+                    {owner ? (
+                      <>
+                        {owner.kind === 'group' ? <Repeat size={10} /> : <HeartPulse size={10} />}
+                        {ownerText}
+                      </>
+                    ) : (
+                      <>闲散 · 手动</>
+                    )}
+                  </span>
+                </td>
+                <td>
+                  <div className="server-table-actions">
+                    <button
+                      className="btn ghost icon sm"
+                      title="刷新状态"
+                      disabled={busy}
+                      onClick={() => onRefresh(server)}
+                    >
+                      {busy ? <LoaderCircle size={13} className="spin" /> : <RefreshCw size={13} />}
+                    </button>
+                    <button className="btn ghost icon sm" title="编辑" onClick={() => onEdit(server)}>
+                      <Pencil size={13} />
+                    </button>
+                    {!owner && (
+                      <button
+                        className="btn ghost sm"
+                        title="加入保活"
+                        onClick={() => onAddToKeepalive(server)}
+                      >
+                        <HeartPulse size={13} />
+                      </button>
+                    )}
+                    <button
+                      className={`btn sm ${running ? 'danger' : 'primary'}`}
+                      title={locked ? '托管中，先移出再启停' : running ? '关机' : '开机'}
+                      disabled={locked || busy}
+                      onClick={() => onAction(server, running ? 'stop' : 'start')}
+                    >
+                      {busy ? (
+                        <LoaderCircle size={12} className="spin" />
+                      ) : running ? (
+                        <PowerOff size={12} />
+                      ) : (
+                        <Power size={12} />
+                      )}
+                      {running ? '关机' : '开机'}
+                    </button>
+                    <button
+                      className="btn ghost icon sm"
+                      title="删除"
+                      onClick={() => onDelete(server)}
+                    >
+                      <Trash2 size={13} style={{ color: 'var(--red)' }} />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 const CURRENCY_SIGN: Record<string, string> = {
   CNY: '¥',
   USD: '$',
@@ -235,10 +490,12 @@ function CostRow({
   billing,
   busy,
   onRefresh,
+  compact = false,
 }: {
   billing: Billing
   busy: boolean
   onRefresh: () => void
+  compact?: boolean
 }) {
   const failed = Boolean(billing.error)
   const hint = failed
@@ -249,6 +506,41 @@ function CostRow({
           minute: '2-digit',
         })}`
       : '还没有查询过'
+
+  if (compact) {
+    return (
+      <div className="cost-row compact" title={hint}>
+        <span className="cost-item">
+          <span className="cost-key">本月</span>
+          <b className={billing.monthly_cost === null ? 'dim' : ''}>
+            {money(billing.monthly_cost, billing.currency)}
+          </b>
+        </span>
+        <span className="cost-item">
+          <span className="cost-key">余额</span>
+          <b className={billing.balance === null ? 'dim' : ''}>
+            {money(billing.balance, billing.currency)}
+          </b>
+        </span>
+        {failed && (
+          <AlertTriangle
+            size={11}
+            style={{ color: 'var(--amber, #b45309)', flexShrink: 0 }}
+            aria-label="费用查询失败"
+          />
+        )}
+        <button
+          type="button"
+          className="btn ghost icon sm cost-refresh"
+          title="重新查询费用"
+          disabled={busy}
+          onClick={onRefresh}
+        >
+          {busy ? <LoaderCircle size={11} className="spin" /> : <RefreshCw size={11} />}
+        </button>
+      </div>
+    )
+  }
 
   return (
     <div className="cost-row">

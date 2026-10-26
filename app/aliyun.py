@@ -241,18 +241,20 @@ def _client(account: dict, region: str | None = None) -> "AcsClient":
 
 
 class InstanceInfo:
-    __slots__ = ("status", "stopped_mode", "public_ip")
+    __slots__ = ("status", "stopped_mode", "public_ip", "region_id")
 
-    def __init__(self, status: str, stopped_mode: str, public_ip: str) -> None:
+    def __init__(self, status: str, stopped_mode: str, public_ip: str, region_id: str = "") -> None:
         self.status = status
         self.stopped_mode = stopped_mode
         self.public_ip = public_ip
+        self.region_id = region_id
 
     def to_dict(self) -> dict[str, str]:
         return {
             "status": self.status,
             "stopped_mode": self.stopped_mode,
             "public_ip": self.public_ip,
+            "region_id": self.region_id,
         }
 
 
@@ -355,7 +357,12 @@ def get_instance(account: dict) -> InstanceInfo:
         with _MOCK_LOCK:
             state = _mock(account)
             _mock_advance(state)
-            return InstanceInfo(state["status"], state["stopped_mode"], state["public_ip"])
+            return InstanceInfo(
+                state["status"],
+                state["stopped_mode"],
+                state["public_ip"],
+                str(account.get("region_id") or ""),
+            )
     client = _client(account)
     request = DescribeInstancesRequest.DescribeInstancesRequest()
     request.set_InstanceIds(json.dumps([account["instance_id"]]))
@@ -368,13 +375,14 @@ def get_instance(account: dict) -> InstanceInfo:
 
     status = str(instance.get("Status") or "")
     mode = str(instance.get("StoppedMode") or "")
+    region = str(instance.get("RegionId") or instance.get("ZoneId") or "").strip()
     eip = (instance.get("EipAddress") or {}).get("IpAddress")
     if eip:
         public_ip = str(eip)
     else:
         addresses = (instance.get("PublicIpAddress") or {}).get("IpAddress") or []
         public_ip = str(addresses[0]) if addresses else ""
-    return InstanceInfo(status, mode, public_ip)
+    return InstanceInfo(status, mode, public_ip, region)
 
 
 def start_instance(account: dict) -> None:

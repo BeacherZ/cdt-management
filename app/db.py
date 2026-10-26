@@ -48,7 +48,9 @@ CREATE TABLE IF NOT EXISTS servers (
     billing_cycle       TEXT    NOT NULL DEFAULT '',
     billing_updated_at  INTEGER NOT NULL DEFAULT 0,
     billing_error       TEXT    NOT NULL DEFAULT '',
-    created_at          INTEGER NOT NULL DEFAULT 0
+    created_at          INTEGER NOT NULL DEFAULT 0,
+    -- 服务器在「服务器」页的手动排序权重，小的排前面；等于 id 时按添加顺序
+    sort_order          INTEGER NOT NULL DEFAULT 0
 );
 
 -- 单机保活：只负责「停了就拉起来」，不做换班
@@ -252,6 +254,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
             "billing_cycle": "TEXT NOT NULL DEFAULT ''",
             "billing_updated_at": "INTEGER NOT NULL DEFAULT 0",
             "billing_error": "TEXT NOT NULL DEFAULT ''",
+            "sort_order": "INTEGER NOT NULL DEFAULT 0",
         },
         "shift_members": {
             "slot_name": "TEXT NOT NULL DEFAULT ''",

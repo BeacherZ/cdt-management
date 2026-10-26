@@ -141,6 +141,7 @@ def _confirm_pending_events() -> None:
                 status=info.status,
                 stopped_mode=info.stopped_mode,
                 public_ip=info.public_ip,
+                region_id=info.region_id,
             )
         except Exception:  # noqa: BLE001
             pass

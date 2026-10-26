@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowDown, ArrowUp, GripVertical, Plus, Repeat, Trash2, TriangleAlert } from 'lucide-react'
+import { ArrowDown, ArrowUp, Divide, GripVertical, Plus, Repeat, Trash2, TriangleAlert } from 'lucide-react'
 import { post } from '../api'
 import type { Server, ShiftGroup } from '../types'
 import { Modal, Switch } from './ui'
@@ -11,6 +11,36 @@ type Row = {
   slot_name: string
   start_time: string
   end_time: string
+}
+
+/** 把「HH:MM 起始 + 时长小时」换算成「HH:MM 结束」，自动处理跨天（次日 00:00 归零） */
+function endFromStart(start: string, hours: number): string {
+  if (!start || !hours) return ''
+  const [sh, sm] = start.split(':').map(Number)
+  if (Number.isNaN(sh) || Number.isNaN(sm)) return ''
+  const total = (sh * 60 + sm + Math.round(hours * 60)) % (24 * 60)
+  const h = Math.floor(total / 60)
+  const m = total % 60
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+}
+
+/** 由起止时刻算时长（小时），支持跨天（end 早于等于 start 视为次日） */
+function slotDuration(start: string, end: string): number {
+  if (!start || !end) return 0
+  const [sh, sm] = start.split(':').map(Number)
+  const [eh, em] = end.split(':').map(Number)
+  if ([sh, sm, eh, em].some(Number.isNaN)) return 0
+  let minutes = eh * 60 + em - (sh * 60 + sm)
+  if (minutes <= 0) minutes += 24 * 60
+  return Math.round((minutes / 60) * 2) / 2
+}
+
+/** 把「距 0 点的分钟数」转成 HH:MM，1440 归零 */
+function minuteToHHMM(total: number): string {
+  const t = ((total % 1440) + 1440) % 1440
+  const h = Math.floor(t / 60)
+  const m = t % 60
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
 }
 
 type Props = {
@@ -81,6 +111,50 @@ export default function GroupDialog({ group, servers, onClose, onSaved }: Props)
       { server_id: candidate.id, hours: 12, enabled: true, slot_name: '', start_time: '', end_time: '' },
     ])
     setError('')
+  }
+
+  /** 平摊工时：24 小时按成员数均分，组员 1 从 0 点起步，依次首尾相接 */
+  function splitEvenly() {
+    if (rows.length === 0) return
+    const count = rows.length
+    // 用分钟做整数均分，除不尽的余数补给最后一位，保证总和正好 24 小时
+    const base = Math.floor((24 * 60) / count)
+    const remainder = 24 * 60 - base * count
+    let cursor = 0
+    setRows((current) =>
+      current.map((row, index) => {
+        const start = minuteToHHMM(cursor)
+        const thisMinutes = index === count - 1 ? 24 * 60 - cursor : base + (index < remainder ? 1 : 0)
+        cursor += thisMinutes
+        const end = minuteToHHMM(cursor)
+        return { ...row, start_time: start, end_time: end, hours: slotDuration(start, end) }
+      }),
+    )
+    setError('')
+  }
+
+  /** 改起止时刻 → 实时回填该行工时 */
+  function updateTime(index: number, patch: { start_time?: string; end_time?: string }) {
+    setRows((current) =>
+      current.map((row, i) => {
+        if (i !== index) return row
+        const next = { ...row, ...patch }
+        next.hours = slotDuration(next.start_time, next.end_time)
+        return next
+      }),
+    )
+  }
+
+  /** 改工时 → 自动填该行起止时刻：起始 = 前一位的结束（首位从 00:00），结束 = 起始 + 工时 */
+  function updateHours(index: number, hours: number) {
+    setRows((current) => {
+      const start = index === 0 ? '00:00' : current[index - 1]?.end_time || '00:00'
+      return current.map((row, i) => {
+        if (i !== index) return row
+        const end = endFromStart(start, hours)
+        return { ...row, hours, start_time: start, end_time: end }
+      })
+    })
   }
 
   async function save() {
@@ -206,7 +280,7 @@ export default function GroupDialog({ group, servers, onClose, onSaved }: Props)
                   className="input"
                   type="time"
                   value={row.start_time}
-                  onChange={(event) => update(index, { start_time: event.target.value })}
+                  onChange={(event) => updateTime(index, { start_time: event.target.value })}
                   title="起始时刻"
                 />
                 <span className="member-time-sep">–</span>
@@ -214,7 +288,7 @@ export default function GroupDialog({ group, servers, onClose, onSaved }: Props)
                   className="input"
                   type="time"
                   value={row.end_time}
-                  onChange={(event) => update(index, { end_time: event.target.value })}
+                  onChange={(event) => updateTime(index, { end_time: event.target.value })}
                   title="结束时刻（可跨天）"
                 />
               </div>
@@ -225,7 +299,7 @@ export default function GroupDialog({ group, servers, onClose, onSaved }: Props)
                   min={0.5}
                   step={0.5}
                   value={row.hours}
-                  onChange={(event) => update(index, { hours: Number(event.target.value) })}
+                  onChange={(event) => updateHours(index, Number(event.target.value))}
                 />
                 <span>小时</span>
               </div>
@@ -258,9 +332,18 @@ export default function GroupDialog({ group, servers, onClose, onSaved }: Props)
             </div>
           ))}
         </div>
-        <button className="btn sm" style={{ alignSelf: 'flex-start' }} onClick={add}>
-          <Plus size={13} /> 添加成员
-        </button>
+        <div className="member-toolbar">
+          <button className="btn sm" onClick={add}>
+            <Plus size={13} /> 添加成员
+          </button>
+          <button
+            className="btn sm"
+            title="24 小时按成员数均分，组员 1 从 0 点起步"
+            onClick={splitEvenly}
+          >
+            <Divide size={13} /> 平摊工时
+          </button>
+        </div>
         <div className="hint">
           填写「班次名称 + 起止时刻」后按固定时刻表每天自动换班；留空则按「小时数」顺序轮换。
         </div>

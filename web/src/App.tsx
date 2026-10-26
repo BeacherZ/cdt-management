@@ -215,6 +215,16 @@ export default function App() {
     }
   }
 
+  /** 服务器手动排序：拖拽结束后把完整有序 id 列表持久化 */
+  async function reorderServers(orderedIds: number[]) {
+    try {
+      await post('/api/v1/servers/reorder', { ids: orderedIds })
+      await loadAll()
+    } catch (error) {
+      toast(error instanceof Error ? error.message : '排序保存失败', 'error')
+    }
+  }
+
   async function refreshServer(serverId: number) {
     setBusyServer(serverId)
     try {
@@ -615,6 +625,7 @@ export default function App() {
             onRefresh={(server) => refreshServer(server.id)}
             onAction={(server, action) => serverAction(server.id, action)}
             onBilling={serverBilling}
+            onReorder={reorderServers}
             onAddToKeepalive={async (server) => {
               if (keepaliveIds.has(server.id)) {
                 toast('这台已经在单机保活里了', 'info')

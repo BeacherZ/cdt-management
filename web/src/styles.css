@@ -1464,6 +1464,132 @@ input[type='number']::-webkit-inner-spin-button {
   opacity: 0.55;
 }
 
+/* -------------------------------------------------------------- 服务器视图切换 / 拖拽 / 表格 */
+
+.view-toggle {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--panel-inset);
+}
+
+.view-toggle .btn {
+  border-radius: var(--radius-xs);
+}
+
+/* 拖拽排序：卡片可拖动，拖动中与悬停目标给出视觉反馈 */
+.server-card {
+  cursor: grab;
+}
+
+.server-card.dragging {
+  opacity: 0.45;
+  cursor: grabbing;
+}
+
+.server-card.drag-over {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.drag-handle {
+  color: var(--muted-soft);
+  flex: none;
+}
+
+/* 列表视图：紧凑表格，一屏看全 */
+.server-table-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.server-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.server-table th {
+  text-align: left;
+  padding: 10px 14px;
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-inset);
+  white-space: nowrap;
+}
+
+.server-table td {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+
+.server-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.server-table tbody tr:hover {
+  background: var(--panel-inset);
+}
+
+.server-table-name {
+  font-size: 13px;
+  font-weight: 620;
+  color: var(--ink);
+  display: inline-block;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.server-table-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.server-table-mono {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.server-table-muted {
+  color: var(--muted-soft);
+  white-space: nowrap;
+}
+
+.server-table-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.server-table-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+.cost-row.compact {
+  flex-wrap: nowrap;
+  gap: 8px;
+}
+
+
 /* -------------------------------------------------------------- 当班槽位 */
 
 .slot {
@@ -2234,11 +2360,18 @@ input[type='number']::-webkit-inner-spin-button {
   gap: 8px;
 }
 
+.member-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+
 .member-row {
   display: flex;
   align-items: flex-end;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
   padding: 10px;
   border-radius: var(--radius-md);
   border: 1px solid var(--line);
@@ -2246,8 +2379,8 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 .member-row .select {
-  flex: 1 1 160px;
-  min-width: 140px;
+  flex: 1 1 150px;
+  min-width: 128px;
 }
 
 .member-order {
@@ -2270,19 +2403,19 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 .member-slot {
-  flex: 1 1 120px;
-  min-width: 96px;
+  flex: 1 1 110px;
+  min-width: 72px;
 }
 
 .member-times {
   display: flex;
   align-items: center;
-  gap: 4px;
-  flex: 0 1 auto;
+  gap: 3px;
+  flex: 0 0 auto;
 }
 
 .member-times .input {
-  width: 88px;
+  width: 68px;
 }
 
 .member-time-sep {
@@ -2293,8 +2426,8 @@ input[type='number']::-webkit-inner-spin-button {
 .member-hours {
   display: flex;
   align-items: center;
-  gap: 6px;
-  width: 110px;
+  gap: 5px;
+  width: 92px;
   flex-shrink: 0;
 }
 

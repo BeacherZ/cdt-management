@@ -99,7 +99,7 @@ SERVER_COLUMNS = (
     "id, label, access_key_id, access_key_secret, region_id, site, instance_id, "
     "quota_gb, threshold_gb, remark, traffic_used, instance_status, stopped_mode, "
     "public_ip, traffic_checked_at, status_checked_at, monthly_cost, balance_amount, "
-    "billing_currency, billing_cycle, billing_updated_at, billing_error, created_at"
+    "billing_currency, billing_cycle, billing_updated_at, billing_error, created_at, sort_order"
 )
 
 # 站点取值只有两个；其余一律归一到中国站，避免脏数据流到 endpoint 解析里
@@ -139,7 +139,12 @@ def _server_row(row: Any, decrypt_secret: bool = False) -> dict[str, Any]:
 
 
 def list_servers(decrypt_secret: bool = False) -> list[dict[str, Any]]:
-    rows = db.query(f"SELECT {SERVER_COLUMNS} FROM servers ORDER BY id")
+    # 手动排序优先：sort_order 非 0 的按 sort_order 升序；其余（含 0 默认）按 id。
+    # 用一个统一键排序：sort_order 为 0 时退回一个基于 id 的稳定值。
+    rows = db.query(
+        f"SELECT {SERVER_COLUMNS} FROM servers ORDER BY "
+        "CASE WHEN sort_order=0 THEN id + 1000000 ELSE sort_order END, id"
+    )
     return [_server_row(row, decrypt_secret) for row in rows]
 
 
@@ -221,6 +226,30 @@ def upsert_server(payload: dict[str, Any]) -> int:
     )
 
 
+def reorder_servers(ordered_ids: list[int]) -> None:
+    """按给定顺序持久化服务器排序：sort_order 从 1 开始递增。
+
+    传进来的 ordered_ids 必须是「完整的有序 id 列表」，未列出的服务器
+    sort_order 会被清零、回退到按 id 的自然顺序排在后面。
+    """
+    if not ordered_ids:
+        return
+    conn = db.connect()
+    conn.execute("BEGIN")
+    try:
+        # 先把全部清零，避免「拖到前面后，原位置残留旧序号」
+        conn.execute("UPDATE servers SET sort_order=0")
+        for index, server_id in enumerate(ordered_ids, start=1):
+            conn.execute(
+                "UPDATE servers SET sort_order=? WHERE id=?",
+                (index, int(server_id)),
+            )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+
 def delete_server(server_id: int) -> None:
     used = db.query_one("SELECT 1 FROM shift_members WHERE server_id=?", (server_id,))
     if used is not None:
@@ -286,6 +315,7 @@ def update_server_runtime(
     status: str | None = None,
     stopped_mode: str | None = None,
     public_ip: str | None = None,
+    region_id: str | None = None,
 ) -> None:
     now = int(time.time())
     if traffic is not None:
@@ -298,6 +328,12 @@ def update_server_runtime(
             "UPDATE servers SET instance_status=?, stopped_mode=?, public_ip=?, "
             "status_checked_at=? WHERE id=?",
             (status, stopped_mode or "", public_ip or "", now, server_id),
+        )
+    if region_id:
+        # 从 ECS DescribeInstances 返回值动态回填真实地域，避免手工填错/漏填
+        db.execute(
+            "UPDATE servers SET region_id=? WHERE id=?",
+            (region_id, server_id),
         )
 
 
@@ -754,6 +790,29 @@ def finish_event(event_id: int, status: str = "done", detail: str = "") -> None:
     if detail:
         sets.append("detail=?")
         params.append(detail)
+    params.append(event_id)
+    db.execute(f"UPDATE events SET {', '.join(sets)} WHERE id=?", params)
+
+
+def update_event(
+    event_id: int, *, title: str = "", detail: str = "", kind: str = ""
+) -> None:
+    """改写一条事件的标题 / 摘要 / 类型（如「换班进行中」→「换班完成」），保留原 ts 与进度。"""
+    if not event_id:
+        return
+    sets: list[str] = []
+    params: list[Any] = []
+    if title:
+        sets.append("title=?")
+        params.append(title)
+    if detail:
+        sets.append("detail=?")
+        params.append(detail)
+    if kind:
+        sets.append("kind=?")
+        params.append(kind)
+    if not sets:
+        return
     params.append(event_id)
     db.execute(f"UPDATE events SET {', '.join(sets)} WHERE id=?", params)
 

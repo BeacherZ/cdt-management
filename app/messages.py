@@ -323,7 +323,7 @@ def report_block(server: dict[str, Any]) -> str:
             f"🖥 {_label(server)}",
             f"┃ 📦 实例：<code>{_instance(server)}</code>",
             f"┃ 🌐 ＩＰ：{_ip(server)}",
-            f"┃ 📍 地域：{server.get('region') or '-'}",
+            f"┃ 📍 地域：{server.get('region_id') or '-'}",
             f"┃ 📈 已用：{used:.2f} GB",
             f"┃ 💾 剩余：{remain:.2f} GB",
             f"┃ 🔥 使用率：{percent:.2f}%  {color}",
