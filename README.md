@@ -124,14 +124,14 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 登录后左侧只有两个总菜单，子项缩进挂在下面：
 
 ```
-概览              ← 点进去是总览页
+概览              ← 点进去是概览页
   └ 服务器
 保活              ← 分组标题，点了没反应
   ├ 单机保活
   └ 联合换班
 ```
 
-![总览](docs/screenshots/02-dashboard.png)
+![概览](docs/screenshots/02-dashboard.png)
 
 **联合换班**：按顺序一台一台当班，时间轴按各自时长按比例画出来，谁在线上、下次几点换、待机几台，一屏看完。
 
@@ -198,7 +198,7 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
    - **联合换班** → 新建换班组，按顺序添加成员并填各自运行几小时（例如两台各 12 小时）
 3. **设置 → DDNS**：填 Cloudflare Token（或 Global API Key）、记录名，开启
 4. **设置 → 通知**：填 Telegram Bot Token + Chat ID，点「发送测试」确认能收到
-5. 回总览点「立即对账」，看第一轮结果
+5. 回概览点「立即对账」，看第一轮结果
 
 ## 功能细节
 
@@ -309,7 +309,7 @@ Telegram 走 HTML 富文本，邮件走 HTML，Webhook 支持 `{title}` `{text}`
 
 **为什么不用 Go？** 这台机器上没有 Go 工具链，Python 能本地跑通端到端逻辑再交付。运行时是单进程 uvicorn + SQLite，不依赖外部数据库。
 
-**换班了但没收到通知？** 先看「设置 → 通知」里的渠道是否启用、点测试能不能发出去；再看总览的「最近事件」是否有对应记录。通知失败只记事件，不会阻塞换班。
+**换班了但没收到通知？** 先看「设置 → 通知」里的渠道是否启用、点测试能不能发出去；再看概览页的「最近事件」是否有对应记录。通知失败只记事件，不会阻塞换班。
 
 **DDNS 显示「IP 无效跳过」？** 实例还没拿到公网 IP，或者不是公网 IPv4。等下一轮对账，或手动刷新那台服务器。
 

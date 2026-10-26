@@ -48,7 +48,7 @@ export default function DashboardView({ overview }: { overview: Overview }) {
     <>
       <div className="page-head">
         <div>
-          <h1>总览</h1>
+          <h1>概览</h1>
           <p>
             当前 {overview.timezone} ·{' '}
             {new Date(overview.now).toLocaleString('zh-CN', {
