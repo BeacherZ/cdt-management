@@ -329,8 +329,15 @@ a:hover {
 
 .btn.block {
   width: 100%;
-  height: 38px;
-  font-size: 13px;
+  height: 40px;
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+/* 登录 / 提交这类主按钮给足高度和字重，作为页面视觉重心 */
+.auth-form .btn.block {
+  margin-top: 4px;
 }
 
 /* -------------------------------------------------------------- 表单 */
@@ -352,7 +359,7 @@ label {
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 600;
   color: var(--ink-soft);
 }
@@ -568,10 +575,11 @@ label {
   color: var(--red);
 }
 
+.input,
 .select,
 .textarea {
   width: 100%;
-  height: 35px;
+  height: 36px;
   padding: 0 11px;
   border-radius: var(--radius-md);
   border: 1px solid var(--line-strong);
@@ -586,6 +594,13 @@ label {
     background var(--t-fast) var(--ease);
 }
 
+/* 输入框默认留一点浅灰底，跟纯白卡片拉开层次，避免「只有两条边线」的塌陷感 */
+.input:not([type='color']):not([type='checkbox']):not([type='radio']),
+.select,
+.textarea {
+  background: color-mix(in srgb, var(--panel-solid) 82%, var(--panel-inset));
+}
+
 .input.mono {
   font-family: var(--mono);
   font-size: 12.5px;
@@ -598,10 +613,11 @@ label {
   opacity: 0.75;
 }
 
-.input:hover,
-.select:hover,
-.textarea:hover {
-  border-color: color-mix(in srgb, var(--accent) 34%, var(--line-strong));
+.input:hover:not(:disabled),
+.select:hover:not(:disabled),
+.textarea:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line-strong));
+  background: var(--panel-solid);
 }
 
 .input:focus,
@@ -609,9 +625,29 @@ label {
 .textarea:focus {
   outline: none;
   border-color: var(--accent);
+  background: var(--panel-solid);
   box-shadow:
     0 0 0 3px var(--accent-ring),
     inset 0 1px 2px var(--panel-inset);
+}
+
+.input:disabled,
+.select:disabled,
+.textarea:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* 数字输入框去掉上下箭头，用更干净的观感（浏览器默认 spinner 在窄框里很挤） */
+input[type='number'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+input[type='number']::-webkit-outer-spin-button,
+input[type='number']::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
 .textarea {
@@ -1259,7 +1295,7 @@ label {
   font-size: 12.5px;
   font-weight: 650;
   font-variant-numeric: tabular-nums;
-  color: var(--text);
+  color: var(--ink);
   white-space: nowrap;
 }
 
@@ -1718,6 +1754,13 @@ label {
   background: var(--panel-soft);
 }
 
+/* 底部左侧的说明文字，跟右侧按钮形成一左一右的平衡 */
+.modal-foot .foot-note {
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--muted-soft);
+}
+
 .drawer {
   position: fixed;
   top: 0;
@@ -1851,33 +1894,64 @@ label {
 
 .auth-card {
   width: min(430px, 100%);
-  padding: 28px;
+  padding: 30px 30px 26px;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 20px;
   box-shadow: var(--shadow-pop);
+  background: var(--panel-solid);
+}
+
+/* 登录卡片顶部一条主色渐变的点缀线，比纯色卡片更有品牌感 */
+.auth-card::after {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  background: var(--accent-grad);
+  opacity: 0.9;
+  pointer-events: none;
 }
 
 .auth-brand {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
+}
+
+.auth-brand .brand-mark {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
 }
 
 .auth-card h1 {
-  font-size: 20px;
-  letter-spacing: -0.028em;
+  font-size: 21px;
+  letter-spacing: -0.03em;
 }
 
 .auth-card .lede {
   font-size: 12.5px;
   color: var(--muted);
-  line-height: 1.6;
+  line-height: 1.7;
 }
 
 .auth-form {
   display: flex;
   flex-direction: column;
+}
+
+.auth-form .field {
+  margin-bottom: 16px;
+}
+
+/* 登录页输入框加高一点，手感更从容 */
+.auth-form .input {
+  height: 42px;
+  font-size: 13.5px;
+  padding: 0 13px;
+  border-radius: var(--radius-md);
 }
 
 .auth-error {
@@ -1970,8 +2044,22 @@ label {
 }
 
 .member-hours {
-  width: 108px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 132px;
   flex-shrink: 0;
+}
+
+.member-hours input {
+  flex: 1;
+  min-width: 0;
+}
+
+.member-hours span {
+  flex: none;
+  font-size: 12px;
+  color: var(--muted-soft);
 }
 
 /* -------------------------------------------------------------- 小屏微调 */
