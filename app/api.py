@@ -11,7 +11,7 @@ from typing import Any
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from . import aliyun, ddns, notify, repo, security, settings
+from . import aliyun, billing, ddns, notify, repo, security, settings
 from .shift import (
     PHASE_BREAKER,
     PHASE_ERROR,
@@ -194,6 +194,8 @@ def server_summary(
         "secret_configured": server.get("secret_configured", False),
         # None 表示闲散机器：没编进任何自动化流程，可以随时手动开关机
         "managed": owner,
+        # 本月账单 + 账户余额快照（慢数据，后台定时刷新，读库不出网）
+        "billing": billing.summary_of(server),
     }
 
 
@@ -399,6 +401,17 @@ def register(app: FastAPI) -> None:
         require_csrf(request)
         return engine.refresh(server_id)
 
+    @app.post("/api/v1/servers/{server_id}/billing")
+    def refresh_billing(request: Request, server_id: int, user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
+        require_csrf(request)
+        snapshot = billing.refresh_server(server_id, force=True)
+        if snapshot is None:
+            raise HTTPException(status_code=400, detail="费用查询已关闭，或服务器不存在")
+        if snapshot.get("error") and snapshot.get("monthly_cost") is None:
+            # 两个接口都失败才算这次刷新失败，让前端把原因吐出来
+            raise HTTPException(status_code=502, detail=snapshot["error"])
+        return snapshot
+
     @app.post("/api/v1/servers/{server_id}/actions/{action}")
     def server_action(request: Request, server_id: int, action: str, user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
         require_csrf(request)
@@ -464,6 +477,7 @@ def register(app: FastAPI) -> None:
             "timezone": config.get("timezone"),
             "traffic_threshold_pct": config.get("traffic_threshold_pct"),
             "reconcile_interval": config.get("reconcile_interval"),
+            "billing_enabled": config.get("billing_enabled", "1") == "1",
             "daily_report_enabled": config.get("daily_report_enabled") == "1",
             "daily_report_time": config.get("daily_report_time"),
             "notify_on_shift": config.get("notify_on_shift") == "1",
@@ -540,6 +554,8 @@ def register(app: FastAPI) -> None:
             if not 30 <= interval <= 3600:
                 raise ValueError("对账间隔应在 30–3600 秒之间")
             updates["reconcile_interval"] = str(interval)
+
+        put_bool("billing_enabled", payload.get("billing_enabled"))
 
         put_bool("daily_report_enabled", payload.get("daily_report_enabled"))
         put_str("daily_report_time", payload.get("daily_report_time"))

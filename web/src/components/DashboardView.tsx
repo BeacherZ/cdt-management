@@ -37,7 +37,13 @@ function timeAgo(ts: number): string {
   return new Date(ts * 1000).toLocaleDateString('zh-CN')
 }
 
-export default function DashboardView({ overview }: { overview: Overview }) {
+export default function DashboardView({
+  overview,
+  onNavigate,
+}: {
+  overview: Overview
+  onNavigate: (view: 'servers' | 'keepalive' | 'shift') => void
+}) {
   const running = overview.servers.filter((server) => server.instance_status === 'Running').length
   const totalTraffic = overview.servers.reduce((sum, server) => sum + (server.traffic_used || 0), 0)
   const alarms = overview.servers.filter(
@@ -83,7 +89,12 @@ export default function DashboardView({ overview }: { overview: Overview }) {
       </div>
 
       <div className="stat-grid">
-        <div className="stat">
+        <button
+          type="button"
+          className="stat stat-link"
+          title="查看服务器列表"
+          onClick={() => onNavigate('servers')}
+        >
           <div className="stat-main">
             <span className="label">
               <ServerIcon size={11} /> 服务器
@@ -95,28 +106,13 @@ export default function DashboardView({ overview }: { overview: Overview }) {
             percent={overview.servers.length ? (running / overview.servers.length) * 100 : 0}
             tone="accent"
           />
-        </div>
-        <div className="stat">
-          <div className="stat-main">
-            <span className="label">
-              <Repeat size={11} /> 换班组
-            </span>
-            <span className="value">{overview.groups.length}</span>
-            <span className="sub">
-              {overview.groups.filter((group) => group.enabled).length} 个启用
-            </span>
-          </div>
-          <Ring
-            percent={
-              overview.groups.length
-                ? (overview.groups.filter((group) => group.enabled).length / overview.groups.length) *
-                  100
-                : 0
-            }
-            tone="blue"
-          />
-        </div>
-        <div className="stat">
+        </button>
+        <button
+          type="button"
+          className="stat stat-link"
+          title="查看单机保活"
+          onClick={() => onNavigate('keepalive')}
+        >
           <div className="stat-main">
             <span className="label">
               <HeartPulse size={11} /> 单机保活
@@ -136,7 +132,32 @@ export default function DashboardView({ overview }: { overview: Overview }) {
             }
             tone="accent"
           />
-        </div>
+        </button>
+        <button
+          type="button"
+          className="stat stat-link"
+          title="查看联合换班"
+          onClick={() => onNavigate('shift')}
+        >
+          <div className="stat-main">
+            <span className="label">
+              <Repeat size={11} /> 联合换班
+            </span>
+            <span className="value">{overview.groups.length}</span>
+            <span className="sub">
+              {overview.groups.filter((group) => group.enabled).length} 个启用
+            </span>
+          </div>
+          <Ring
+            percent={
+              overview.groups.length
+                ? (overview.groups.filter((group) => group.enabled).length / overview.groups.length) *
+                  100
+                : 0
+            }
+            tone="blue"
+          />
+        </button>
         <div className="stat">
           <div className="stat-main">
             <span className="label">

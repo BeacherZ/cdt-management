@@ -9,6 +9,21 @@ export type Managed = {
   keepalive_id?: number
 }
 
+/** 费用快照：本月账单 + 账户余额，来自 BSS（慢数据，后台定时刷新） */
+export type Billing = {
+  /** 本月税前消费；null = 还没查到（刚添加 / 缺 BSS 权限） */
+  monthly_cost: number | null
+  /** 账户可用额度；null = 还没查到 */
+  balance: number | null
+  currency: string
+  /** 账单所属账期 YYYY-MM */
+  cycle: string
+  /** true = 这份数字是上个月的，跨月后还没刷新 */
+  stale: boolean
+  updated_at: number
+  error: string
+}
+
 export type Server = {
   id: number
   label: string
@@ -28,6 +43,7 @@ export type Server = {
   status_checked_at: number
   secret_configured: boolean
   managed?: Managed | null
+  billing: Billing
 }
 
 export type Keepalive = {
@@ -118,6 +134,7 @@ export type Settings = {
   timezone: string
   traffic_threshold_pct: string
   reconcile_interval: string
+  billing_enabled: boolean
   daily_report_enabled: boolean
   daily_report_time: string
   notify_on_shift: boolean
@@ -196,5 +213,14 @@ export function emptyServer(): Server {
     traffic_checked_at: 0,
     status_checked_at: 0,
     secret_configured: false,
+    billing: {
+      monthly_cost: null,
+      balance: null,
+      currency: 'CNY',
+      cycle: '',
+      stale: false,
+      updated_at: 0,
+      error: '',
+    },
   }
 }

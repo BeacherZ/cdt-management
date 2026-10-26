@@ -7,7 +7,7 @@ import logging
 import threading
 import time
 
-from . import repo, settings
+from . import billing, repo, settings
 from .shift import engine, _timezone
 
 log = logging.getLogger("cdt-management.scheduler")
@@ -43,6 +43,12 @@ def _loop() -> None:
             _maybe_daily_report()
         except Exception:  # noqa: BLE001
             log.exception("日报检查异常")
+
+        # 费用是慢数据，refresh_due 内部按 30 分钟 TTL 自行筛，命中时才真打接口
+        try:
+            billing.refresh_due()
+        except Exception:  # noqa: BLE001
+            log.exception("费用快照刷新异常")
 
         now = time.time()
         if now - last_prune > 3600:

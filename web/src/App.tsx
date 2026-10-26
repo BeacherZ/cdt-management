@@ -82,6 +82,7 @@ export default function App() {
   const [fatal, setFatal] = useState('')
   const [toasts, setToasts] = useState<Toast[]>([])
   const [busyServer, setBusyServer] = useState<number | null>(null)
+  const [billingServer, setBillingServer] = useState<number | null>(null)
   const [busyGroup, setBusyGroup] = useState<number | null>(null)
   const [serverDialog, setServerDialog] = useState<{ open: boolean; server: Server | null }>({
     open: false,
@@ -187,6 +188,24 @@ export default function App() {
       toast(error instanceof Error ? error.message : '刷新失败', 'error')
     } finally {
       setBusyServer(null)
+    }
+  }
+
+  /** 手动重查费用：BSS 接口慢，单独一个 loading，不跟状态刷新抢同一个 busy */
+  async function serverBilling(server: Server) {
+    setBillingServer(server.id)
+    try {
+      const result = await post<{ error?: string }>(`/api/v1/servers/${server.id}/billing`)
+      await loadAll()
+      if (result?.error) {
+        toast(`费用已刷新，但${result.error}`, 'info')
+      } else {
+        toast('费用已更新', 'success')
+      }
+    } catch (error) {
+      toast(error instanceof Error ? error.message : '费用查询失败', 'error')
+    } finally {
+      setBillingServer(null)
     }
   }
 
@@ -391,7 +410,12 @@ export default function App() {
       </aside>
 
       <main className="main-area">
-        {view === 'dashboard' && <DashboardView overview={overview} />}
+        {view === 'dashboard' && (
+          <DashboardView
+            overview={overview}
+            onNavigate={(target) => setView(target)}
+          />
+        )}
 
         {view === 'keepalive' && (
           <KeepaliveView
@@ -423,11 +447,13 @@ export default function App() {
           <ServersView
             servers={overview.servers}
             busyId={busyServer}
+            billingId={billingServer}
             onAdd={() => setServerDialog({ open: true, server: null })}
             onEdit={(server) => setServerDialog({ open: true, server })}
             onDelete={deleteServer}
             onRefresh={(server) => refreshServer(server.id)}
             onAction={(server, action) => serverAction(server.id, action)}
+            onBilling={serverBilling}
             onAddToKeepalive={async (server) => {
               if (keepaliveIds.has(server.id)) {
                 toast('这台已经在单机保活里了', 'info')

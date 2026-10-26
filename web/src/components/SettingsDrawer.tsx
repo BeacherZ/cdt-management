@@ -57,6 +57,7 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
         timezone: form.timezone,
         traffic_threshold_pct: Number(form.traffic_threshold_pct),
         reconcile_interval: Number(form.reconcile_interval),
+        billing_enabled: form.billing_enabled,
         daily_report_enabled: form.daily_report_enabled,
         daily_report_time: form.daily_report_time,
         notify_on_shift: form.notify_on_shift,
@@ -211,6 +212,15 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
                 <div className="hint">
                   每台服务器的绝对阈值在「服务器」里单独配置；这里只是新增时的预填值。
                 </div>
+              </div>
+
+              <div>
+                <Switch
+                  label="费用与余额"
+                  hint="每 30 分钟查一次本月账单和账户余额，显示在服务器卡片上；需要 RAM 具备 BSS 只读权限"
+                  checked={form.billing_enabled}
+                  onChange={(value) => patch((draft) => (draft.billing_enabled = value))}
+                />
               </div>
 
               <div>

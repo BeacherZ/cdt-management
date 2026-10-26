@@ -86,7 +86,8 @@ def clear_flag(key: str) -> None:
 SERVER_COLUMNS = (
     "id, label, access_key_id, access_key_secret, region_id, site, instance_id, "
     "quota_gb, threshold_gb, remark, traffic_used, instance_status, stopped_mode, "
-    "public_ip, traffic_checked_at, status_checked_at, created_at"
+    "public_ip, traffic_checked_at, status_checked_at, monthly_cost, balance_amount, "
+    "billing_currency, billing_cycle, billing_updated_at, billing_error, created_at"
 )
 
 # 站点取值只有两个；其余一律归一到中国站，避免脏数据流到 endpoint 解析里
@@ -154,7 +155,8 @@ def upsert_server(payload: dict[str, Any]) -> int:
 
     if server_id:
         existing = db.query_one(
-            "SELECT access_key_id, access_key_secret, site FROM servers WHERE id=?", (server_id,)
+            "SELECT access_key_id, access_key_secret, site, instance_id FROM servers WHERE id=?",
+            (server_id,),
         )
         if existing is None:
             raise ValueError("服务器不存在")
@@ -164,9 +166,23 @@ def upsert_server(payload: dict[str, Any]) -> int:
             # 老前端不传这个字段时保持原值，别把已有配置默默重置成中国站
             site = normalize_site(existing["site"])
         encrypted = security.encrypt(sk) if sk else existing["access_key_secret"]
+        # 换了账号 / 实例 / 站点，旧账单就不是这台机器的了，必须清掉重查
+        billing_changed = (
+            ak != existing["access_key_id"]
+            or instance != (existing["instance_id"] or "")
+            or site != normalize_site(existing["site"])
+        )
+        reset_billing = (
+            ", monthly_cost=NULL, balance_amount=NULL, billing_currency='', "
+            "billing_cycle='', billing_updated_at=0, billing_error=''"
+            if billing_changed
+            else ""
+        )
         db.execute(
             "UPDATE servers SET label=?, access_key_id=?, access_key_secret=?, region_id=?, "
-            "site=?, instance_id=?, quota_gb=?, threshold_gb=?, remark=? WHERE id=?",
+            "site=?, instance_id=?, quota_gb=?, threshold_gb=?, remark=?"
+            + reset_billing
+            + " WHERE id=?",
             (label or ak[-6:], ak, encrypted, region, site, instance, quota, threshold, remark, server_id),
         )
         return server_id
@@ -200,6 +216,48 @@ def delete_server(server_id: int) -> None:
     db.execute("DELETE FROM servers WHERE id=?", (server_id,))
     db.execute("DELETE FROM keepalives WHERE server_id=?", (server_id,))
     db.execute("DELETE FROM traffic_samples WHERE server_id=?", (server_id,))
+
+
+def update_server_site(server_id: int, site: str) -> None:
+    """只改站点。费用接口自己探出来后调用，不动其它字段。"""
+    db.execute("UPDATE servers SET site=? WHERE id=?", (normalize_site(site), server_id))
+
+
+def update_server_billing(    server_id: int,
+    *,
+    monthly_cost: float | None = None,
+    balance: float | None = None,
+    currency: str = "",
+    cycle: str = "",
+    error: str = "",
+    touch: bool = True,
+) -> None:
+    """写入费用快照。
+
+    `monthly_cost` / `balance` 传 None 表示「这次没查到，保留旧值」，
+    区别于「查到了但为 0」—— 后者要正常落 0，不能当成没有。
+    """
+    sets: list[str] = []
+    params: list[Any] = []
+    if monthly_cost is not None:
+        sets.append("monthly_cost=?")
+        params.append(float(monthly_cost))
+    if balance is not None:
+        sets.append("balance_amount=?")
+        params.append(float(balance))
+    if currency:
+        sets.append("billing_currency=?")
+        params.append(str(currency))
+    if cycle:
+        sets.append("billing_cycle=?")
+        params.append(str(cycle))
+    sets.append("billing_error=?")
+    params.append(str(error or ""))
+    if touch:
+        sets.append("billing_updated_at=?")
+        params.append(int(time.time()))
+    params.append(server_id)
+    db.execute(f"UPDATE servers SET {', '.join(sets)} WHERE id=?", params)
 
 
 def update_server_runtime(

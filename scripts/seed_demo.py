@@ -194,6 +194,12 @@ for round_index in (1, 2):
     code, body = call("POST", "/api/v1/reconcile")
     print(f"对账第 {round_index} 轮 -> {code}")
 
+# -- 7. 抓一次费用：dry-run 下由桩返回固定数字，截图里卡片才有「本月 / 余额」
+_, servers = call("GET", "/api/v1/servers")
+for server in servers.get("items", []):
+    code, body = call("POST", f"/api/v1/servers/{server['id']}/billing")
+    print(f"费用刷新 {server.get('label')} -> {code} {body.get('monthly_cost')}")
+
 _, overview = call("GET", "/api/v1/overview")
 print(
     "总览 -> 服务器 %s 台 / 保活 %s 条 / 换班组 %s 个 / 事件 %s 条"

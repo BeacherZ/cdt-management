@@ -5,10 +5,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import socket
 import threading
+import time
+from typing import Any
 
 from . import settings
 
@@ -72,8 +75,158 @@ def ecs_domain(region: str) -> str:
 
 
 def bss_endpoint(site: str) -> tuple[str, str]:
-    """返回 (region, domain)。目前没接费用接口，留给后续账单/余额功能直接用。"""
+    """返回 (region, domain)：余额与账单接口按站点走不同域名。"""
     return BSS_ENDPOINTS.get(site, BSS_ENDPOINTS["china"])
+
+
+# --------------------------------------------------------------------------
+# 费用 / 余额（BSS OpenAPI 2017-12-14）
+#
+# 两个接口都是「按账号」维度的慢数据，做两层缓存：
+#   aliyun 层：进程内 TTL（余额 6 小时），避免多个入口重复打接口
+#   billing 层：落 SQLite，容器重启后不用立刻再查一遍
+#
+# 需要的 RAM 权限：AliyunBSSReadOnlyAccess（或 bss:QueryAccountBalance /
+# bss:DescribeInstanceBill）。缺权限时会抛 AliyunError，由上层降级显示。
+# --------------------------------------------------------------------------
+
+BSS_VERSION = "2017-12-14"
+BALANCE_TTL = 6 * 3600
+
+# key: sha256(ak:site) 前 20 位 —— 不把明文 AccessKey 留在内存字典的键里
+_balance_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_balance_lock = threading.Lock()
+
+
+def _cache_key(account: dict) -> str:
+    raw = f"{account.get('access_key_id') or ''}:{account.get('site') or 'china'}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
+
+
+def _bss_request(account: dict, action: str, params: dict[str, str] | None = None) -> dict[str, Any]:
+    """BSS 接口统一入口：按站点选 region/domain，返回解析后的 JSON。"""
+    region, domain = bss_endpoint(str(account.get("site") or "china"))
+    client = _client(account, region)
+    request = CommonRequest()
+    request.set_domain(domain)
+    request.set_version(BSS_VERSION)
+    request.set_action_name(action)
+    request.set_method("POST")
+    for key, value in (params or {}).items():
+        request.add_query_param(key, value)
+    raw = client.do_action_with_exception(request)
+    return json.loads(raw.decode("utf-8"))
+
+
+# 站点选错时阿里云的回法：AuthSiteFail / NotApplicable + "site matches"
+_SITE_ERROR_HINTS = ("AuthSiteFail", "NotApplicable", "site matches", "AuthPrincipal")
+
+
+def _looks_like_site_error(exc: Exception) -> bool:
+    text = str(exc)
+    return any(hint in text for hint in _SITE_ERROR_HINTS)
+
+
+def _bss_with_site_fallback(
+    account: dict, action: str, params: dict[str, str] | None = None
+) -> tuple[dict[str, Any], str]:
+    """调 BSS；站点选错时换另一个站点重试一次。
+
+    阿里云的 RAM 子账号是绑站点的：中国站账号打 business.aliyuncs.com 之外的域名
+    会直接 AuthSiteFail。与其让用户对着错误码猜，不如自己试一遍 —— 成功就用哪个。
+    返回 (数据, 实际生效的站点)。
+    """
+    site = str(account.get("site") or "china")
+    try:
+        return _bss_request(account, action, params), site
+    except Exception as exc:  # noqa: BLE001
+        if not _looks_like_site_error(exc):
+            raise
+        other = "international" if site == "china" else "china"
+        try:
+            data = _bss_request({**account, "site": other}, action, params)
+        except Exception:  # noqa: BLE001
+            # 换站也失败：原始错误更能说明问题（通常是没权限）
+            raise exc from None
+        log.info("BSS 站点自动纠正：%s -> %s（action=%s）", site, other, action)
+        return data, other
+
+
+def get_account_balance(account: dict, force: bool = False) -> dict[str, Any]:
+    """账户可用额度。返回 {"amount": float, "currency": "CNY", "site": str}。
+
+    同一 AK + 站点 6 小时内复用缓存：余额变动慢，没必要每次对账都问一遍。
+    """
+    if settings.DRY_RUN:
+        state = _mock(account)
+        return {
+            "amount": float(state["balance"]),
+            "currency": state["currency"],
+            "site": str(account.get("site") or "china"),
+        }
+
+    key = _cache_key(account)
+    now = time.time()
+    with _balance_lock:
+        cached = _balance_cache.get(key)
+        if cached and not force and now - cached[0] < BALANCE_TTL:
+            return dict(cached[1])
+
+    try:
+        data, site = _bss_with_site_fallback(account, "QueryAccountBalance")
+    except Exception as exc:  # noqa: BLE001
+        raise AliyunError(f"账户余额查询失败: {exc}") from exc
+
+    payload = data.get("Data") or {}
+    try:
+        amount = float(payload.get("AvailableAmount") or 0)
+    except (TypeError, ValueError):
+        amount = 0.0
+    currency = str(payload.get("Currency") or "").strip() or "CNY"
+    value = {"amount": amount, "currency": currency, "site": site}
+
+    with _balance_lock:
+        _balance_cache[key] = (now, value)
+    return dict(value)
+
+
+def get_instance_bill(account: dict, cycle: str) -> dict[str, Any]:
+    """某台实例在指定账期（YYYY-MM）的税前消费合计。
+
+    DescribeInstanceBill 是一行一行明细（实例、云盘、带宽分开），所以这里做累加。
+    返回 {"total": float, "site": str}，site 是实际生效的站点（可能被自动纠正过）。
+    """
+    if settings.DRY_RUN:
+        return {
+            "total": round(float(_mock(account)["cost"]), 2),
+            "site": str(account.get("site") or "china"),
+        }
+
+    params = {
+        "BillingCycle": cycle,
+        "InstanceID": str(account.get("instance_id") or ""),
+        "Granularity": "MONTHLY",
+        "MaxResults": "300",
+    }
+    try:
+        data, site = _bss_with_site_fallback(account, "DescribeInstanceBill", params)
+    except Exception as exc:  # noqa: BLE001
+        raise AliyunError(f"实例账单查询失败: {exc}") from exc
+
+    items = (data.get("Data") or {}).get("Items") or []
+    # 有的返回把数组包一层 {"Item": [...]}
+    if isinstance(items, dict):
+        items = items.get("Item") or []
+
+    total = 0.0
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        try:
+            total += float(item.get("PretaxAmount") or 0)
+        except (TypeError, ValueError):
+            continue
+    return {"total": round(total, 2), "site": site}
 
 
 def _client(account: dict, region: str | None = None) -> "AcsClient":
@@ -126,12 +279,18 @@ def _mock(account: dict) -> dict[str, str]:
         state = _MOCK.get(key)
         if state is None:
             index = len(_MOCK) + 10
+            # 用实例 ID 散列出一个稳定的偏移，演示数据里每台费用不同但不会每轮跳变
+            seed = sum(ord(char) for char in key)
+            quota = float(account.get("quota_gb") or 200)
             state = {
                 "status": "Stopped",
                 "stopped_mode": "StopCharging",
                 # 203.0.113.0/24 是文档保留网段，不会指向任何真实主机
                 "public_ip": f"203.0.113.{index}",
-                "traffic": f"{float(account.get('quota_gb') or 200) * 0.42:.2f}",
+                "traffic": f"{quota * 0.42:.2f}",
+                "cost": f"{quota * 0.072 + 9 + (seed % 420) / 100:.2f}",
+                "balance": f"{800 + seed % 1600}.{(seed * 7) % 100:02d}",
+                "currency": "CNY",
             }
             _MOCK[key] = state
         return state

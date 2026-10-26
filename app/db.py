@@ -39,6 +39,15 @@ CREATE TABLE IF NOT EXISTS servers (
     public_ip           TEXT    NOT NULL DEFAULT '',
     traffic_checked_at  INTEGER NOT NULL DEFAULT 0,
     status_checked_at   INTEGER NOT NULL DEFAULT 0,
+    -- 费用快照（BSS 2017-12-14）：本月账单 / 账户余额。
+    -- 都是慢数据，抓一次存下来，界面直接读库，不在请求路径上打阿里云。
+    monthly_cost        REAL,
+    balance_amount      REAL,
+    billing_currency    TEXT    NOT NULL DEFAULT '',
+    -- 账单所属账期（YYYY-MM）：跨月后旧数字要能识别出来，不能当本月费用显示
+    billing_cycle       TEXT    NOT NULL DEFAULT '',
+    billing_updated_at  INTEGER NOT NULL DEFAULT 0,
+    billing_error       TEXT    NOT NULL DEFAULT '',
     created_at          INTEGER NOT NULL DEFAULT 0
 );
 
@@ -124,6 +133,8 @@ DEFAULTS: dict[str, str] = {
     "timezone": "Asia/Shanghai",
     "traffic_threshold_pct": "94",
     "reconcile_interval": str(settings.RECONCILE_INTERVAL),
+    # 费用/余额查询：需要 RAM 具备 BSS 只读权限，缺权限时关掉即可不显示
+    "billing_enabled": "1",
     "daily_report_enabled": "1",
     "daily_report_time": "23:58",
     "notify_on_shift": "1",
@@ -190,7 +201,15 @@ def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
 def _migrate(conn: sqlite3.Connection) -> None:
     """补齐老库缺的列。CREATE TABLE IF NOT EXISTS 不会给已存在的表加字段。"""
     additions = {
-        "servers": {"site": "TEXT NOT NULL DEFAULT 'china'"},
+        "servers": {
+            "site": "TEXT NOT NULL DEFAULT 'china'",
+            "monthly_cost": "REAL",
+            "balance_amount": "REAL",
+            "billing_currency": "TEXT NOT NULL DEFAULT ''",
+            "billing_cycle": "TEXT NOT NULL DEFAULT ''",
+            "billing_updated_at": "INTEGER NOT NULL DEFAULT 0",
+            "billing_error": "TEXT NOT NULL DEFAULT ''",
+        },
     }
     for table, columns in additions.items():
         existing = _columns(conn, table)

@@ -439,6 +439,52 @@ check(
     str([s.get("managed") for s in grouped[:2]]),
 )
 
+print("\n== 17. 费用与余额（BSS）==")
+
+# 列表里必须带 billing 结构，前端卡片靠它渲染
+items = {s["label"]: s for s in call("GET", "/api/v1/servers")[1]["items"]}
+check("服务器带 billing 字段", all("billing" in s for s in items.values()), str(list(items)[:2]))
+
+status, body = call("POST", f"/api/v1/servers/{idle['id']}/billing")
+check("手动刷新费用  HTTP 200", status == 200, f"HTTP {status}")
+check("拿到本月费用", isinstance(body.get("monthly_cost"), (int, float)), str(body.get("monthly_cost")))
+check("拿到账户余额", isinstance(body.get("balance"), (int, float)), str(body.get("balance")))
+check("账期为当前月", len(str(body.get("cycle"))) == 7, str(body.get("cycle")))
+
+items = {s["label"]: s for s in call("GET", "/api/v1/servers")[1]["items"]}
+billing = items["国际站-测试"]["billing"]
+check("费用已落库并回显", billing.get("monthly_cost") is not None, str(billing))
+check("currency 有默认值", billing.get("currency") in ("CNY", "USD"), str(billing.get("currency")))
+check("当前账期不算过期", billing.get("stale") is False, str(billing.get("stale")))
+check("正常时不带错误", not billing.get("error"), str(billing.get("error")))
+
+# 换实例后旧账单必须清空，否则会拿别的机器的钱冒充这台
+before = items["国际站-测试"]["billing"]["monthly_cost"]
+call(
+    "POST",
+    "/api/v1/servers",
+    {
+        "id": idle["id"],
+        "label": "国际站-测试",
+        # 不传 AccessKey：接口只回显打码值，留空即沿用原配置
+        "region_id": idle["region_id"],
+        "site": "international",
+        "instance_id": "i-switched-0001",
+        "quota_gb": 100,
+        "threshold_gb": 94,
+    },
+)
+items = {s["label"]: s for s in call("GET", "/api/v1/servers")[1]["items"]}
+check("换实例后费用被清空", items["国际站-测试"]["billing"]["monthly_cost"] is None, f"之前 {before}")
+
+# 关掉开关后不应再去查，也不该报错
+call("POST", "/api/v1/settings", {"billing_enabled": False})
+status, _ = call("POST", f"/api/v1/servers/{idle['id']}/billing")
+check("关闭费用查询后拒绝刷新", status == 400, f"HTTP {status}")
+call("POST", "/api/v1/settings", {"billing_enabled": True})
+settings_body = call("GET", "/api/v1/settings")[1]
+check("开关能读回", settings_body.get("billing_enabled") is True, str(settings_body.get("billing_enabled")))
+
 print("\n" + "=" * 46)
 if failures:
     print(f"❌ {len(failures)} 项未通过：")

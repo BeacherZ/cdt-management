@@ -133,6 +133,9 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 
 ![概览](docs/screenshots/02-dashboard.png)
 
+概览最上面四张卡：**服务器 / 单机保活 / 联合换班 / 累计流量**。前三张可以直接点进去，
+不用再从侧栏绕一圈。
+
 **联合换班**：按顺序一台一台当班，时间轴按各自时长按比例画出来，谁在线上、下次几点换、待机几台，一屏看完。
 
 ![联合换班](docs/screenshots/04-shift.png)
@@ -145,7 +148,8 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 
 ![编辑换班组](docs/screenshots/10-group-dialog.png)
 
-**服务器**：一台实例一张卡，AccessKey Secret 只回显打码值；卡片上标明中国站 / 国际站；已编进换班组的机器不再提供"加入单机保活"入口，避免两套流程互相拉扯。
+**服务器**：一台实例一张卡，AccessKey Secret 只回显打码值；卡片上标明中国站 / 国际站；
+卡片中间一行是**本月费用与账户余额**（来源见下文「费用与余额」）；已编进换班组的机器不再提供"加入单机保活"入口，避免两套流程互相拉扯。
 
 每张卡片底部都有一行「归属」标记，一眼看出这台机器现在归谁管：
 
@@ -224,7 +228,34 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 | 费用接口 | 两站的 BSS（余额 / 账单）地址不同：中国站 `business.aliyuncs.com`，国际站 `business.ap-southeast-1.aliyuncs.com` |
 
 **保活和流量统计不受影响**：ECS 用 `ecs.{地域}.aliyuncs.com`、CDT 用 `cdt.aliyuncs.com`，
-两个站完全一致。站点先存进库，是为了将来接账单类接口时不用再迁数据。
+两个站完全一致。站点只影响费用接口与地域候选。
+
+选错了也不至于卡住：费用接口返回 `AuthSiteFail` 时会自动换另一个站点再试一次，成功后把站点
+纠正过来并记一条事件——阿里云的 RAM 子账号是绑站点的，与其让人对着错误码猜，不如自己试出来。
+
+### 费用与余额
+
+服务器卡片上的「本月 ¥xx / 余额 ¥xx」来自 BSS OpenAPI，只在**读**这一步：
+
+| 显示 | 接口 | 说明 |
+| --- | --- | --- |
+| 本月 | `DescribeInstanceBill`（`BillingCycle=当月`，`Granularity=MONTHLY`） | 把该实例所有明细行的 `PretaxAmount` 累加 |
+| 余额 | `QueryAccountBalance` | `AvailableAmount` + `Currency` |
+
+几个实现上的取舍：
+
+- **慢数据不进请求路径**：后台每 30 分钟刷一次并落 SQLite，打开页面只读库，不会卡在阿里云那。
+- **余额另有一层 6 小时缓存**：同一个 AK 的余额短时间不会变，多台机器共用账号时只查一次。
+- **跨月会标「上月」**：账单记着所属账期，跨月后旧数字不会被当成本月费用。
+- **查不到不等于 0 元**：没拿到数字显示 `—`，和真正的 0.00 区分开。
+- **卡片右下角可手动重查**：手动刷新走 `POST /api/v1/servers/{id}/billing`，失败原因直接弹出来。
+
+需要 RAM 具备 `AliyunBSSReadOnlyAccess`（或 `bss:QueryAccountBalance` + `bss:DescribeInstanceBill`）。
+没给权限时卡片显示 `—` 加一个黄色感叹号，鼠标悬停能看到具体错误；不想看就在**设置 → 费用与余额**关掉，
+关掉后不会再发任何 BSS 请求。
+
+一处容易踩的坑：阿里云的 `PretaxAmount` 是**税前**金额，优惠券、代金券不在里面，所以这个数字
+可能高于你账单页实际付的钱。要看实付请以阿里云费用中心为准。
 
 ### 流量保护
 
@@ -302,7 +333,7 @@ Telegram 走 HTML 富文本，邮件走 HTML，Webhook 支持 `{title}` `{text}`
 - 面板密码 PBKDF2-SHA256 加盐存储；会话是 HMAC 签名票据，重启不掉线
 - 登录失败按 IP 限速（5 分钟 8 次）
 - 所有写操作校验 CSRF 双提交 Cookie
-- RAM 子账号只给 `AliyunECSFullAccess`（或等价启停策略）+ `AliyunCDTReadOnlyAccess`
+- RAM 子账号只给 `AliyunECSFullAccess`（或等价启停策略）+ `AliyunCDTReadOnlyAccess`；想看费用再加 `AliyunBSSReadOnlyAccess`（纯读，看不到也改不了支付方式）
 - 挂公网务必套 HTTPS 反向代理
 
 ## 常见问题
@@ -338,7 +369,7 @@ CDT_DRY_RUN=1 ./venv/bin/python -m app.main # 不调真实阿里云
 配套两个脚本（都只对本地 dry-run 实例、只用假数据）：
 
 ```bash
-python scripts/smoke_test.py http://127.0.0.1:8099   # 16 组端到端断言
+python scripts/smoke_test.py http://127.0.0.1:8099   # 17 组端到端断言
 python scripts/seed_demo.py  http://127.0.0.1:8099   # 灌 6 台假服务器 + 换班组
 node   scripts/screenshot.cjs http://127.0.0.1:8099  # 重新生成 docs/screenshots
 ```

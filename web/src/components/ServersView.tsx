@@ -1,4 +1,5 @@
 import {
+  AlertTriangle,
   HeartPulse,
   LoaderCircle,
   Pencil,
@@ -10,29 +11,33 @@ import {
   Server as ServerIcon,
   Trash2,
 } from 'lucide-react'
-import type { Server } from '../types'
+import type { Billing, Server } from '../types'
 import { Badge, Empty, Meter, statusLabel, statusTone } from './ui'
 
 type Props = {
   servers: Server[]
   busyId: number | null
+  billingId: number | null
   onAdd: () => void
   onEdit: (server: Server) => void
   onDelete: (server: Server) => void
   onRefresh: (server: Server) => void
   onAction: (server: Server, action: 'start' | 'stop') => void
   onAddToKeepalive: (server: Server) => void
+  onBilling: (server: Server) => void
 }
 
 export default function ServersView({
   servers,
   busyId,
+  billingId,
   onAdd,
   onEdit,
   onDelete,
   onRefresh,
   onAction,
   onAddToKeepalive,
+  onBilling,
 }: Props) {
   const idleCount = servers.filter((server) => !server.managed).length
 
@@ -135,6 +140,12 @@ export default function ServersView({
                   threshold={server.threshold_gb}
                 />
 
+                <CostRow
+                  billing={server.billing}
+                  busy={billingId === server.id}
+                  onRefresh={() => onBilling(server)}
+                />
+
                 {server.stopped_mode === 'StopCharging' && server.instance_status === 'Stopped' && (
                   <div style={{ fontSize: 11, color: 'var(--muted)' }}>已按节省停机模式停机</div>
                 )}
@@ -184,5 +195,75 @@ export default function ServersView({
         </div>
       )}
     </>
+  )
+}
+
+const CURRENCY_SIGN: Record<string, string> = {
+  CNY: '¥',
+  USD: '$',
+  HKD: 'HK$',
+  JPY: 'JP¥',
+  EUR: '€',
+  GBP: '£',
+}
+
+function money(value: number | null, currency: string): string {
+  if (value === null || Number.isNaN(value)) return '—'
+  const sign = CURRENCY_SIGN[currency] ?? `${currency} `
+  return `${sign}${value.toFixed(2)}`
+}
+
+/** 本月账单 + 账户余额。数据来自 BSS，后台每 30 分钟刷一次，这里只负责展示。 */
+function CostRow({
+  billing,
+  busy,
+  onRefresh,
+}: {
+  billing: Billing
+  busy: boolean
+  onRefresh: () => void
+}) {
+  const failed = Boolean(billing.error)
+  const hint = failed
+    ? `费用查询失败：${billing.error}`
+    : billing.updated_at
+      ? `更新于 ${new Date(billing.updated_at * 1000).toLocaleTimeString('zh-CN', {
+          hour: '2-digit',
+          minute: '2-digit',
+        })}`
+      : '还没有查询过'
+
+  return (
+    <div className="cost-row">
+      <span className="cost-item" title={hint}>
+        <span className="cost-key">本月</span>
+        <b className={billing.monthly_cost === null ? 'dim' : ''}>
+          {money(billing.monthly_cost, billing.currency)}
+        </b>
+        {billing.stale && <i className="cost-stale">上月</i>}
+      </span>
+      <span className="cost-item" title={hint}>
+        <span className="cost-key">余额</span>
+        <b className={billing.balance === null ? 'dim' : ''}>
+          {money(billing.balance, billing.currency)}
+        </b>
+      </span>
+      {failed && (
+        <AlertTriangle
+          size={11}
+          style={{ color: 'var(--amber, #b45309)', flexShrink: 0 }}
+          aria-label="费用查询失败"
+        />
+      )}
+      <button
+        type="button"
+        className="btn ghost icon sm cost-refresh"
+        title="重新查询费用"
+        disabled={busy}
+        onClick={onRefresh}
+      >
+        {busy ? <LoaderCircle size={12} className="spin" /> : <RefreshCw size={11} />}
+      </button>
+    </div>
   )
 }

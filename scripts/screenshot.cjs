@@ -216,6 +216,33 @@ class Cdp {
     await sleep(1200)
     await cdp.shot('02-dashboard.png')
 
+    // 2.1 概览页前三个指标卡要能点进对应页面（顺序：服务器 / 单机保活 / 联合换班）
+    const navByStat = await cdp.evaluate(`(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+      const heading = () => (document.querySelector('.main-area h1') || {}).textContent || ''
+      const stats = () => Array.from(document.querySelectorAll('.stat-grid .stat-link'))
+      const result = []
+      for (const index of [0, 1, 2]) {
+        const button = stats()[index]
+        if (!button) return 'missing-stat-' + index
+        button.click()
+        await sleep(450)
+        result.push(heading().trim())
+        // 回到概览用的选择器写成按文字找，避免依赖 nav-item 的排列顺序
+        const home = Array.from(document.querySelectorAll('.sidebar .nav-parent, .sidebar .nav-item'))
+          .find((node) => (node.textContent || '').includes('概览'))
+        if (!home) return 'missing-home'
+        home.click()
+        await sleep(350)
+      }
+      return result.join('|')
+    })()`)
+    if (navByStat !== '服务器|单机保活|联合换班') {
+      throw new Error('概览指标卡跳转不对：' + navByStat)
+    }
+    console.log('  ✓ 概览三张指标卡可跳转（服务器/单机保活/联合换班）')
+    await sleep(400)
+
     // 3. 左侧两个保活流程 + 服务器
     await cdp.clickByText('.sidebar .nav-item', '单机保活')
     await cdp.shot('03-keepalive.png')
