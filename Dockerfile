@@ -26,12 +26,15 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 COPY --from=frontend /src/app/static ./app/static
+COPY docker-entrypoint.py ./docker-entrypoint.py
 
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin cdt \
     && mkdir -p /data \
     && chown -R cdt:cdt /data /app
 
-USER cdt
+# 故意不写 USER：入口脚本要先以 root 修好 bind mount 目录的属主（宿主机目录通常属于 root），
+# 修完立刻 setuid 降权到 10001 再拉起应用。业务进程始终不以 root 运行。
+# 想彻底不给容器 root 也可以：docker run --user 10001:10001，脚本会跳过降权那一步。
 VOLUME ["/data"]
 EXPOSE 8080
 
@@ -46,4 +49,6 @@ LABEL org.opencontainers.image.title="CDT-Management" \
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD ["python", "-c", "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/api/health',timeout=4).status==200 else 1)"]
 
-ENTRYPOINT ["python", "-m", "app.main"]
+STOPSIGNAL SIGTERM
+
+ENTRYPOINT ["python", "/app/docker-entrypoint.py"]

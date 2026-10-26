@@ -59,9 +59,17 @@ services:
 
 ```bash
 mkdir -p /opt/docker/cdt-management
-sudo chown -R 10001:10001 /opt/docker/cdt-management   # 容器内 uid 10001，必须可写
 docker compose up -d
 docker compose logs -f cdt-management
+```
+
+不需要提前 `chown`：容器启动时会自己把 `/data` 的属主调整到运行用户，再降权拉起应用。
+如果宿主机目录属于别的用户（NAS、家目录部署），填 `PUID`/`PGID` 让容器按那个身份跑即可：
+
+```yaml
+    environment:
+      PUID: 1000
+      PGID: 1000
 ```
 
 **升级**（两行一起粘，任意目录都能跑）：
@@ -75,8 +83,6 @@ cd "$D" && docker compose pull && docker compose up -d
 
 ```bash
 mkdir -p /opt/docker/cdt-management
-# 容器内以 uid 10001 运行，先把数据目录交给它，否则写不了数据库
-sudo chown -R 10001:10001 /opt/docker/cdt-management
 
 docker run -d --name cdt-management --restart unless-stopped --init \
   -p 8282:8080 \
@@ -85,6 +91,9 @@ docker run -d --name cdt-management --restart unless-stopped --init \
   -v /opt/docker/cdt-management:/data \
   ghcr.io/beacherz/cdt-management:latest
 ```
+
+不需要提前 `chown`，容器会自己把挂载目录交给运行用户。宿主机目录属于非 root 用户时，
+加 `-e PUID=$(id -u) -e PGID=$(id -g)` 让容器按你的身份运行，宿主机权限一个字都不用动。
 
 **升级**：
 
@@ -230,6 +239,22 @@ Telegram 走 HTML 富文本，邮件走 HTML，Webhook 支持 `{title}` `{text}`
 | `CDT_EVENT_RETAIN_DAYS` | `14` | 事件保留天数 |
 | `CDT_HTTP_TIMEOUT` | `12` | 单次 HTTP / 阿里云调用超时 |
 | `CDT_DRY_RUN` | `0` | `1` 时不调真实阿里云接口，用于本地 UI 调试 |
+| `PUID` / `PGID` | `10001` / `10001` | 应用进程以哪个 uid/gid 运行；NAS、家目录部署时填宿主机用户 |
+
+## 权限模型
+
+容器入口不是直接跑应用，而是先做三件事：修 `/data` 属主 → 降权 → `exec` 应用。
+
+这么绕是因为 bind mount 的宿主机目录通常属于 root，而应用不该以 root 跑。所以镜像里
+没有写 `USER`，进程先以 root 进来把挂载目录交给运行用户（默认 `10001:10001`），
+**立刻 `setuid` 降下来**，之后业务代码碰不到 root 权限。副作用是一个都不需要的：
+
+| 场景 | 行为 |
+| --- | --- |
+| 普通部署（宿主机目录 root 拥有） | 自动改属主，第一次启动会把整棵树调整一遍，之后只扫第一层 |
+| NAS / 宿主机目录属于你的用户 | 加 `PUID`/`PGID`，按你的身份跑，宿主机权限不用动 |
+| `docker run --user 10001:10001` | 已经是目标用户，跳过改属主和降权 |
+| 只读挂载 / NFS `root_squash` | 改不动属主，启动前探测到不可写就打印三种解法并退出，不会反复重启刷 traceback |
 
 ## 安全
 
@@ -253,6 +278,10 @@ Telegram 走 HTML 富文本，邮件走 HTML，Webhook 支持 `{title}` `{text}`
 **能不能不下线，只保活？** 用「单机保活」模块，不要放进换班组。
 
 **忘了面板密码？** 删掉数据目录里的 `cdt-management.db` 会重置所有配置（`master.key` 留着无影响）。
+
+**启动就报 `PermissionError: '/data/logs'`？** 宿主机挂载目录属于 root，容器用户写不进去。
+镜像自己会处理这一步（见「权限模型」），如果还报，说明挂载方式不给改属主（只读挂载、NFS `root_squash`）。
+三种解法：`sudo chown -R 10001:10001 /你的目录`、加 `-e PUID=$(id -u) -e PGID=$(id -g)`、或换成具名卷 `-v cdt-data:/data`。
 
 ## 本地开发
 

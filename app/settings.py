@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 APP_NAME = "cdt-management"
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 
 DATA_DIR = Path(os.environ.get("CDT_DATA_DIR", "./data")).resolve()
 DB_PATH = DATA_DIR / "cdt-management.db"
@@ -49,9 +49,15 @@ def ensure_dirs() -> None:
     try:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         LOG_DIR.mkdir(parents=True, exist_ok=True)
-    except PermissionError as exc:
+    except OSError as exc:
+        # 正常路径下 docker-entrypoint.py 已经把属主修好了，走到这里基本是
+        # 只读挂载、NFS root_squash，或者有人绕过了入口脚本直接跑 app.main。
+        uid = os.getuid() if hasattr(os, "getuid") else "?"
         raise RuntimeError(
-            f"数据目录 {DATA_DIR} 不可写。容器内以 uid 10001 运行，宿主机上的挂载目录必须让它可写：\n"
-            f"  sudo chown -R 10001:10001 {DATA_DIR}\n"
-            "（用一键脚本安装会自动处理这一步）"
+            f"数据目录 {DATA_DIR} 不可写（当前 uid {uid}，{type(exc).__name__}: {exc}）。\n"
+            "容器里的应用以非 root 运行，挂载进来的宿主机目录必须让它可写。三种解法挑一个：\n"
+            f"  1) sudo chown -R 10001:10001 {DATA_DIR}\n"
+            "  2) docker run -e PUID=$(id -u) -e PGID=$(id -g) ...（按宿主机用户身份跑，不动权限）\n"
+            "  3) 换成 docker 具名卷：-v cdt-data:/data（属主随镜像初始化）\n"
+            "用一键脚本（install.sh）安装会自动处理第 1 步。"
         ) from exc

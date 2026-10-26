@@ -9,8 +9,13 @@ services:
     environment:
       TZ: Asia/Shanghai
       CDT_DATA_DIR: /data
+      # 容器会自己把 /data 的属主调成 10001:10001，一般不用管。
+      # 如果宿主机目录属于别的用户（NAS、家目录部署），填上这两行即可，
+      # 容器就按该身份运行，不需要 sudo chown：
+      # PUID: 1000
+      # PGID: 1000
     volumes:
-      - /opt/docker/cdt-management:/data
+      - ./data:/data
     healthcheck:
       test:
         - CMD

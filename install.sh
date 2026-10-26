@@ -223,9 +223,10 @@ fi
 
 say "数据目录：$DIR"
 mkdir -p "$DIR"
-# 容器里是非 root（uid 10001），宿主目录必须先交给它，否则写不了数据库
+# 容器入口会自己把 /data 交给运行用户，这里先做一遍只是双保险：
+# 万一镜像被换成了旧版本、或者宿主机是 NFS 这种容器内改不动属主的挂载，能提前兜住。
 chown -R 10001:10001 "$DIR" 2>/dev/null ||
-    warn "改不了 $DIR 的属主；若启动后报权限错误，手动执行：sudo chown -R 10001:10001 $DIR"
+    warn "改不了 $DIR 的属主，交给容器自己处理；若仍报权限错误，手动执行：sudo chown -R 10001:10001 $DIR"
 
 say "启动容器"
 if ! docker run -d --name "$NAME" --restart unless-stopped \
