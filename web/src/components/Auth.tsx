@@ -133,7 +133,7 @@ export default function Auth({ mode, brand, onDone }: Props) {
         <div className="auth-foot">
           {isSetup
             ? '初始化完成后可用环境变量 CDT_ADMIN_USERNAME / CDT_ADMIN_PASSWORD 跳过这一步'
-            : '忘记密码：删除数据目录下的 cdt-shift.db 会重置所有配置'}
+            : '忘记密码：删除数据目录下的 cdt-management.db 会重置所有配置'}
         </div>
       </form>
     </div>

@@ -58,6 +58,8 @@ services:
 ```
 
 ```bash
+mkdir -p /opt/docker/cdt-management
+sudo chown -R 10001:10001 /opt/docker/cdt-management   # 容器内 uid 10001，必须可写
 docker compose up -d
 docker compose logs -f cdt-management
 ```
@@ -72,6 +74,10 @@ cd "$D" && docker compose pull && docker compose up -d
 ### 方式三：docker run
 
 ```bash
+mkdir -p /opt/docker/cdt-management
+# 容器内以 uid 10001 运行，先把数据目录交给它，否则写不了数据库
+sudo chown -R 10001:10001 /opt/docker/cdt-management
+
 docker run -d --name cdt-management --restart unless-stopped --init \
   -p 8282:8080 \
   -e TZ=Asia/Shanghai \
@@ -104,7 +110,7 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 
 ## 界面
 
-登录后左边是两条独立的保活流程——**单机保活**、**联合换班**——右边是总览与服务器清单。
+登录后左侧分成两组：**总览**（概览、服务器）和 **保活**（单机保活、联合换班）。
 
 ![总览](docs/screenshots/02-dashboard.png)
 
@@ -184,6 +190,9 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 
 关掉「允许流量故障转移」后，当班超限就直接走「超限停机」。
 
+一处细节：**故障转移在一个班次内只发生一次**。切到替补后，本班次剩下的时间都固定在替补上，
+不会每分钟重新判一次、也不会重复记事件或重复推送。
+
 ### DDNS
 
 - 只支持 Cloudflare A 记录，Token 与 Global API Key 两种认证
@@ -239,7 +248,7 @@ Telegram 走 HTML 富文本，邮件走 HTML，Webhook 支持 `{title}` `{text}`
 
 **DDNS 显示「IP 无效跳过」？** 实例还没拿到公网 IP，或者不是公网 IPv4。等下一轮对账，或手动刷新那台服务器。
 
-**两台都超限了怎么办？** 会全局熔断，两台都节省停机，等下个月流量重置后手动开机，或调整阈值。
+**所有成员都超限了怎么办？** 会全局熔断，全部节省停机，等下个月流量重置后手动开机，或调整阈值。
 
 **能不能不下线，只保活？** 用「单机保活」模块，不要放进换班组。
 

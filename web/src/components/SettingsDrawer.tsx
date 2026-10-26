@@ -63,6 +63,7 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
         notify_on_failover: form.notify_on_failover,
         notify_on_recovery: form.notify_on_recovery,
         notify_on_breaker: form.notify_on_breaker,
+        notify_on_limit_stop: form.notify_on_limit_stop,
         notify_on_error: form.notify_on_error,
         notify_on_keepalive: form.notify_on_keepalive,
         ddns: {
@@ -195,7 +196,7 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
               </div>
 
               <div className="field">
-                <label htmlFor="pct">新建账号默认阈值（% 配额）</label>
+                <label htmlFor="pct">新建服务器默认阈值（% 配额）</label>
                 <input
                   id="pct"
                   className="input"
@@ -208,14 +209,14 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
                   }
                 />
                 <div className="hint">
-                  每个账号的绝对阈值在「账号」里单独配置；这里只是新增账号时的预填值。
+                  每台服务器的绝对阈值在「服务器」里单独配置；这里只是新增时的预填值。
                 </div>
               </div>
 
               <div>
                 <Switch
                   label="每日流量报告"
-                  hint="到点把两台机器的流量与状态推送一次"
+                  hint="到点把所有服务器的流量与状态推送一次"
                   checked={form.daily_report_enabled}
                   onChange={(value) => patch((draft) => (draft.daily_report_enabled = value))}
                 />
@@ -255,7 +256,14 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
                   onChange={(value) => patch((draft) => (draft.notify_on_recovery = value))}
                 />
                 <Switch
-                  label="超限停机 / 全局熔断"
+                  label="超限停机"
+                  hint="当班流量达到阈值且无处可换时，强制节省停机"
+                  checked={form.notify_on_limit_stop}
+                  onChange={(value) => patch((draft) => (draft.notify_on_limit_stop = value))}
+                />
+                <Switch
+                  label="全局熔断"
+                  hint="所有成员都超限时，全部节省停机"
                   checked={form.notify_on_breaker}
                   onChange={(value) => patch((draft) => (draft.notify_on_breaker = value))}
                 />

@@ -5,6 +5,7 @@ import { Badge, Empty, Meter, statusLabel, statusTone } from './ui'
 type Props = {
   keepalives: Keepalive[]
   servers: Server[]
+  groupedIds: Set<number>
   busyId: number | null
   onAdd: () => void
   onToggle: (item: Keepalive, enabled: boolean) => void
@@ -16,6 +17,7 @@ type Props = {
 export default function KeepaliveView({
   keepalives,
   servers,
+  groupedIds,
   busyId,
   onAdd,
   onToggle,
@@ -107,10 +109,19 @@ export default function KeepaliveView({
 
                 <div className="toggle-row" style={{ paddingTop: 4, paddingBottom: 0, borderBottom: 0 }}>
                   <div className="toggle-text">
-                    <strong style={{ fontSize: 12 }}>
-                      {item.enabled ? '保活运行中' : '已暂停'}
-                    </strong>
-                    <span>暂停后不再自动拉起，实例状态保持不变</span>
+                    {groupedIds.has(item.server_id) ? (
+                      <>
+                        <strong style={{ fontSize: 12, color: 'var(--amber)' }}>已让位给换班组</strong>
+                        <span>这台机器在换班组里，启停由班次决定，保活不会插手</span>
+                      </>
+                    ) : (
+                      <>
+                        <strong style={{ fontSize: 12 }}>
+                          {item.enabled ? '保活运行中' : '已暂停'}
+                        </strong>
+                        <span>暂停后不再自动拉起，实例状态保持不变</span>
+                      </>
+                    )}
                   </div>
                   <button
                     type="button"
@@ -118,6 +129,7 @@ export default function KeepaliveView({
                     aria-checked={item.enabled}
                     aria-label="保活开关"
                     className={`switch${item.enabled ? ' on' : ''}`}
+                    disabled={groupedIds.has(item.server_id)}
                     onClick={() => onToggle(item, !item.enabled)}
                   />
                 </div>

@@ -110,6 +110,7 @@ export type Settings = {
   notify_on_failover: boolean
   notify_on_recovery: boolean
   notify_on_breaker: boolean
+  notify_on_limit_stop: boolean
   notify_on_error: boolean
   notify_on_keepalive: boolean
   ddns: {

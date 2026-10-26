@@ -29,11 +29,24 @@ type Toast = { id: number; tone: 'success' | 'error' | 'info'; message: string }
 
 const REFRESH_MS = 10_000
 
-const NAV: { key: View; label: string; icon: typeof Gauge }[] = [
-  { key: 'dashboard', label: '总览', icon: Gauge },
-  { key: 'keepalive', label: '单机保活', icon: HeartPulse },
-  { key: 'shift', label: '联合换班', icon: Repeat },
-  { key: 'servers', label: '服务器', icon: ServerIcon },
+type NavItem = { key: View; label: string; icon: typeof Gauge }
+type NavGroup = { title: string; items: NavItem[] }
+
+const NAV_GROUPS: NavGroup[] = [
+  {
+    title: '总览',
+    items: [
+      { key: 'dashboard', label: '概览', icon: Gauge },
+      { key: 'servers', label: '服务器', icon: ServerIcon },
+    ],
+  },
+  {
+    title: '保活',
+    items: [
+      { key: 'keepalive', label: '单机保活', icon: HeartPulse },
+      { key: 'shift', label: '联合换班', icon: Repeat },
+    ],
+  },
 ]
 
 export default function App() {
@@ -294,34 +307,37 @@ export default function App() {
           </div>
           <div className="brand-text">
             <strong>{overview.brand}</strong>
-            <span>CDT 保活换班控制台</span>
           </div>
         </div>
 
-        <div className="sidebar-group">保活流程</div>
         <nav className="nav-list" aria-label="主视图">
-          {NAV.map((item) => {
-            const Icon = item.icon
-            const count =
-              item.key === 'keepalive'
-                ? overview.keepalives.length
-                : item.key === 'shift'
-                  ? overview.groups.length
-                  : item.key === 'servers'
-                    ? overview.servers.length
-                    : 0
-            return (
-              <button
-                key={item.key}
-                className={`nav-item${view === item.key ? ' on' : ''}`}
-                onClick={() => setView(item.key)}
-              >
-                <Icon size={15} />
-                <span className="nav-text">{item.label}</span>
-                {count > 0 && <span className="nav-count">{count}</span>}
-              </button>
-            )
-          })}
+          {NAV_GROUPS.map((group) => (
+            <div className="nav-group" key={group.title}>
+              <div className="sidebar-group">{group.title}</div>
+              {group.items.map((item) => {
+                const Icon = item.icon
+                const count =
+                  item.key === 'keepalive'
+                    ? overview.keepalives.length
+                    : item.key === 'shift'
+                      ? overview.groups.length
+                      : item.key === 'servers'
+                        ? overview.servers.length
+                        : 0
+                return (
+                  <button
+                    key={item.key}
+                    className={`nav-item${view === item.key ? ' on' : ''}`}
+                    onClick={() => setView(item.key)}
+                  >
+                    <Icon size={15} />
+                    <span className="nav-text">{item.label}</span>
+                    {count > 0 && <span className="nav-count">{count}</span>}
+                  </button>
+                )
+              })}
+            </div>
+          ))}
         </nav>
 
         <div className="sidebar-foot">
@@ -346,6 +362,7 @@ export default function App() {
           <KeepaliveView
             keepalives={overview.keepalives}
             servers={overview.servers}
+            groupedIds={groupedIds}
             busyId={busyServer}
             onAdd={() => setKeepalivePicker(true)}
             onToggle={toggleKeepalive}

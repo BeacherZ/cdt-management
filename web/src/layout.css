@@ -31,6 +31,12 @@
   display: contents;
 }
 
+.sidebar .nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .sidebar-group {
   font-size: 10.5px;
   letter-spacing: 0.1em;
@@ -336,6 +342,10 @@
   }
   .sidebar .nav-list::-webkit-scrollbar {
     display: none;
+  }
+  /* 窄屏两组导航合并成一条横向滚动的颗粒 */
+  .sidebar .nav-group {
+    display: contents;
   }
   .nav-item {
     width: auto;

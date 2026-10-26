@@ -721,6 +721,10 @@ button {
 .switch.on::after {
   transform: translateX(17px);
 }
+.switch:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
 
 .segmented {
   display: inline-flex;

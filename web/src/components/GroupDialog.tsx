@@ -156,11 +156,17 @@ export default function GroupDialog({ group, servers, onClose, onSaved }: Props)
                 value={row.server_id}
                 onChange={(event) => update(index, { server_id: Number(event.target.value) })}
               >
-                {servers.map((server) => (
-                  <option key={server.id} value={server.id}>
-                    {server.label}
-                  </option>
-                ))}
+                {servers.map((server) => {
+                  // 已经被别的行占用就别再选一次，省得保存时才报「重复添加」
+                  const taken = rows.some(
+                    (other, otherIndex) => otherIndex !== index && other.server_id === server.id,
+                  )
+                  return (
+                    <option key={server.id} value={server.id} disabled={taken}>
+                      {taken ? `${server.label}（已在本组）` : server.label}
+                    </option>
+                  )
+                })}
               </select>
               <div className="member-hours">
                 <input
