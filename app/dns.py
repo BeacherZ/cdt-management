@@ -314,6 +314,8 @@ def bind(record: str, kind: str, target_id: int) -> dict[str, Any]:
         raise ValueError(f"{record} 不在记录名列表里，请先在设置里添加")
     if kind in ("", None):
         repo.bind_dns_record(record, TARGET_NONE, 0)
+        # 解绑后清掉残留的解析状态，界面别再把旧 IP 显示成「当前解析」
+        repo.set_dns_state(record, "", "")
         return {"record": record, "target": None}
 
     if kind not in (TARGET_SERVER, TARGET_GROUP):

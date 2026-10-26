@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-import datetime as dt
 import html as html_lib
 import re
 from typing import Any
@@ -136,14 +135,16 @@ def shift_done(
     stopped: list[dict[str, Any]],
     period: str,
     ddns_status: str,
+    group_name: str = "",
     delayed: bool = False,
 ) -> notify.Message:
     """✅ 换班完成 / 换班成功（延迟恢复）。"""
+    prefix = f"{group_name} " if group_name else ""
     if delayed:
         return _message(
             "shift_done",
-            "✅ <b>CDT 换班成功报告 (延迟恢复)</b>",
-            "CDT 换班成功报告 (延迟恢复)",
+            f"✅ <b>CDT {prefix}换班成功报告 (延迟恢复)</b>",
+            f"CDT {prefix}换班成功报告 (延迟恢复)",
             f"🕒 <b>当前班次</b>：{period}\n{SEP}\n"
             + _join_blocks(
                 [running_block("运行账号", duty, ddns_status)]
@@ -152,8 +153,8 @@ def shift_done(
         )
     return _message(
         "shift_done",
-        "✅ <b>CDT 换班完成报告</b>",
-        "CDT 换班完成报告",
+        f"✅ <b>CDT {prefix}换班完成报告</b>",
+        f"CDT {prefix}换班完成报告",
         f"🕒 <b>当前班次</b>：{period}\n{SEP}\n"
         + _join_blocks(
             [running_block("运行账号", duty, ddns_status)]
@@ -167,25 +168,28 @@ def shift_failover(
     over: list[dict[str, Any]],
     standby: list[dict[str, Any]],
     ddns_status: str,
+    group_name: str = "",
 ) -> notify.Message:
     """⚠️ 临时换班（故障转移）。两块是脚本原样，三台以上才补「停止账号」。"""
+    prefix = f"{group_name} " if group_name else ""
     parts = [running_block("接替账号", duty, ddns_status)]
     parts += [stopped_block("超限账号", s, _status(s), used=_used(s)) for s in over]
     parts += [stopped_block("停止账号", s, _status(s)) for s in standby]
     return _message(
         "shift_failover",
-        "⚠️ <b>CDT 临时换班报告</b>",
-        "CDT 临时换班报告",
+        f"⚠️ <b>CDT {prefix}临时换班报告</b>",
+        f"CDT {prefix}临时换班报告",
         f"📢 <b>故障转移</b>：当班实例流量超限，已启用备用实例。\n{SEP}\n" + _join_blocks(parts),
     )
 
 
-def breaker(servers: list[dict[str, Any]]) -> notify.Message:
+def breaker(servers: list[dict[str, Any]], group_name: str = "") -> notify.Message:
     """🚨 全局熔断。脚本原文含「到达到阈值」「“全局熔断”」，保持原样。
 
     尾巴按真实停机模式写：脚本默认全是节省停机，但有的规格不支持，
     会退化成普通停机（照常收规格费），这时候还说「均已节省停机」就是骗人。
     """
+    prefix = f"{group_name} " if group_name else ""
     count = "双实例" if len(servers) == 2 else f"{len(servers)} 台实例"
     warn = f"{count}流量均已到达到阈值，“全局熔断”，{stop_tail(servers)}。"
     blocks = [
@@ -201,18 +205,19 @@ def breaker(servers: list[dict[str, Any]]) -> notify.Message:
     ]
     return _message(
         "breaker",
-        "🚨 <b>CDT 全局熔断报告</b>",
-        "CDT 全局熔断报告",
+        f"🚨 <b>CDT {prefix}全局熔断报告</b>",
+        f"CDT {prefix}全局熔断报告",
         f"⚠ <b>警告：{warn}</b>\n\n" + _join_blocks(blocks),
     )
 
 
-def limit_stop(server: dict[str, Any]) -> notify.Message:
+def limit_stop(server: dict[str, Any], group_name: str = "") -> notify.Message:
     """🔴 超限停机。"""
+    prefix = f"{group_name} " if group_name else ""
     return _message(
         "limit_stop",
-        "🔴 <b>CDT 超限停机报告</b>",
-        "CDT 超限停机报告",
+        f"🔴 <b>CDT {prefix}超限停机报告</b>",
+        f"CDT {prefix}超限停机报告",
         "\n".join(
             [
                 "当班实例流量超限，已强制节省停机。",
@@ -232,12 +237,14 @@ def recovery(
     ddns_status: str,
     headline: str = "当班实例疑被抢占，已自动恢复运行。",
     kind: str = "recovery",
+    group_name: str = "",
 ) -> notify.Message:
     """🟢 抢占恢复。单机保活拉起也用这套版式（脚本里没有单独的保活通知）。"""
+    prefix = f"{group_name} " if group_name else ""
     return _message(
         kind,
-        "🟢 <b>CDT 抢占恢复报告</b>",
-        "CDT 抢占恢复报告",
+        f"🟢 <b>CDT {prefix}抢占恢复报告</b>",
+        f"CDT {prefix}抢占恢复报告",
         "\n".join(
             [
                 headline,
@@ -257,8 +264,10 @@ def shift_error(
     duty: dict[str, Any],
     stopped: list[dict[str, Any]],
     minutes: int,
+    group_name: str = "",
 ) -> notify.Message:
     """⚠️ 换班异常（超时未就绪）。"""
+    prefix = f"{group_name} " if group_name else ""
     parts = [
         "\n".join(
             [
@@ -284,8 +293,8 @@ def shift_error(
         )
     return _message(
         "shift_error",
-        "⚠️ <b>CDT 换班异常报告</b>",
-        "CDT 换班异常报告",
+        f"⚠️ <b>CDT {prefix}换班异常报告</b>",
+        f"CDT {prefix}换班异常报告",
         f"⏳ <b>换班超时：换班指令已执行 {minutes} 分钟，但状态未就绪。</b>\n\n"
         + _join_blocks(parts),
     )
@@ -322,17 +331,34 @@ def daily_report(servers: list[dict[str, Any]], timestamp: str) -> notify.Messag
 
 
 def shift_period(
-    label: str, shift_start: int, hours: float, member_count: int, tz: Any
+    slot_name: str,
+    start: str,
+    end: str,
 ) -> str:
-    """当前班次。两台照脚本写 AM / PM；三台以上写成「机名（起–止）」。
+    """当前班次：班次名称（起–止）。跨天时结束标「次日」。
 
-    三台轮班时 AM 段可能有好几台，只看 AM / PM 分不清谁在跑，所以补机名 + 班次时间段。
-    时间段就是换班组里给这台机器设的时长，起点是本班次开始时刻。
+    起止是 HH:MM 字符串（时刻表模式直接从成员字段拿）；没有名称时退回只写时间段。
     """
-    start = dt.datetime.fromtimestamp(shift_start, tz)
-    if member_count <= 2:
-        return "AM" if start.hour < 12 else "PM"
-    end = start + dt.timedelta(hours=float(hours or 12))
-    # 跨天班次标「次日」，否则 22:00–06:00 看着像时间倒流
-    tail = f"次日 {end:%H:%M}" if end.date() > start.date() else f"{end:%H:%M}"
-    return f"{html_lib.escape(label)}（{start:%H:%M}–{tail}）"
+    slot_name = (slot_name or "").strip()
+    start = (start or "").strip()
+    end = (end or "").strip()
+    if not start and not end:
+        return slot_name or "—"
+    if not end:
+        return f"{slot_name}（{start}）" if slot_name else start
+    # 跨天：结束时刻 <= 开始时刻，标「次日」
+    tail = end
+    if _hhmm_minutes(end) <= _hhmm_minutes(start):
+        tail = f"次日 {end}"
+    span = f"{start}–{tail}"
+    return f"{slot_name}（{span}）" if slot_name else span
+
+
+def _hhmm_minutes(value: str) -> int:
+    parts = value.split(":")
+    if len(parts) != 2:
+        return -1
+    try:
+        return int(parts[0]) * 60 + int(parts[1])
+    except ValueError:
+        return -1

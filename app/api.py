@@ -64,6 +64,7 @@ SETTING_LABELS = {
     "ddns_ttl": "TTL",
     "ddns_proxied": "CDN 代理",
     "billing_enabled": "费用查询",
+    "billing_interval": "费用查询间隔",
     "notify_tg_enabled": "Telegram 开关",
     "notify_tg_token": "Telegram Token",
     "notify_tg_chat_id": "Telegram Chat",
@@ -80,11 +81,12 @@ SETTING_LABELS = {
     "notify_wh_method": "Webhook 方法",
     "notify_wh_body": "Webhook 请求体",
     "notify_wh_headers": "Webhook 请求头",
+    "admin_username": "用户名",
     "admin_password": "登录密码",
 }
 
 # 内部状态键不算「本次改动」，别让它们出现在事件摘要里
-SETTING_LABELS_SKIP = {"session_epoch", "initialized", "admin_username"}
+SETTING_LABELS_SKIP = {"session_epoch", "initialized"}
 
 
 def _setting_labels(keys: list[str]) -> str:
@@ -93,6 +95,85 @@ def _setting_labels(keys: list[str]) -> str:
     if len(names) > 8:
         return "、".join(names[:8]) + f" 等 {len(names)} 项"
     return "、".join(names)
+
+
+def _config_from_draft(payload: dict[str, Any]) -> dict[str, str]:
+    """把前端设置表单草稿转成 config dict，供「测试连接」使用。
+
+    测试要用当前表单里填的值，而不是已保存的旧配置；但敏感字段（token / key /
+    密码）在表单里留空表示「不修改」，这时回退到已保存的真实值，否则测试会误报未配置。
+    """
+    saved = repo.get_settings()
+    cfg: dict[str, str] = dict(saved)
+
+    def put(key: str, value: Any) -> None:
+        if value is not None:
+            cfg[key] = str(value)
+
+    def put_bool(key: str, value: Any) -> None:
+        if value is not None:
+            cfg[key] = "1" if value else "0"
+
+    put("timezone", payload.get("timezone"))
+    put("traffic_threshold_pct", payload.get("traffic_threshold_pct"))
+    put("reconcile_interval", payload.get("reconcile_interval"))
+    put_bool("billing_enabled", payload.get("billing_enabled"))
+    put_bool("daily_report_enabled", payload.get("daily_report_enabled"))
+    put("daily_report_time", payload.get("daily_report_time"))
+    for key in (
+        "notify_on_shift",
+        "notify_on_failover",
+        "notify_on_recovery",
+        "notify_on_breaker",
+        "notify_on_limit_stop",
+        "notify_on_error",
+        "notify_on_keepalive",
+    ):
+        put_bool(key, payload.get(key))
+
+    ddns = payload.get("ddns") or {}
+    if ddns:
+        put_bool("ddns_enabled", ddns.get("enabled"))
+        put("ddns_cf_auth_mode", ddns.get("cf_auth_mode"))
+        put("ddns_cf_email", ddns.get("cf_email"))
+        put("ddns_zone_id", ddns.get("zone_id"))
+        put("ddns_ttl", ddns.get("ttl"))
+        put_bool("ddns_proxied", ddns.get("proxied"))
+        # 敏感字段：草稿有值就用草稿，留空回退已保存值
+        if ddns.get("cf_token"):
+            cfg["ddns_cf_token"] = str(ddns["cf_token"])
+        if ddns.get("cf_key"):
+            cfg["ddns_cf_key"] = str(ddns["cf_key"])
+
+    tg = payload.get("telegram") or {}
+    if tg:
+        put_bool("notify_tg_enabled", tg.get("enabled"))
+        put("notify_tg_chat_id", tg.get("chat_id"))
+        put("notify_tg_proxy", tg.get("proxy"))
+        if tg.get("token"):
+            cfg["notify_tg_token"] = str(tg["token"])
+
+    mail = payload.get("email") or {}
+    if mail:
+        put_bool("notify_mail_enabled", mail.get("enabled"))
+        put("notify_mail_host", mail.get("host"))
+        put("notify_mail_port", mail.get("port"))
+        put("notify_mail_security", mail.get("security"))
+        put("notify_mail_username", mail.get("username"))
+        put("notify_mail_to", mail.get("to"))
+        if mail.get("password"):
+            cfg["notify_mail_password"] = str(mail["password"])
+
+    wh = payload.get("webhook") or {}
+    if wh:
+        put_bool("notify_wh_enabled", wh.get("enabled"))
+        put("notify_wh_url", wh.get("url"))
+        put("notify_wh_method", wh.get("method"))
+        put("notify_wh_body", wh.get("body"))
+        if wh.get("headers"):
+            cfg["notify_wh_headers"] = str(wh["headers"])
+
+    return cfg
 
 _login_failures: dict[str, list[float]] = {}
 _login_lock = threading.Lock()
@@ -239,6 +320,9 @@ def _group_payload(
                 "server_id": member["server_id"],
                 "position": member["position"],
                 "hours": member["hours"],
+                "slot_name": member.get("slot_name") or "",
+                "start_time": member.get("start_time") or "",
+                "end_time": member.get("end_time") or "",
                 "enabled": bool(member["enabled"]),
                 "is_duty": int(member["server_id"]) == duty_id,
                 "server": server_summary(server, managed, (books or {}).get("servers"))
@@ -553,10 +637,12 @@ def register(app: FastAPI) -> None:
     def get_settings(user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
         config = repo.get_settings()
         return {
+            "admin_username": config.get("admin_username") or "",
             "timezone": config.get("timezone"),
             "traffic_threshold_pct": config.get("traffic_threshold_pct"),
             "reconcile_interval": config.get("reconcile_interval"),
             "billing_enabled": config.get("billing_enabled", "1") == "1",
+            "billing_interval": config.get("billing_interval") or "600",
             "daily_report_enabled": config.get("daily_report_enabled") == "1",
             "daily_report_time": config.get("daily_report_time"),
             "notify_on_shift": config.get("notify_on_shift") == "1",
@@ -636,6 +722,11 @@ def register(app: FastAPI) -> None:
             updates["reconcile_interval"] = str(interval)
 
         put_bool("billing_enabled", payload.get("billing_enabled"))
+        if payload.get("billing_interval") is not None:
+            interval = int(payload["billing_interval"])
+            if not 60 <= interval <= 86400:
+                raise ValueError("费用查询间隔应在 60–86400 秒之间")
+            updates["billing_interval"] = str(interval)
 
         put_bool("daily_report_enabled", payload.get("daily_report_enabled"))
         put_str("daily_report_time", payload.get("daily_report_time"))
@@ -712,12 +803,25 @@ def register(app: FastAPI) -> None:
                 updates["notify_wh_headers"] = str(wh["headers"])
 
         bumped_epoch: int | None = None
+        new_session_user: str | None = None
+        new_username = str(payload.get("new_username") or "").strip()
         new_password = payload.get("new_password")
+
+        # 改用户名 / 改密码都会让所有旧票据失效，别让别的浏览器继续挂着；
+        # 当前浏览器在最后重新签一张新票据。
+        if new_username:
+            if len(new_username) < 3:
+                raise ValueError("用户名至少 3 个字符")
+            if new_username != repo.get_setting("admin_username"):
+                updates["admin_username"] = new_username
+                bumped_epoch = int(time.time())
+                updates["session_epoch"] = str(bumped_epoch)
+                new_session_user = new_username
+
         if new_password:
             if len(str(new_password)) < 10:
                 raise ValueError("新密码至少 10 个字符")
             updates["admin_password"] = security.hash_password(str(new_password))
-            # 改密码就让所有旧票据失效，别让别的浏览器继续挂着
             bumped_epoch = int(time.time())
             updates["session_epoch"] = str(bumped_epoch)
 
@@ -735,17 +839,20 @@ def register(app: FastAPI) -> None:
                 repo.add_event("system", "配置已更新", _setting_labels(changed))
 
         if bumped_epoch is not None:
-            # 改密码的这个浏览器要留住，给它发一张新票据
-            response = JSONResponse({"ok": True})
-            _attach_session(response, user, bumped_epoch)
+            # 改用户名 / 改密码的这个浏览器要留住，给它发一张新票据；
+            # 改了用户名就用新名字签，否则沿用票据里的 user
+            response = JSONResponse({"ok": True, "username": new_session_user or user})
+            _attach_session(response, new_session_user or user, bumped_epoch)
             return response
         return {"ok": True}
 
     # -- 测试 -----------------------------------------------------------
     @app.post("/api/v1/settings/test/{channel}")
-    def test_channel(request: Request, channel: str, user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
+    def test_channel(request: Request, channel: str, payload: dict[str, Any] | None = None, user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
         require_csrf(request)
-        config = repo.get_settings()
+        # 用前端此刻表单里的草稿来测，而不是已保存的旧配置：
+        # 这样改完 token / 主机地址不用先保存就能直接点「测试」。
+        config = _config_from_draft(payload or {})
         if channel == "ddns":
             result = ddns.test(config)
             return {"ok": result.status.startswith("✅"), "status": result.status, "detail": result.detail}

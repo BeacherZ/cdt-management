@@ -2,16 +2,21 @@ import {
   Activity,
   AlertTriangle,
   BellRing,
+  CheckCircle2,
+  ChevronDown,
   Cloud,
   CloudOff,
   Gauge,
   HeartPulse,
   Info,
+  Loader2,
   Repeat,
   Server as ServerIcon,
   ShieldAlert,
+  XCircle,
   Zap,
 } from 'lucide-react'
+import { useState } from 'react'
 import type { EventItem, Overview } from '../types'
 import { Badge, Meter, Ring, phaseTone, statusLabel, statusTone } from './ui'
 
@@ -35,6 +40,14 @@ function timeAgo(ts: number): string {
   if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`
   if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`
   return new Date(ts * 1000).toLocaleDateString('zh-CN')
+}
+
+function clock(ts: number): string {
+  if (!ts) return '—'
+  return new Date(ts * 1000).toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+  })
 }
 
 export default function DashboardView({
@@ -164,7 +177,7 @@ export default function DashboardView({
         <div className="stat">
           <div className="stat-main">
             <span className="label">
-              <Gauge size={11} /> 累计流量
+              <Gauge size={11} /> 月累计流量
             </span>
             <span className="value">
               {totalTraffic.toFixed(1)}
@@ -282,18 +295,81 @@ export default function DashboardView({
 }
 
 function EventRow({ event }: { event: EventItem }) {
+  const [open, setOpen] = useState(false)
   const Icon = EVENT_ICON[event.kind] ?? Info
   const level = event.level === 'error' ? 'error' : event.level === 'warning' ? 'warning' : 'info'
+  const running = event.status === 'running'
+  const failed = event.status === 'error'
+  const hasProgress = (event.progress?.length ?? 0) > 0
+  const finishedAt = event.finished_at || 0
+
   return (
-    <div className="event">
-      <div className={`event-icon ${level}`}>
-        <Icon size={13} />
-      </div>
-      <div className="event-body">
-        <strong>{event.title}</strong>
-        {event.detail && <p>{event.detail}</p>}
-      </div>
-      <span className="event-time">{timeAgo(event.ts)}</span>
+    <div className={`event ${open ? 'is-open' : ''}`}>
+      <button type="button" className="event-main" onClick={() => setOpen((v) => !v)}>
+        <div className={`event-icon ${level} ${running ? 'spinning' : ''}`}>
+          {running ? (
+            <Loader2 size={13} className="spin" />
+          ) : failed ? (
+            <XCircle size={13} />
+          ) : (
+            <Icon size={13} />
+          )}
+        </div>
+        <div className="event-body">
+          <div className="event-title-line">
+            <strong>{event.title}</strong>
+            {running ? (
+              <span className="event-status running">
+                <Loader2 size={10} className="spin" /> 进行中
+              </span>
+            ) : failed ? (
+              <span className="event-status failed">
+                <XCircle size={10} /> 失败
+              </span>
+            ) : (
+              <span className="event-status done">
+                <CheckCircle2 size={10} /> 完成
+              </span>
+            )}
+          </div>
+          {event.detail && !open && <p>{event.detail}</p>}
+        </div>
+        <span className="event-time">{timeAgo(event.ts)}</span>
+        <ChevronDown size={14} className={`event-chevron ${open ? 'open' : ''}`} />
+      </button>
+
+      {open && (
+        <div className="event-detail">
+          {event.detail && <p className="event-detail-summary">{event.detail}</p>}
+
+          {hasProgress && (
+            <ol className="event-progress">
+              {event.progress.map((step, index) => (
+                <li key={index}>
+                  <span className="event-progress-time">{clock(step.ts)}</span>
+                  <span className="event-progress-dot" />
+                  <span className="event-progress-text">{step.text}</span>
+                </li>
+              ))}
+            </ol>
+          )}
+
+          {!running && finishedAt > 0 && (
+            <div className="event-finished">
+              {failed ? '失败于' : '完成于'} {clock(finishedAt)} · 全程{' '}
+              {Math.max(0, finishedAt - event.ts) >= 60
+                ? `${Math.round((finishedAt - event.ts) / 60)} 分钟`
+                : `${Math.max(0, finishedAt - event.ts)} 秒`}
+            </div>
+          )}
+
+          {running && (
+            <div className="event-finished running-hint">
+              <Loader2 size={11} className="spin" /> 等待确认状态中，完成后自动更新
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

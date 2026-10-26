@@ -27,7 +27,7 @@ type Props = {
 
 export default function ServerDialog({
   server,
-  defaultThresholdPercent = 94,
+  defaultThresholdPercent = 90,
   onClose,
   onSaved,
 }: Props) {

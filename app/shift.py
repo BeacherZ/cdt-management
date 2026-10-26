@@ -31,6 +31,77 @@ TRANSIENT_STATUS = {"Starting", "Pending", "Stopping"}
 # 轮换计算
 # --------------------------------------------------------------------------
 
+def _hhmm_to_minutes(value: str) -> int:
+    """'06:00' → 360。非法输入返回 -1。"""
+    parts = str(value or "").strip().split(":")
+    if len(parts) != 2:
+        return -1
+    try:
+        hour, minute = int(parts[0]), int(parts[1])
+    except ValueError:
+        return -1
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return -1
+    return hour * 60 + minute
+
+
+def _is_timetable_group(group: dict[str, Any]) -> bool:
+    """组内所有启用成员都填了合法起止时刻，才走「固定时刻表」模式。"""
+    members = [m for m in group.get("members") or [] if m.get("enabled")]
+    if len(members) < 2:
+        return False
+    return all(
+        _hhmm_to_minutes(m.get("start_time")) >= 0 and _hhmm_to_minutes(m.get("end_time")) >= 0
+        for m in members
+    )
+
+
+def _duty_at_timetable(group: dict[str, Any], now_ts: float) -> tuple[dict[str, Any], int]:
+    """固定时刻表模式：按每天真实时钟判定当班。
+
+    每个成员占据一天内的 [start, end) 分钟区间；end <= start 表示跨天
+    （如 18:00–次日 06:00），区间要折成 [start, 1440) ∪ [0, end)。
+
+    返回 (当班成员, 该班次开始时间戳)。开始时间戳用于 slot_key 去重与通知时间段显示。
+    """
+    members = active_members(group)
+    tz_name = str(group.get("_timezone") or "Asia/Shanghai")
+    now = dt.datetime.fromtimestamp(now_ts, _timezone(tz_name))
+    minute_of_day = now.hour * 60 + now.minute
+
+    # 逐个成员判断当前分钟落在谁家。跨天成员优先处理边界。
+    for member in members:
+        start = _hhmm_to_minutes(member.get("start_time"))
+        end = _hhmm_to_minutes(member.get("end_time"))
+        if start < 0 or end < 0:
+            continue
+        if end > start:
+            # 普通区间 [start, end)
+            if start <= minute_of_day < end:
+                return member, _shift_start_ts(now, start)
+        else:
+            # 跨天区间 [start, 1440) ∪ [0, end)
+            if minute_of_day >= start or minute_of_day < end:
+                return member, _shift_start_ts(now, start)
+
+    # 没命中（理论上不该发生），退回第一台
+    first = members[0]
+    return first, _shift_start_ts(now, _hhmm_to_minutes(first.get("start_time")))
+
+
+def _shift_start_ts(now: dt.datetime, start_minutes: int) -> int:
+    """今天 start_minutes 时刻的时间戳；跨天班次（start 已过且是昨天开始）要回退一天。
+
+    比如现在 02:00 属于「18:00–06:00」夜班，这个班次是从昨天 18:00 开始的。
+    """
+    start_minutes = max(0, start_minutes)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    candidate = today_start + dt.timedelta(minutes=start_minutes)
+    if candidate > now:
+        candidate -= dt.timedelta(days=1)
+    return int(candidate.timestamp())
+
+
 def active_members(group: dict[str, Any]) -> list[dict[str, Any]]:
     members = [
         member
@@ -45,6 +116,9 @@ def duty_at(group: dict[str, Any], now_ts: float) -> tuple[dict[str, Any], int] 
     members = active_members(group)
     if len(members) < 2:
         return None
+
+    if _is_timetable_group(group):
+        return _duty_at_timetable(group, now_ts)
 
     total = sum(float(m["hours"]) for m in members) * 3600
     anchor = float(group.get("anchor_at") or group.get("created_at") or now_ts)
@@ -66,6 +140,10 @@ def next_switch_at(group: dict[str, Any], now_ts: float) -> float | None:
     members = active_members(group)
     if len(members) < 2:
         return None
+
+    if _is_timetable_group(group):
+        return _next_switch_timetable(group, now_ts)
+
     total = sum(float(m["hours"]) for m in members) * 3600
     anchor = float(group.get("anchor_at") or group.get("created_at") or now_ts)
     elapsed = max(0.0, now_ts - anchor)
@@ -77,6 +155,34 @@ def next_switch_at(group: dict[str, Any], now_ts: float) -> float | None:
         if offset < accumulated:
             return anchor + cycle_index * total + accumulated
     return anchor + (cycle_index + 1) * total
+
+
+def _next_switch_timetable(group: dict[str, Any], now_ts: float) -> float:
+    """固定时刻表模式：下一班开始时刻 = 当前班次的结束时刻。"""
+    members = active_members(group)
+    tz_name = str(group.get("_timezone") or "Asia/Shanghai")
+    now = dt.datetime.fromtimestamp(now_ts, _timezone(tz_name))
+    minute_of_day = now.hour * 60 + now.minute
+
+    for member in members:
+        start = _hhmm_to_minutes(member.get("start_time"))
+        end = _hhmm_to_minutes(member.get("end_time"))
+        if start < 0 or end < 0:
+            continue
+        if end > start:
+            if start <= minute_of_day < end:
+                today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                return int((today_start + dt.timedelta(minutes=end)).timestamp())
+        else:
+            if minute_of_day >= start or minute_of_day < end:
+                today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                candidate = today_start + dt.timedelta(minutes=end)
+                # 跨天班次结束在今天（比如现在 20:00 属于 18:00–06:00，结束在明天 06:00）
+                if candidate <= now:
+                    candidate += dt.timedelta(days=1)
+                return int(candidate.timestamp())
+    # 兜底
+    return now_ts + 3600
 
 
 def current_member_index(group: dict[str, Any], now_ts: float) -> int:
@@ -268,6 +374,9 @@ class Engine:
         if not group.get("enabled"):
             return {"group_id": group_id, "skipped": "disabled"}
 
+        # 时刻表模式需要知道时区
+        group["_timezone"] = config.get("timezone") or "Asia/Shanghai"
+
         picked = duty_at(group, now_ts)
         if picked is None:
             return {"group_id": group_id, "skipped": "成员不足两台"}
@@ -275,8 +384,11 @@ class Engine:
         slot_key = str(shift_start)
         run = repo.get_run(group_id, slot_key) or {}
 
+        # 手动换班：本班次被用户手动切过，当班沿用 run.duty_server_id，
+        # 且不再发「流量超限故障转移」这类误导通知（界面 toast 已反馈）。
+        manual_switch = bool(run.get("manual"))
+
         # 本班次内已经故障转移过：沿用当时选中的替补，不再按时间重新推导当班。
-        # 否则每一轮都会重新判定「原当班超限」，事件刷屏、通知重复，且替补每分钟换一次。
         failed_over = bool(run.get("failover"))
         if failed_over and int(run.get("duty_server_id") or 0):
             for member in active_members(group):
@@ -312,7 +424,6 @@ class Engine:
                 if repo.get_flag(f"member_err:{server['id']}"):
                     repo.clear_flag(f"member_err:{server['id']}")
             except Exception as exc:  # noqa: BLE001
-                # 同一台连续读失败只记一条，恢复后解除
                 flag = f"member_err:{server['id']}"
                 if not repo.get_flag(flag):
                     repo.set_flag(flag)
@@ -364,11 +475,19 @@ class Engine:
         if _over_threshold(duty) and not failover:
             return self._handle_limit_stop(group, config, now, slot_key, duty, others, notify_enabled)
 
-        # 3) 保证当班运行
+        # 故障转移标志要在「启动当班」之前就确定并持久化，否则转移后下一轮会
+        # 因为 run.failover 没写进去而重新判定超限、重复记「故障转移」事件。
+        failover_flag = 1 if (failover or failed_over) else 0
+
+        # 3) 保证当班运行 —— 只做「启动当班」，不碰非当班
         duty_status = str(duty.get("instance_status") or "")
-        if duty_status not in ("Running",) and duty_status not in TRANSIENT_STATUS:
+        duty_not_running = duty_status not in ("Running",) and duty_status not in TRANSIENT_STATUS
+        if duty_not_running:
+            # 当班还没跑起来：下发启动，记进度，本轮到此为止（等下一轮确认 Running）
             if run.get("phase") in (PHASE_SETTLED, PHASE_FAILOVER):
                 repo.set_flag(f"recovery:{group_id}:{slot_key}")
+            # 上一轮可能已经为这个班次开了 running 事件，启动失败时要用它打 error 标志
+            prior_event_id = int(run.get("event_id") or 0)
             try:
                 aliyun.start_instance(duty)
                 repo.add_event(
@@ -380,9 +499,10 @@ class Engine:
                     server_id=int(duty["id"]),
                 )
                 repo.clear_flag(f"start_err:{group_id}:{slot_key}")
+                event_id = self._shift_event(group_id, slot_key, name, duty.get("label") or "")
+                repo.add_event_progress(event_id, f"已下发启动当班 {duty.get('label')}")
                 duty_status = "Starting"
             except Exception as exc:  # noqa: BLE001
-                # 库存不足这类错误会每轮复现，只记一次，换班次后自然重来
                 flag = f"start_err:{group_id}:{slot_key}"
                 if not repo.get_flag(flag):
                     repo.set_flag(flag)
@@ -394,67 +514,123 @@ class Engine:
                         group_id=group_id,
                         server_id=int(duty["id"]),
                     )
+                # 本班次若已有进行中的换班事件，启动失败要把它标记为 error，
+                # 否则前端「最近事件」里永远挂着一个转圈。
+                if prior_event_id:
+                    repo.add_event_progress(prior_event_id, f"当班启动失败：{exc}")
+                    repo.finish_event(prior_event_id, "error")
                 repo.upsert_run(
                     group_id,
                     slot_key,
                     phase=PHASE_ERROR,
+                    stage="",
+                    event_id=0,
                     duty_server_id=int(duty["id"]),
                     standby_server_ids=_encode_ids(others),
+                    failover=failover_flag,
                     note=str(exc)[:200],
                 )
                 return {"group_id": group_id, "error": str(exc)}
 
-        # 4) 当班跑起来了 → 其余全部节省停机
+        # 当班还在启动中（Starting/Pending），本轮不做任何停非当班的动作，等它 Running
+        if duty_status in TRANSIENT_STATUS:
+            repo.upsert_run(
+                group_id,
+                slot_key,
+                phase=PHASE_SWITCHING,
+                stage="starting_duty",
+                duty_server_id=int(duty["id"]),
+                standby_server_ids=_encode_ids(others),
+                failover=failover_flag,
+                attempts=int(run.get("attempts") or 0) + 1,
+            )
+            self._maybe_report_timeout(
+                group, config, now_ts, slot_key, shift_start, duty, others, notify_enabled
+            )
+            return {"group_id": group_id, "slot": slot_key, "ready": False, "stage": "starting_duty"}
+
+        # 4) 当班已 Running：先确认公网 IP 就绪（DDNS 启用时），再同步 DDNS、再停非当班。
+        #    ECS 开机后 EIP 绑定有几秒延迟，IP 没就绪就等下一轮，避免把空 IP 写进解析。
+        ddns_enabled = config.get("ddns_enabled") == "1"
+        has_ip = bool(str(duty.get("public_ip") or "").strip())
+        if ddns_enabled and not has_ip:
+            repo.upsert_run(
+                group_id,
+                slot_key,
+                phase=PHASE_SWITCHING,
+                stage="starting_duty",
+                duty_server_id=int(duty["id"]),
+                standby_server_ids=_encode_ids(others),
+                failover=failover_flag,
+                attempts=int(run.get("attempts") or 0) + 1,
+            )
+            self._maybe_report_timeout(
+                group, config, now_ts, slot_key, shift_start, duty, others, notify_enabled
+            )
+            return {"group_id": group_id, "slot": slot_key, "ready": False, "stage": "waiting_ip"}
+
+        # 当班 Running 且 IP 就绪 → 同步 DDNS（此时域名指向新当班机）
+        ddns_status = self._sync_ddns(duty, config, dns.TARGET_GROUP, group_id)
+
+        # 换班事件进度：当班已开机 + DDNS 结果
+        event_id = self._shift_event(group_id, slot_key, name, duty.get("label") or "")
+        repo.add_event_progress(event_id, f"当班 {duty.get('label')} 已开机")
+        repo.add_event_progress(event_id, f"DDNS：{ddns_status}")
+
+        # DDNS 只有「已设置且已绑定」时才要求同步成功，否则不卡流程：
+        #   - 未启用 / 未绑定（⏸ 开头）→ 跳过确认，不阻塞
+        #   - 已绑定但同步失败（❌ / ⚠️ 开头）→ 本轮不算就绪，等下一轮重试
+        ddns_text = str(ddns_status)
+        ddns_bound = bool(repo.dns_record_of(dns.TARGET_GROUP, group_id))
+        ddns_ok = (not ddns_enabled) or (not ddns_bound) or ddns_text.startswith("✅")
+
+        # 5) 停非当班（此时才停）。只有「节省停机」到位（Stopped 且 StopCharging）才算停好；
+        #    普通停机（KeepCharging）照常收费，要重新下发节省停机指令。
         all_stopped = True
-        if duty_status == "Running":
-            for server in others:
-                if server.get("instance_status") == "Stopped":
-                    continue
-                if server.get("instance_status") in TRANSIENT_STATUS:
-                    # 已经在停机过程中，等它落地即可；重复下发只会刷事件
-                    all_stopped = False
-                    continue
-                try:
-                    aliyun.stop_instance(server, "StopCharging")
+        for server in others:
+            if _is_charging_stopped(server):
+                continue
+            if server.get("instance_status") in TRANSIENT_STATUS:
+                # 已在停机过程中，等它落地
+                all_stopped = False
+                continue
+            try:
+                aliyun.stop_instance(server, "StopCharging")
+                repo.add_event(
+                    "stop",
+                    f"{name}：已为非当班实例下发节省停机",
+                    f"{server.get('label')} 原状态 {server.get('instance_status') or '未知'}",
+                    group_id=group_id,
+                    server_id=int(server["id"]),
+                )
+                repo.clear_flag(f"stop_err:{server['id']}")
+                repo.add_event_progress(event_id, f"已下发停机 {server.get('label')}")
+            except Exception as exc:  # noqa: BLE001
+                flag = f"stop_err:{server['id']}"
+                if not repo.get_flag(flag):
+                    repo.set_flag(flag)
                     repo.add_event(
-                        "stop",
-                        f"{name}：已为非当班实例下发节省停机",
-                        f"{server.get('label')} 原状态 {server.get('instance_status') or '未知'}",
+                        "error",
+                        f"{name}：非当班停机失败",
+                        f"{server.get('label')}：{exc}",
+                        level="error",
                         group_id=group_id,
                         server_id=int(server["id"]),
                     )
-                    repo.clear_flag(f"stop_err:{server['id']}")
-                except Exception as exc:  # noqa: BLE001
-                    flag = f"stop_err:{server['id']}"
-                    if not repo.get_flag(flag):
-                        repo.set_flag(flag)
-                        repo.add_event(
-                            "error",
-                            f"{name}：非当班停机失败",
-                            f"{server.get('label')}：{exc}",
-                            level="error",
-                            group_id=group_id,
-                            server_id=int(server["id"]),
-                        )
-                all_stopped = False
-        else:
             all_stopped = False
 
-        ddns_enabled = config.get("ddns_enabled") == "1"
-        has_ip = bool(str(duty.get("public_ip") or "").strip())
-        ready = duty_status == "Running" and all_stopped and (has_ip or not ddns_enabled)
+        ready = duty_status == "Running" and all_stopped and (has_ip or not ddns_enabled) and ddns_ok
 
         previously_settled = run.get("phase") in (PHASE_SETTLED, PHASE_FAILOVER)
         first_settle = ready and not previously_settled
-        # 故障转移在本班次内保持一致（sticky），所以「已转移」标记不能因为本轮回落到
-        # normal 分支就被清零，否则下一轮又会重新判一遍换班
-        failover_flag = 1 if (failover or failed_over) else 0
         phase = (PHASE_FAILOVER if failover_flag else PHASE_SETTLED) if ready else PHASE_SWITCHING
+        stage = "" if ready else "stopping_standby"
 
         repo.upsert_run(
             group_id,
             slot_key,
             phase=phase,
+            stage=stage,
             duty_server_id=int(duty["id"]),
             standby_server_ids=_encode_ids(others),
             failover=failover_flag,
@@ -467,6 +643,7 @@ class Engine:
             "duty": duty.get("label"),
             "mode": "failover" if failover_flag else "normal",
             "ready": ready,
+            "ddns": str(ddns_status),
         }
 
         if not ready:
@@ -475,17 +652,23 @@ class Engine:
             )
             return summary
 
-        # 5) DDNS 先行，再通知（保证通知里的解析状态真实）
-        ddns_status = self._sync_ddns(duty, config, dns.TARGET_GROUP, group_id)
-        summary["ddns"] = str(ddns_status)
+        # 换班完成：确认全部到位，把进行中的事件打上完成标志
+        if event_id:
+            repo.add_event_progress(event_id, "非当班均已节省停机")
+            repo.add_event_progress(event_id, "全部状态确认完毕")
+            repo.finish_event(event_id, "done")
 
         if not notify_enabled:
             return summary
 
-        # 正常结算只在班次第一次就绪时推；临时换班是本轮真的发生了切换才推
+        # 手动换班：换班动作已执行、事件已打完完成标志，但不再推通知 ——
+        # 用户是自己点按钮切的，界面上已经看到结果，再发一条「流量超限故障转移」
+        # 或「换班完成」都是误导。
+        if manual_switch:
+            return summary
+
+        # 6) 全部确认（当班 Running + 非当班节省停机 + DDNS 已同步）后才发通知
         if first_settle or failover:
-            # 用 failover_flag（本班次的粘性状态）决定模板，而不是本轮的 failover：
-            # 转移发生在上一轮、本轮才就绪时，模板也要是临时换班
             self._notify_settled(
                 group, config, duty, others, ddns_status, failover_flag, slot_key
             )
@@ -494,7 +677,7 @@ class Engine:
             and config.get("notify_on_recovery") == "1"
         ):
             repo.clear_flag(f"recovery:{group_id}:{slot_key}")
-            notify.send_all(config, messages.recovery(duty, str(ddns_status)))
+            notify.send_all(config, messages.recovery(duty, str(ddns_status), group_name=name))
             repo.add_event(
                 "recovery",
                 f"{name}：抢占恢复",
@@ -520,8 +703,15 @@ class Engine:
         name = group.get("name")
         everyone = [duty, *others]
 
+        # 本班次若已有进行中的换班事件，熔断要把它关掉，否则前端永远转圈
+        run = repo.get_run(group_id, slot_key) or {}
+        if int(run.get("event_id") or 0):
+            repo.add_event_progress(int(run["event_id"]), "全部成员流量超限，触发全局熔断")
+            repo.finish_event(int(run["event_id"]), "error")
+
         for server in everyone:
-            if server.get("instance_status") != "Stopped":
+            # 已经是「节省停机」到位就不再下指令；普通停机（KeepCharging）也要重下
+            if not _is_charging_stopped(server):
                 try:
                     aliyun.stop_instance(server, "StopCharging")
                 except Exception as exc:  # noqa: BLE001
@@ -538,6 +728,7 @@ class Engine:
             group_id,
             slot_key,
             phase=PHASE_BREAKER,
+            event_id=0,
             duty_server_id=int(duty["id"]),
             standby_server_ids=_encode_ids(others),
             note="全部成员流量均超限",
@@ -546,8 +737,9 @@ class Engine:
         flag = f"breaker:{group_id}:{slot_key}"
         if notify_enabled and config.get("notify_on_breaker") == "1" and not repo.get_flag(flag):
             fresh = [repo.get_server(int(s["id"])) or s for s in everyone]
-            if all(s.get("instance_status") == "Stopped" for s in fresh):
-                notify.send_all(config, messages.breaker(fresh))
+            # 全部成员都「节省停机」到位才发通知 —— 普通停机照常收费，不算熔断成功
+            if _all_charging_stopped(fresh):
+                notify.send_all(config, messages.breaker(fresh, group_name=name))
                 repo.set_flag(flag)
                 repo.add_event(
                     "breaker",
@@ -574,42 +766,51 @@ class Engine:
         name = group.get("name")
         duty_status = str(duty.get("instance_status") or "")
 
-        if duty_status != "Stopped":
-            try:
-                aliyun.stop_instance(duty, "StopCharging")
-                repo.add_event(
-                    "limit_stop",
-                    f"{name}：当班流量超限，已强制节省停机",
-                    f"{duty.get('label')} 原状态 {duty_status or '未知'}",
-                    level="warning",
-                    group_id=group_id,
-                    server_id=int(duty["id"]),
-                )
-            except Exception as exc:  # noqa: BLE001
-                repo.add_event(
-                    "error",
-                    f"{name}：超限停机失败",
-                    str(exc),
-                    level="error",
-                    group_id=group_id,
-                    server_id=int(duty["id"]),
-                )
+        # 本班次若已有进行中的换班事件，超限停机要把它关掉，否则前端永远转圈
+        run = repo.get_run(group_id, slot_key) or {}
+        if int(run.get("event_id") or 0):
+            repo.add_event_progress(int(run["event_id"]), "当班流量超限，触发超限停机")
+            repo.finish_event(int(run["event_id"]), "error")
+
+        # 只有「节省停机」到位（Stopped 且 StopCharging）才算数；普通停机要重下指令
+        if not _is_charging_stopped(duty):
+            if duty_status not in TRANSIENT_STATUS:
+                try:
+                    aliyun.stop_instance(duty, "StopCharging")
+                    repo.add_event(
+                        "limit_stop",
+                        f"{name}：当班流量超限，已强制节省停机",
+                        f"{duty.get('label')} 原状态 {duty_status or '未知'}",
+                        level="warning",
+                        group_id=group_id,
+                        server_id=int(duty["id"]),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    repo.add_event(
+                        "error",
+                        f"{name}：超限停机失败",
+                        str(exc),
+                        level="error",
+                        group_id=group_id,
+                        server_id=int(duty["id"]),
+                    )
         else:
             fresh = repo.get_server(int(duty["id"])) or duty
             flag = f"limit_stop:{group_id}:{slot_key}"
             if (
                 notify_enabled
                 and config.get("notify_on_limit_stop") == "1"
-                and fresh.get("stopped_mode") == "StopCharging"
+                and _is_charging_stopped(fresh)
                 and not repo.get_flag(flag)
             ):
-                notify.send_all(config, messages.limit_stop(fresh))
+                notify.send_all(config, messages.limit_stop(fresh, group_name=name))
                 repo.set_flag(flag)
 
         repo.upsert_run(
             group_id,
             slot_key,
             phase=PHASE_BREAKER,
+            event_id=0,
             duty_server_id=int(duty["id"]),
             standby_server_ids=_encode_ids(others),
             note="当班流量超限且无法换班",
@@ -630,7 +831,17 @@ class Engine:
     ) -> None:
         if not notify_enabled or config.get("notify_on_error") != "1":
             return
-        elapsed = (now_ts - shift_start) / 60
+        # 手动换班没有「班次开始时刻」的概念：shift_start 是本班次的起点（可能
+        # 已经过去好几个小时），用它算 elapsed 会把刚发起的切换误判成超时。
+        # 手动换班是用户主动操作，界面会盯着结果，这里跳过超时报告。
+        run = repo.get_run(group["id"], slot_key) or {}
+        if run.get("manual"):
+            return
+        # 超时从「第一次开始处理这个班次」计时（run.started_at），而不是班次开始
+        # 时刻。时刻表模式下 shift_start 是当天班次起点（如 18:00），容器在班次
+        # 中途重启后第一次 reconcile 时 elapsed 已经很大，会被误判成超时。
+        started_at = int(run.get("started_at") or shift_start)
+        elapsed = (now_ts - started_at) / 60
         if elapsed < settings.SHIFT_TIMEOUT_MINUTES:
             return
         flag = f"timeout:{group['id']}:{slot_key}"
@@ -638,7 +849,10 @@ class Engine:
             return
 
         notify.send_all(
-            config, messages.shift_error(duty, others, settings.SHIFT_TIMEOUT_MINUTES)
+            config,
+            messages.shift_error(
+                duty, others, settings.SHIFT_TIMEOUT_MINUTES, group_name=group.get("name") or ""
+            ),
         )
         repo.set_flag(flag)
         repo.add_event(
@@ -662,6 +876,29 @@ class Engine:
         if not record:
             return ddns.DDNSResult(dns.STATUS_UNBOUND, "未在 DNS 页绑定记录")
         return dns.sync_record(record, config, ip=str(server.get("public_ip") or ""))
+
+    # -- 换班进行中的事件（动态化）----------------------------------------
+    def _shift_event(self, group_id: int, slot_key: str, name: str, duty_label: str) -> int:
+        """取本班次「进行中」的换班事件 ID；没有就新建一条 running 事件。
+
+        换班跨多轮 reconcile，这里用 shift_runs.event_id 记住事件，后续轮次
+        追加进度（add_event_progress），最终 finish_event 打完成标志。
+        """
+        run = repo.get_run(group_id, slot_key) or {}
+        event_id = int(run.get("event_id") or 0)
+        if event_id:
+            return event_id
+        event_id = repo.add_event(
+            "shift_done",
+            f"{name}：换班进行中",
+            f"正在启动当班 {duty_label}",
+            level="info",
+            group_id=group_id,
+            status="running",
+        )
+        repo.upsert_run(group_id, slot_key, event_id=event_id)
+        repo.add_event_progress(event_id, f"换班开始：当班 {duty_label}")
+        return event_id
 
     # -- 结算通知 ---------------------------------------------------------
     def _notify_settled(
@@ -697,19 +934,16 @@ class Engine:
                 over = [others[0]]
             taken = {id(server) for server in over}
             standby = [server for server in others if id(server) not in taken]
-            message = messages.shift_failover(duty, over, standby, str(ddns_status))
+            message = messages.shift_failover(
+                duty, over, standby, str(ddns_status), group_name=name
+            )
         else:
             # 本班次如果先发过「换班异常」，成功时按脚本换标题
             delayed = bool(repo.get_flag(f"timeout:{group_id}:{slot_key}"))
-            tz = _timezone(config.get("timezone") or "Asia/Shanghai")
-            period = messages.shift_period(
-                duty.get("label") or "",
-                int(slot_key),
-                _hours_of(group, duty),
-                len(others) + 1,
-                tz,
+            period = _shift_span(group, duty, config)
+            message = messages.shift_done(
+                duty, others, period, str(ddns_status), group_name=name, delayed=delayed
             )
-            message = messages.shift_done(duty, others, period, str(ddns_status), delayed=delayed)
             if delayed:
                 repo.clear_flag(f"timeout:{group_id}:{slot_key}")
 
@@ -725,7 +959,13 @@ class Engine:
 
     # -- 手动操作 ---------------------------------------------------------
     def manual_switch(self, group_id: int) -> dict[str, Any]:
-        """立即跳到下一台：把轮换起点平移到当前班的结束时刻。"""
+        """立即跳到下一台当班。
+
+        老 hours 累加模式：把轮换起点 anchor_at 平移到下一班的开头。
+        固定时刻表模式：当班由真实时钟决定，anchor 不起作用，改走
+        shift_runs 的 failover/duty_server_id 覆盖 —— reconcile_group 里
+        failed_over 分支会沿用这个手动指定，把下一台拉起来、停掉原当班。
+        """
         # 和后台调度抢同一把锁：否则两边会同时给同一批实例下指令
         if not self._lock.acquire(timeout=30):
             raise ValueError("后台正在同步，请稍后再试")
@@ -740,6 +980,9 @@ class Engine:
             members = active_members(group)
             if len(members) < 2:
                 raise ValueError("组内启用的成员不足两台")
+
+            if _is_timetable_group(group):
+                return self._manual_switch_timetable(group, config, now, now_ts)
 
             total = sum(float(m["hours"]) for m in members) * 3600
             anchor = float(group.get("anchor_at") or group.get("created_at") or now_ts)
@@ -769,6 +1012,51 @@ class Engine:
             return self.reconcile_group(repo.get_group(group_id) or group, config, now, now_ts)
         finally:
             self._lock.release()
+
+    def _manual_switch_timetable(
+        self,
+        group: dict[str, Any],
+        config: dict[str, str],
+        now: dt.datetime,
+        now_ts: float,
+    ) -> dict[str, Any]:
+        """固定时刻表模式下的手动换班：把「下一台」写进本班次 run 的 duty_server_id，
+        借 reconcile_group 的 failed_over 分支完成切换（开下一台 → 停原当班 → 通知）。"""
+        group_id = int(group["id"])
+        members = active_members(group)
+        picked = duty_at(group, now_ts)
+        if picked is None:
+            raise ValueError("组内启用的成员不足两台")
+        current_member, shift_start = picked
+        slot_key = str(shift_start)
+
+        # 按 position 顺序取当前当班的下一台（循环到队首）
+        current_index = next(
+            (i for i, m in enumerate(members) if int(m["server_id"]) == int(current_member["server_id"])),
+            -1,
+        )
+        next_member = members[(current_index + 1) % len(members)] if current_index >= 0 else members[0]
+
+        repo.upsert_run(
+            group_id,
+            slot_key,
+            phase=PHASE_SWITCHING,
+            stage="",
+            duty_server_id=int(next_member["server_id"]),
+            failover=1,
+            manual=1,
+            event_id=0,
+        )
+        repo.add_event(
+            "manual",
+            f"{group.get('name')}：手动换班",
+            f"{current_member.get('label') or current_member['server_id']} → "
+            f"{next_member.get('label') or next_member['server_id']}",
+            group_id=group_id,
+        )
+        # reconcile_group 里 failed_over 会沿用 run.duty_server_id，把下一台当班；
+        # manual 标记让它在换班动作完成后跳过通知（手动换班界面已反馈）。
+        return self.reconcile_group(repo.get_group(group_id) or group, config, now, now_ts)
 
     def _managed_note(self, server_id: int) -> str:
         """这台机器是否被自动化流程托管。托管时返回一句说明，闲散机器返回空串。"""
@@ -917,12 +1205,49 @@ def _hours_of(group: dict[str, Any], server: dict[str, Any]) -> float:
     return 12.0
 
 
+def _member_of(group: dict[str, Any], server_id: int) -> dict[str, Any]:
+    """按 server_id 找组成员；找不到返回空 dict。"""
+    for member in group.get("members") or []:
+        if int(member.get("server_id") or 0) == int(server_id):
+            return member
+    return {}
+
+
+def _shift_span(group: dict[str, Any], duty: dict[str, Any], config: dict[str, str]) -> str:
+    """当前班次文案：优先用「班次名称（起–止）」，时刻表没配就退回小时数。"""
+    member = _member_of(group, int(duty.get("id") or 0))
+    slot_name = member.get("slot_name") or ""
+    start = member.get("start_time") or ""
+    end = member.get("end_time") or ""
+    if slot_name or start or end:
+        return messages.shift_period(slot_name, start, end)
+    # 老 hours 累加模式：没有时刻表，退回「机名（N 小时）」式表达
+    hours = float(member.get("hours") or _hours_of(group, duty))
+    label = str(duty.get("label") or "")
+    return f"{label}（{hours:g} 小时）"
+
+
 def _over_threshold(server: dict[str, Any]) -> bool:
     used = server.get("traffic_used")
     if used is None:
         return False
     threshold = float(server.get("threshold_gb") or 0)
     return threshold > 0 and float(used) >= threshold
+
+
+def _is_charging_stopped(server: dict[str, Any]) -> bool:
+    """这台机器是否已经「节省停机」到位：Stopped 且 StoppedMode=StopCharging。
+
+    普通停机（KeepCharging / Stop）照常收规格费，不算到位 —— 通知必须等到
+    节省停机确认，否则报告里写「已节省停机」就是骗人。
+    """
+    if str(server.get("instance_status") or "") != "Stopped":
+        return False
+    return str(server.get("stopped_mode") or "") == "StopCharging"
+
+
+def _all_charging_stopped(servers: list[dict[str, Any]]) -> bool:
+    return all(_is_charging_stopped(server) for server in servers)
 
 
 def _refresh(server: dict[str, Any]) -> None:

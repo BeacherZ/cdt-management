@@ -70,7 +70,8 @@ CREATE TABLE IF NOT EXISTS shift_groups (
     created_at        INTEGER NOT NULL DEFAULT 0
 );
 
--- 组成员：按 position 顺序轮换，各自跑 hours 小时
+-- 组成员：按 position 顺序轮换。老字段 hours 仍保留（兼容老组），
+-- 新版用「班次名称 + 固定起止时刻」：每天按真实时钟判定谁当班。
 CREATE TABLE IF NOT EXISTS shift_members (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     group_id   INTEGER NOT NULL,
@@ -78,6 +79,9 @@ CREATE TABLE IF NOT EXISTS shift_members (
     position   INTEGER NOT NULL DEFAULT 0,
     hours      REAL    NOT NULL DEFAULT 12,
     enabled    INTEGER NOT NULL DEFAULT 1,
+    slot_name  TEXT    NOT NULL DEFAULT '',
+    start_time TEXT    NOT NULL DEFAULT '',
+    end_time   TEXT    NOT NULL DEFAULT '',
     UNIQUE(group_id, position)
 );
 CREATE INDEX IF NOT EXISTS idx_members_group ON shift_members(group_id, position);
@@ -87,9 +91,17 @@ CREATE TABLE IF NOT EXISTS shift_runs (
     group_id            INTEGER NOT NULL,
     slot                TEXT    NOT NULL,
     phase               TEXT    NOT NULL DEFAULT 'pending',
+    -- 换班细粒度阶段：'' / starting_duty（已启动当班等 Running）/
+    -- stopping_standby（已停非当班等 Stopped）；就绪后清空
+    stage               TEXT    NOT NULL DEFAULT '',
+    -- 进行中的换班事件 ID，用于跨轮次追加完成过程、最终打完成标志
+    event_id            INTEGER NOT NULL DEFAULT 0,
     duty_server_id      INTEGER NOT NULL DEFAULT 0,
     standby_server_ids  TEXT    NOT NULL DEFAULT '',
     failover            INTEGER NOT NULL DEFAULT 0,
+    -- 手动换班标记：1 表示这次当班切换是用户手动触发的，不是流量超限故障转移。
+    -- 手动换班界面已反馈，不应再发「流量超限临时换班」的误导通知。
+    manual              INTEGER NOT NULL DEFAULT 0,
     attempts            INTEGER NOT NULL DEFAULT 0,
     started_at          INTEGER NOT NULL DEFAULT 0,
     updated_at          INTEGER NOT NULL DEFAULT 0,
@@ -122,7 +134,13 @@ CREATE TABLE IF NOT EXISTS events (
     group_id   INTEGER NOT NULL DEFAULT 0,
     server_id  INTEGER NOT NULL DEFAULT 0,
     title      TEXT    NOT NULL DEFAULT '',
-    detail     TEXT    NOT NULL DEFAULT ''
+    detail     TEXT    NOT NULL DEFAULT '',
+    -- 事件动态化：running 进行中 / done 完成 / error 失败
+    status     TEXT    NOT NULL DEFAULT 'done',
+    -- 完成过程日志（JSON 数组）：[{ts, text}]，记录「几点几分干了什么」
+    progress   TEXT    NOT NULL DEFAULT '',
+    -- 完成 / 失败时间戳，0 表示还没结束
+    finished_at INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts DESC);
 
@@ -148,10 +166,11 @@ DEFAULTS: dict[str, str] = {
     # 改密码时递增，用来让所有已发出的会话票据失效
     "session_epoch": "0",
     "timezone": "Asia/Shanghai",
-    "traffic_threshold_pct": "94",
+    "traffic_threshold_pct": "90",
     "reconcile_interval": str(settings.RECONCILE_INTERVAL),
     # 费用/余额查询：需要 RAM 具备 BSS 只读权限，缺权限时关掉即可不显示
     "billing_enabled": "1",
+    "billing_interval": "600",
     "daily_report_enabled": "1",
     "daily_report_time": "23:58",
     "notify_on_shift": "1",
@@ -228,6 +247,21 @@ def _migrate(conn: sqlite3.Connection) -> None:
             "billing_cycle": "TEXT NOT NULL DEFAULT ''",
             "billing_updated_at": "INTEGER NOT NULL DEFAULT 0",
             "billing_error": "TEXT NOT NULL DEFAULT ''",
+        },
+        "shift_members": {
+            "slot_name": "TEXT NOT NULL DEFAULT ''",
+            "start_time": "TEXT NOT NULL DEFAULT ''",
+            "end_time": "TEXT NOT NULL DEFAULT ''",
+        },
+        "events": {
+            "status": "TEXT NOT NULL DEFAULT 'done'",
+            "progress": "TEXT NOT NULL DEFAULT ''",
+            "finished_at": "INTEGER NOT NULL DEFAULT 0",
+        },
+        "shift_runs": {
+            "stage": "TEXT NOT NULL DEFAULT ''",
+            "event_id": "INTEGER NOT NULL DEFAULT 0",
+            "manual": "INTEGER NOT NULL DEFAULT 0",
         },
     }
     for table, columns in additions.items():

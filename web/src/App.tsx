@@ -669,7 +669,7 @@ export default function App() {
       {serverDialog.open && (
         <ServerDialog
           server={serverDialog.server}
-          defaultThresholdPercent={Number(settings.traffic_threshold_pct) || 94}
+          defaultThresholdPercent={Number(settings.traffic_threshold_pct) || 90}
           onClose={() => setServerDialog({ open: false, server: null })}
           onSaved={async (message) => {
             setServerDialog({ open: false, server: null })

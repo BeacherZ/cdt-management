@@ -18,6 +18,18 @@ SENSITIVE_SETTINGS = {
 }
 
 
+def _is_hhmm(value: str) -> bool:
+    """校验 HH:MM 时刻，支持 00:00–23:59。"""
+    parts = value.split(":")
+    if len(parts) != 2:
+        return False
+    try:
+        hour, minute = int(parts[0]), int(parts[1])
+    except ValueError:
+        return False
+    return 0 <= hour <= 23 and 0 <= minute <= 59
+
+
 # --------------------------------------------------------------------------
 # settings
 # --------------------------------------------------------------------------
@@ -218,7 +230,8 @@ def delete_server(server_id: int) -> None:
     db.execute("DELETE FROM traffic_samples WHERE server_id=?", (server_id,))
     # 目标没了，DNS 绑定必须一并松掉，否则记录还挂在已经不存在的机器上
     db.execute(
-        "UPDATE dns_records SET target_kind='', target_id=0, updated_at=? "
+        "UPDATE dns_records SET target_kind='', target_id=0, last_ip='', "
+        "last_status='', last_at=0, updated_at=? "
         "WHERE target_kind='server' AND target_id=?",
         (int(time.time()), server_id),
     )
@@ -360,7 +373,8 @@ def delete_keepalive(keepalive_id: int) -> None:
     if row is not None:
         # 移出保活后这台机器回到闲散状态，DNS 绑定跟着作废，避免域名指向没人管的机器
         db.execute(
-            "UPDATE dns_records SET target_kind='', target_id=0, updated_at=? "
+            "UPDATE dns_records SET target_kind='', target_id=0, last_ip='', "
+            "last_status='', last_at=0, updated_at=? "
             "WHERE target_kind='server' AND target_id=?",
             (int(time.time()), int(row["server_id"])),
         )
@@ -405,7 +419,8 @@ def bind_dns_record(record: str, kind: str, target: int) -> None:
     try:
         if kind:
             conn.execute(
-                "UPDATE dns_records SET target_kind='', target_id=0, updated_at=? "
+                "UPDATE dns_records SET target_kind='', target_id=0, last_ip='', "
+                "last_status='', last_at=0, updated_at=? "
                 "WHERE target_kind=? AND target_id=? AND record<>?",
                 (now, kind, target, record),
             )
@@ -459,6 +474,7 @@ def get_group(group_id: int) -> dict[str, Any] | None:
 def list_members(group_id: int) -> list[dict[str, Any]]:
     rows = db.query(
         "SELECT m.id, m.group_id, m.server_id, m.position, m.hours, m.enabled, "
+        "m.slot_name, m.start_time, m.end_time, "
         "s.label, s.instance_id, s.region_id, s.site, s.instance_status, s.stopped_mode, "
         "s.public_ip, s.traffic_used, s.quota_gb, s.threshold_gb, s.status_checked_at "
         "FROM shift_members m LEFT JOIN servers s ON s.id=m.server_id "
@@ -493,12 +509,25 @@ def upsert_group(payload: dict[str, Any]) -> int:
         hours = float(item.get("hours") or 0)
         if hours <= 0 or hours > 168:
             raise ValueError("每台的运行时长应在 0–168 小时之间")
+        slot_name = str(item.get("slot_name") or "").strip()
+        start_time = str(item.get("start_time") or "").strip()
+        end_time = str(item.get("end_time") or "").strip()
+        # 时刻要么都空（走老 hours 累加），要么都填且格式合法
+        if (start_time and not end_time) or (end_time and not start_time):
+            raise ValueError("班次起止时刻要成对填写")
+        if start_time and not _is_hhmm(start_time):
+            raise ValueError(f"起始时刻「{start_time}」格式应为 HH:MM")
+        if end_time and not _is_hhmm(end_time):
+            raise ValueError(f"结束时刻「{end_time}」格式应为 HH:MM")
         members.append(
             {
                 "server_id": server_id,
                 "position": index,
                 "hours": hours,
                 "enabled": 1 if item.get("enabled", True) else 0,
+                "slot_name": slot_name,
+                "start_time": start_time,
+                "end_time": end_time,
             }
         )
 
@@ -515,11 +544,18 @@ def upsert_group(payload: dict[str, Any]) -> int:
                 raise ValueError("换班组不存在")
             # 成员构成变了就重置轮换起点，避免时序错乱
             old = conn.execute(
-                "SELECT server_id, hours FROM shift_members WHERE group_id=? ORDER BY position",
+                "SELECT server_id, hours, slot_name, start_time, end_time "
+                "FROM shift_members WHERE group_id=? ORDER BY position",
                 (group_id,),
             ).fetchall()
-            old_signature = [(row["server_id"], row["hours"]) for row in old]
-            new_signature = [(m["server_id"], m["hours"]) for m in members]
+            old_signature = [
+                (row["server_id"], row["hours"], row["slot_name"], row["start_time"], row["end_time"])
+                for row in old
+            ]
+            new_signature = [
+                (m["server_id"], m["hours"], m["slot_name"], m["start_time"], m["end_time"])
+                for m in members
+            ]
             conn.execute(
                 "UPDATE shift_groups SET name=?, enabled=?, failover_enabled=?, ddns_record=? WHERE id=?",
                 (name, enabled, failover, ddns_record, group_id),
@@ -539,9 +575,18 @@ def upsert_group(payload: dict[str, Any]) -> int:
 
         for member in members:
             conn.execute(
-                "INSERT INTO shift_members(group_id, server_id, position, hours, enabled) "
-                "VALUES(?,?,?,?,?)",
-                (group_id, member["server_id"], member["position"], member["hours"], member["enabled"]),
+                "INSERT INTO shift_members(group_id, server_id, position, hours, enabled, "
+                "slot_name, start_time, end_time) VALUES(?,?,?,?,?,?,?,?)",
+                (
+                    group_id,
+                    member["server_id"],
+                    member["position"],
+                    member["hours"],
+                    member["enabled"],
+                    member["slot_name"],
+                    member["start_time"],
+                    member["end_time"],
+                ),
             )
         conn.execute("COMMIT")
         return group_id
@@ -558,7 +603,8 @@ def delete_group(group_id: int) -> None:
         conn.execute("DELETE FROM shift_runs WHERE group_id=?", (group_id,))
         conn.execute("DELETE FROM shift_groups WHERE id=?", (group_id,))
         conn.execute(
-            "UPDATE dns_records SET target_kind='', target_id=0, updated_at=? "
+            "UPDATE dns_records SET target_kind='', target_id=0, last_ip='', "
+            "last_status='', last_at=0, updated_at=? "
             "WHERE target_kind='group' AND target_id=?",
             (int(time.time()), group_id),
         )
@@ -626,12 +672,65 @@ def add_event(
     level: str = "info",
     group_id: int = 0,
     server_id: int = 0,
-) -> None:
-    db.insert(
-        "INSERT INTO events(ts, level, kind, group_id, server_id, title, detail) "
-        "VALUES(?,?,?,?,?,?,?)",
-        (int(time.time()), level, kind, group_id, server_id, title, detail),
+    status: str = "done",
+) -> int:
+    """写入一条事件。返回事件 ID，供后续 add_event_progress 追加过程。
+
+    status 取值：done（一次成型，历史事件）/ running（进行中）/ error（失败）。
+    """
+    now = int(time.time())
+    return db.insert(
+        "INSERT INTO events(ts, level, kind, group_id, server_id, title, detail, "
+        "status, finished_at) VALUES(?,?,?,?,?,?,?,?,?)",
+        (
+            now,
+            level,
+            kind,
+            group_id,
+            server_id,
+            title,
+            detail,
+            status,
+            now if status != "running" else 0,
+        ),
     )
+
+
+def add_event_progress(event_id: int, text: str) -> None:
+    """往事件的过程日志追加一条，并刷新 updated 时间戳（用 ts 近似当 updated_at）。
+
+    相邻两条 text 相同就跳过，避免换班每轮 reconcile 反复追加同一条进度刷屏。
+    """
+    if not event_id:
+        return
+    now = int(time.time())
+    row = db.query_one("SELECT progress FROM events WHERE id=?", (event_id,))
+    if row is None:
+        return
+    try:
+        progress = json.loads(row["progress"] or "[]")
+    except Exception:
+        progress = []
+    if progress and progress[-1].get("text") == text:
+        return
+    progress.append({"ts": now, "text": text})
+    db.execute(
+        "UPDATE events SET progress=? WHERE id=?",
+        (json.dumps(progress, ensure_ascii=False), event_id),
+    )
+
+
+def finish_event(event_id: int, status: str = "done", detail: str = "") -> None:
+    """标记事件结束。status：done / error。"""
+    if not event_id:
+        return
+    sets = ["status=?", "finished_at=?"]
+    params: list[Any] = [status, int(time.time())]
+    if detail:
+        sets.append("detail=?")
+        params.append(detail)
+    params.append(event_id)
+    db.execute(f"UPDATE events SET {', '.join(sets)} WHERE id=?", params)
 
 
 def list_events(
@@ -650,7 +749,20 @@ def list_events(
         params.append(group_id)
     sql += " ORDER BY id DESC LIMIT ?"
     params.append(limit)
-    return [dict(row) for row in db.query(sql, params)]
+    events = [dict(row) for row in db.query(sql, params)]
+    for event in events:
+        event["progress"] = _parse_progress(event.get("progress"))
+    return events
+
+
+def _parse_progress(raw: str) -> list[dict[str, Any]]:
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
 
 
 def prune_events(days: int) -> None:

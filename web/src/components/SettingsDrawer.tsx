@@ -4,11 +4,13 @@ import {
   Cloud,
   Download,
   Globe2,
+  KeyRound,
   LoaderCircle,
   Save,
   Send,
   SlidersHorizontal,
   TriangleAlert,
+  UserRound,
   X,
 } from 'lucide-react'
 import { fetchLatestRelease, post } from '../api'
@@ -22,6 +24,7 @@ type Props = {
 }
 
 type Tab = 'general' | 'ddns' | 'notify' | 'about'
+type NotifyTab = 'channel' | 'category'
 
 const TIMEZONES = [
   'Asia/Shanghai',
@@ -34,6 +37,7 @@ const TIMEZONES = [
 
 export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
   const [tab, setTab] = useState<Tab>('general')
+  const [notifyTab, setNotifyTab] = useState<NotifyTab>('channel')
   const [form, setForm] = useState(() => {
     const draft = structuredClone(settings)
     // 老版本的响应里只有单条 record，补成数组，后面全按数组处理
@@ -47,6 +51,7 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
   const [busy, setBusy] = useState(false)
   const [testing, setTesting] = useState('')
   const [testResult, setTestResult] = useState('')
+  const [newUsername, setNewUsername] = useState(settings.admin_username ?? '')
   const [newPassword, setNewPassword] = useState('')
 
   function patch(updater: (draft: Settings) => void) {
@@ -66,6 +71,7 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
         traffic_threshold_pct: Number(form.traffic_threshold_pct),
         reconcile_interval: Number(form.reconcile_interval),
         billing_enabled: form.billing_enabled,
+        billing_interval: Number(form.billing_interval),
         daily_report_enabled: form.daily_report_enabled,
         daily_report_time: form.daily_report_time,
         notify_on_shift: form.notify_on_shift,
@@ -108,6 +114,7 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
           headers: (form.webhook as unknown as { headers?: string }).headers || '',
           body: form.webhook.body,
         },
+        new_username: newUsername || undefined,
         new_password: newPassword || undefined,
       })
       onSaved('设置已保存')
@@ -122,8 +129,11 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
     setTesting(channel)
     setTestResult('')
     try {
+      // 把当前表单草稿一起发过去，测的是「此刻填的值」而不是已保存的旧配置；
+      // 留空的敏感字段（token / 密码）后端会回退到已保存值。
       const result = await post<{ ok: boolean; detail: string; status?: string }>(
         `/api/v1/settings/test/${channel}`,
+        form,
       )
       setTestResult(`${result.ok ? '✅' : '❌'} ${result.status || result.detail}`)
     } catch (err) {
@@ -168,6 +178,50 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
         <div className="modal-body" style={{ flex: 1 }}>
           {tab === 'general' && (
             <>
+              <div className="section-head">
+                <h2>
+                  <KeyRound size={14} /> 账号
+                </h2>
+                <span className="section-sub">登录面板用的账号与密码</span>
+              </div>
+              <div className="account-card">
+                <div className="grid-2">
+                  <div className="field">
+                    <label htmlFor="newuser">
+                      <UserRound size={12} /> 用户名
+                    </label>
+                    <input
+                      id="newuser"
+                      className="input"
+                      value={newUsername}
+                      onChange={(event) => setNewUsername(event.target.value)}
+                      placeholder="至少 3 个字符"
+                      autoComplete="username"
+                    />
+                  </div>
+                  <div className="field">
+                    <label htmlFor="newpw">登录密码</label>
+                    <input
+                      id="newpw"
+                      className="input"
+                      type="password"
+                      value={newPassword}
+                      onChange={(event) => setNewPassword(event.target.value)}
+                      placeholder="留空表示不修改，至少 10 个字符"
+                      autoComplete="new-password"
+                    />
+                  </div>
+                </div>
+                <div className="hint">
+                  改用户名或密码后，其它已登录的浏览器会立即退出，需要重新登录。
+                </div>
+              </div>
+
+              <div className="section-head">
+                <h2>
+                  <SlidersHorizontal size={14} /> 运行参数
+                </h2>
+              </div>
               <div className="grid-2">
                 <div className="field">
                   <label htmlFor="tz">
@@ -187,7 +241,7 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
                   </select>
                 </div>
                 <div className="field">
-                  <label htmlFor="interval">同步间隔（秒）</label>
+                  <label htmlFor="interval">巡检间隔（秒）</label>
                   <input
                     id="interval"
                     className="input"
@@ -199,7 +253,22 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
                       patch((draft) => (draft.reconcile_interval = event.target.value))
                     }
                   />
-                  <div className="hint">建议 60；越短越灵敏，但更耗阿里云 API 配额。</div>
+                  <div className="hint">流量 / 状态 / 保活的查询间隔，默认 60（1 分钟）。</div>
+                </div>
+                <div className="field">
+                  <label htmlFor="billingInterval">费用查询间隔（秒）</label>
+                  <input
+                    id="billingInterval"
+                    className="input"
+                    type="number"
+                    min={60}
+                    max={86400}
+                    value={form.billing_interval}
+                    onChange={(event) =>
+                      patch((draft) => (draft.billing_interval = event.target.value))
+                    }
+                  />
+                  <div className="hint">账单 / 余额是慢数据，默认 600（10 分钟）。</div>
                 </div>
               </div>
 
@@ -224,7 +293,7 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
               <div>
                 <Switch
                   label="费用与余额"
-                  hint="每 30 分钟查一次本月账单和账户余额，显示在服务器卡片上；需要 RAM 具备 BSS 只读权限"
+                  hint="按上方间隔查本月账单和账户余额，显示在服务器卡片上；需要 RAM 具备 BSS 只读权限"
                   checked={form.billing_enabled}
                   onChange={(value) => patch((draft) => (draft.billing_enabled = value))}
                 />
@@ -251,64 +320,6 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
                     />
                   </div>
                 )}
-              </div>
-
-              <div>
-                <div className="section-head" style={{ marginBottom: 4 }}>
-                  <h2 style={{ fontSize: 13 }}>推送哪些事件</h2>
-                </div>
-                <Switch
-                  label="换班完成"
-                  checked={form.notify_on_shift}
-                  onChange={(value) => patch((draft) => (draft.notify_on_shift = value))}
-                />
-                <Switch
-                  label="临时换班（故障转移）"
-                  checked={form.notify_on_failover}
-                  onChange={(value) => patch((draft) => (draft.notify_on_failover = value))}
-                />
-                <Switch
-                  label="抢占恢复"
-                  checked={form.notify_on_recovery}
-                  onChange={(value) => patch((draft) => (draft.notify_on_recovery = value))}
-                />
-                <Switch
-                  label="超限停机"
-                  hint="当班流量达到阈值且无处可换时，强制节省停机"
-                  checked={form.notify_on_limit_stop}
-                  onChange={(value) => patch((draft) => (draft.notify_on_limit_stop = value))}
-                />
-                <Switch
-                  label="全局熔断"
-                  hint="所有成员都超限时，全部节省停机"
-                  checked={form.notify_on_breaker}
-                  onChange={(value) => patch((draft) => (draft.notify_on_breaker = value))}
-                />
-                <Switch
-                  label="换班异常"
-                  hint="准点换班超过 10 分钟仍未就绪时提醒"
-                  checked={form.notify_on_error}
-                  onChange={(value) => patch((draft) => (draft.notify_on_error = value))}
-                />
-                <Switch
-                  label="单机保活恢复"
-                  hint="单机保活的实例被拉起成功后提醒"
-                  checked={form.notify_on_keepalive}
-                  onChange={(value) => patch((draft) => (draft.notify_on_keepalive = value))}
-                />
-              </div>
-
-              <div className="field">
-                <label htmlFor="newpw">修改面板密码</label>
-                <input
-                  id="newpw"
-                  className="input"
-                  type="password"
-                  value={newPassword}
-                  onChange={(event) => setNewPassword(event.target.value)}
-                  placeholder="留空表示不修改，至少 10 个字符"
-                  autoComplete="new-password"
-                />
               </div>
             </>
           )}
@@ -456,222 +467,315 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
 
           {tab === 'notify' && (
             <>
-              <div className="section-head" style={{ marginBottom: 2 }}>
-                <h2 style={{ fontSize: 13 }}>
-                  <BellRing size={13} style={{ verticalAlign: -2 }} /> Telegram
-                </h2>
-              </div>
-              <Switch
-                label="启用 Telegram"
-                checked={form.telegram.enabled}
-                onChange={(value) => patch((draft) => (draft.telegram.enabled = value))}
-              />
-              <div className="grid-2">
-                <div className="field">
-                  <label htmlFor="tgtoken">Bot Token</label>
-                  <input
-                    id="tgtoken"
-                    className="input"
-                    type="password"
-                    value={tgToken}
-                    onChange={(event) =>
-                      patch(
-                        (draft) =>
-                          (draft.telegram as unknown as { token: string }).token =
-                            event.target.value,
-                      )
-                    }
-                    placeholder={form.telegram.token_configured ? '已配置，留空不修改' : '123456:AA…'}
-                    autoComplete="new-password"
-                  />
-                </div>
-                <div className="field">
-                  <label htmlFor="tgchat">Chat ID</label>
-                  <input
-                    id="tgchat"
-                    className="input"
-                    value={form.telegram.chat_id}
-                    onChange={(event) =>
-                      patch((draft) => (draft.telegram.chat_id = event.target.value))
-                    }
-                    placeholder="123456789"
-                  />
-                </div>
-              </div>
-              <div className="field">
-                <label htmlFor="tgproxy">代理（可选）</label>
-                <input
-                  id="tgproxy"
-                  className="input"
-                  value={form.telegram.proxy}
-                  onChange={(event) => patch((draft) => (draft.telegram.proxy = event.target.value))}
-                  placeholder="http://127.0.0.1:7890 或 socks5h://127.0.0.1:1080"
-                />
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div className="sub-tabs">
                 <button
-                  className="btn"
-                  onClick={() => test('telegram')}
-                  disabled={testing !== ''}
+                  className={notifyTab === 'channel' ? 'on' : ''}
+                  onClick={() => setNotifyTab('channel')}
                 >
-                  {testing === 'telegram' ? (
-                    <LoaderCircle size={14} className="spin" />
-                  ) : (
-                    <Send size={14} />
-                  )}
-                  发送测试
+                  通知渠道
+                </button>
+                <button
+                  className={notifyTab === 'category' ? 'on' : ''}
+                  onClick={() => setNotifyTab('category')}
+                >
+                  通知类别
                 </button>
               </div>
 
-              <hr style={{ border: 0, borderTop: '1px solid var(--line)', margin: '6px 0' }} />
+              {notifyTab === 'channel' && (
+                <>
+                  <div className="section-head" style={{ marginBottom: 2 }}>
+                    <h2>
+                      <BellRing size={13} /> Telegram
+                    </h2>
+                  </div>
+                  <Switch
+                    label="启用 Telegram"
+                    checked={form.telegram.enabled}
+                    onChange={(value) => patch((draft) => (draft.telegram.enabled = value))}
+                  />
+                  <div className="grid-2">
+                    <div className="field">
+                      <label htmlFor="tgtoken">Bot Token</label>
+                      <input
+                        id="tgtoken"
+                        className="input"
+                        type="password"
+                        value={tgToken}
+                        onChange={(event) =>
+                          patch(
+                            (draft) =>
+                              (draft.telegram as unknown as { token: string }).token =
+                                event.target.value,
+                          )
+                        }
+                        placeholder={form.telegram.token_configured ? '已配置，留空不修改' : '123456:AA…'}
+                        autoComplete="new-password"
+                      />
+                    </div>
+                    <div className="field">
+                      <label htmlFor="tgchat">Chat ID</label>
+                      <input
+                        id="tgchat"
+                        className="input"
+                        value={form.telegram.chat_id}
+                        onChange={(event) =>
+                          patch((draft) => (draft.telegram.chat_id = event.target.value))
+                        }
+                        placeholder="123456789"
+                      />
+                    </div>
+                  </div>
+                  <div className="field">
+                    <label htmlFor="tgproxy">代理（可选）</label>
+                    <input
+                      id="tgproxy"
+                      className="input"
+                      value={form.telegram.proxy}
+                      onChange={(event) =>
+                        patch((draft) => (draft.telegram.proxy = event.target.value))
+                      }
+                      placeholder="http://127.0.0.1:7890 或 socks5h://127.0.0.1:1080"
+                    />
+                  </div>
+                  <div className="test-row">
+                    <button
+                      className="btn"
+                      onClick={() => test('telegram')}
+                      disabled={testing !== ''}
+                    >
+                      {testing === 'telegram' ? (
+                        <LoaderCircle size={14} className="spin" />
+                      ) : (
+                        <Send size={14} />
+                      )}
+                      发送测试
+                    </button>
+                  </div>
 
-              <div className="section-head" style={{ marginBottom: 2 }}>
-                <h2 style={{ fontSize: 13 }}>邮件（SMTP）</h2>
-              </div>
-              <Switch
-                label="启用邮件通知"
-                checked={form.email.enabled}
-                onChange={(value) => patch((draft) => (draft.email.enabled = value))}
-              />
-              <div className="grid-2">
-                <div className="field">
-                  <label htmlFor="mailhost">SMTP 主机</label>
-                  <input
-                    id="mailhost"
-                    className="input"
-                    value={form.email.host}
-                    onChange={(event) => patch((draft) => (draft.email.host = event.target.value))}
-                    placeholder="smtp.example.com"
+                  <hr style={{ border: 0, borderTop: '1px solid var(--line)', margin: '6px 0' }} />
+
+                  <div className="section-head" style={{ marginBottom: 2 }}>
+                    <h2>邮件（SMTP）</h2>
+                  </div>
+                  <Switch
+                    label="启用邮件通知"
+                    checked={form.email.enabled}
+                    onChange={(value) => patch((draft) => (draft.email.enabled = value))}
                   />
-                </div>
-                <div className="field">
-                  <label htmlFor="mailport">端口</label>
-                  <input
-                    id="mailport"
-                    className="input"
-                    type="number"
-                    value={form.email.port}
-                    onChange={(event) => patch((draft) => (draft.email.port = event.target.value))}
+                  <div className="grid-2">
+                    <div className="field">
+                      <label htmlFor="mailhost">SMTP 主机</label>
+                      <input
+                        id="mailhost"
+                        className="input"
+                        value={form.email.host}
+                        onChange={(event) =>
+                          patch((draft) => (draft.email.host = event.target.value))
+                        }
+                        placeholder="smtp.example.com"
+                      />
+                    </div>
+                    <div className="field">
+                      <label htmlFor="mailport">端口</label>
+                      <input
+                        id="mailport"
+                        className="input"
+                        type="number"
+                        value={form.email.port}
+                        onChange={(event) =>
+                          patch((draft) => (draft.email.port = event.target.value))
+                        }
+                      />
+                    </div>
+                  </div>
+                  <div className="grid-2">
+                    <div className="field">
+                      <label htmlFor="mailsec">加密方式</label>
+                      <select
+                        id="mailsec"
+                        className="select"
+                        value={form.email.security}
+                        onChange={(event) =>
+                          patch((draft) => (draft.email.security = event.target.value))
+                        }
+                      >
+                        <option value="ssl">SSL（465）</option>
+                        <option value="starttls">STARTTLS（587）</option>
+                        <option value="none">不加密</option>
+                      </select>
+                    </div>
+                    <div className="field">
+                      <label htmlFor="mailto">收件人</label>
+                      <input
+                        id="mailto"
+                        className="input"
+                        value={form.email.to}
+                        onChange={(event) =>
+                          patch((draft) => (draft.email.to = event.target.value))
+                        }
+                        placeholder="noreply@example.com"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid-2">
+                    <div className="field">
+                      <label htmlFor="mailuser">用户名</label>
+                      <input
+                        id="mailuser"
+                        className="input"
+                        value={form.email.username}
+                        onChange={(event) =>
+                          patch((draft) => (draft.email.username = event.target.value))
+                        }
+                        autoComplete="off"
+                      />
+                    </div>
+                    <div className="field">
+                      <label htmlFor="mailpass">密码 / 授权码</label>
+                      <input
+                        id="mailpass"
+                        className="input"
+                        type="password"
+                        value={mailPassword}
+                        onChange={(event) =>
+                          patch(
+                            (draft) =>
+                              (draft.email as unknown as { password: string }).password =
+                                event.target.value,
+                          )
+                        }
+                        placeholder={form.email.password_configured ? '已配置，留空不修改' : ''}
+                        autoComplete="new-password"
+                      />
+                    </div>
+                  </div>
+                  <div className="test-row">
+                    <button className="btn" onClick={() => test('email')} disabled={testing !== ''}>
+                      {testing === 'email' ? (
+                        <LoaderCircle size={14} className="spin" />
+                      ) : (
+                        <Send size={14} />
+                      )}
+                      发送测试
+                    </button>
+                  </div>
+
+                  <hr style={{ border: 0, borderTop: '1px solid var(--line)', margin: '6px 0' }} />
+
+                  <div className="section-head" style={{ marginBottom: 2 }}>
+                    <h2>Webhook</h2>
+                  </div>
+                  <Switch
+                    label="启用 Webhook"
+                    checked={form.webhook.enabled}
+                    onChange={(value) => patch((draft) => (draft.webhook.enabled = value))}
                   />
-                </div>
-              </div>
-              <div className="grid-2">
-                <div className="field">
-                  <label htmlFor="mailsec">加密方式</label>
-                  <select
-                    id="mailsec"
-                    className="select"
-                    value={form.email.security}
-                    onChange={(event) =>
-                      patch((draft) => (draft.email.security = event.target.value))
-                    }
+                  <div className="grid-2">
+                    <div className="field">
+                      <label htmlFor="whurl">地址</label>
+                      <input
+                        id="whurl"
+                        className="input"
+                        value={form.webhook.url}
+                        onChange={(event) =>
+                          patch((draft) => (draft.webhook.url = event.target.value))
+                        }
+                        placeholder="https://example.com/hook"
+                      />
+                    </div>
+                    <div className="field">
+                      <label htmlFor="whmethod">方法</label>
+                      <select
+                        id="whmethod"
+                        className="select"
+                        value={form.webhook.method}
+                        onChange={(event) =>
+                          patch((draft) => (draft.webhook.method = event.target.value))
+                        }
+                      >
+                        <option value="POST">POST</option>
+                        <option value="GET">GET</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div className="field">
+                    <label htmlFor="whbody">请求体模板（留空用内置 JSON）</label>
+                    <textarea
+                      id="whbody"
+                      className="textarea"
+                      value={form.webhook.body}
+                      onChange={(event) =>
+                        patch((draft) => (draft.webhook.body = event.target.value))
+                      }
+                      placeholder={'{"text":"{title}\\n{text}"}'}
+                    />
+                    <div className="hint">可用占位符：{'{title}'} {'{text}'} {'{kind}'}</div>
+                  </div>
+                  <button
+                    className="btn"
+                    onClick={() => test('webhook')}
+                    disabled={testing !== ''}
                   >
-                    <option value="ssl">SSL（465）</option>
-                    <option value="starttls">STARTTLS（587）</option>
-                    <option value="none">不加密</option>
-                  </select>
-                </div>
-                <div className="field">
-                  <label htmlFor="mailto">收件人</label>
-                  <input
-                    id="mailto"
-                    className="input"
-                    value={form.email.to}
-                    onChange={(event) => patch((draft) => (draft.email.to = event.target.value))}
-                    placeholder="noreply@example.com"
-                  />
-                </div>
-              </div>
-              <div className="grid-2">
-                <div className="field">
-                  <label htmlFor="mailuser">用户名</label>
-                  <input
-                    id="mailuser"
-                    className="input"
-                    value={form.email.username}
-                    onChange={(event) =>
-                      patch((draft) => (draft.email.username = event.target.value))
-                    }
-                    autoComplete="off"
-                  />
-                </div>
-                <div className="field">
-                  <label htmlFor="mailpass">密码 / 授权码</label>
-                  <input
-                    id="mailpass"
-                    className="input"
-                    type="password"
-                    value={mailPassword}
-                    onChange={(event) =>
-                      patch(
-                        (draft) =>
-                          (draft.email as unknown as { password: string }).password =
-                            event.target.value,
-                      )
-                    }
-                    placeholder={form.email.password_configured ? '已配置，留空不修改' : ''}
-                    autoComplete="new-password"
-                  />
-                </div>
-              </div>
-              <div style={{ display: 'flex', gap: 10 }}>
-                <button className="btn" onClick={() => test('email')} disabled={testing !== ''}>
-                  {testing === 'email' ? <LoaderCircle size={14} className="spin" /> : <Send size={14} />}
-                  发送测试
-                </button>
-              </div>
+                    {testing === 'webhook' ? (
+                      <LoaderCircle size={14} className="spin" />
+                    ) : (
+                      <Send size={14} />
+                    )}
+                    发送测试
+                  </button>
+                </>
+              )}
 
-              <hr style={{ border: 0, borderTop: '1px solid var(--line)', margin: '6px 0' }} />
-
-              <div className="section-head" style={{ marginBottom: 2 }}>
-                <h2 style={{ fontSize: 13 }}>Webhook</h2>
-              </div>
-              <Switch
-                label="启用 Webhook"
-                checked={form.webhook.enabled}
-                onChange={(value) => patch((draft) => (draft.webhook.enabled = value))}
-              />
-              <div className="grid-2">
-                <div className="field">
-                  <label htmlFor="whurl">地址</label>
-                  <input
-                    id="whurl"
-                    className="input"
-                    value={form.webhook.url}
-                    onChange={(event) => patch((draft) => (draft.webhook.url = event.target.value))}
-                    placeholder="https://example.com/hook"
+              {notifyTab === 'category' && (
+                <>
+                  <div className="section-head" style={{ marginBottom: 6 }}>
+                    <h2>
+                      <BellRing size={13} /> 推送哪些事件
+                    </h2>
+                    <span className="section-sub">勾选后，对应事件会通过已启用的渠道推送</span>
+                  </div>
+                  <Switch
+                    label="换班完成"
+                    checked={form.notify_on_shift}
+                    onChange={(value) => patch((draft) => (draft.notify_on_shift = value))}
                   />
-                </div>
-                <div className="field">
-                  <label htmlFor="whmethod">方法</label>
-                  <select
-                    id="whmethod"
-                    className="select"
-                    value={form.webhook.method}
-                    onChange={(event) =>
-                      patch((draft) => (draft.webhook.method = event.target.value))
-                    }
-                  >
-                    <option value="POST">POST</option>
-                    <option value="GET">GET</option>
-                  </select>
-                </div>
-              </div>
-              <div className="field">
-                <label htmlFor="whbody">请求体模板（留空用内置 JSON）</label>
-                <textarea
-                  id="whbody"
-                  className="textarea"
-                  value={form.webhook.body}
-                  onChange={(event) => patch((draft) => (draft.webhook.body = event.target.value))}
-                  placeholder={'{"text":"{title}\\n{text}"}'}
-                />
-                <div className="hint">可用占位符：{'{title}'} {'{text}'} {'{kind}'}</div>
-              </div>
-              <button className="btn" onClick={() => test('webhook')} disabled={testing !== ''}>
-                {testing === 'webhook' ? <LoaderCircle size={14} className="spin" /> : <Send size={14} />}
-                发送测试
-              </button>
+                  <Switch
+                    label="临时换班（故障转移）"
+                    checked={form.notify_on_failover}
+                    onChange={(value) => patch((draft) => (draft.notify_on_failover = value))}
+                  />
+                  <Switch
+                    label="抢占恢复"
+                    checked={form.notify_on_recovery}
+                    onChange={(value) => patch((draft) => (draft.notify_on_recovery = value))}
+                  />
+                  <Switch
+                    label="超限停机"
+                    hint="当班流量达到阈值且无处可换时，强制节省停机"
+                    checked={form.notify_on_limit_stop}
+                    onChange={(value) => patch((draft) => (draft.notify_on_limit_stop = value))}
+                  />
+                  <Switch
+                    label="全局熔断"
+                    hint="所有成员都超限时，全部节省停机"
+                    checked={form.notify_on_breaker}
+                    onChange={(value) => patch((draft) => (draft.notify_on_breaker = value))}
+                  />
+                  <Switch
+                    label="换班异常"
+                    hint="准点换班超过 10 分钟仍未就绪时提醒"
+                    checked={form.notify_on_error}
+                    onChange={(value) => patch((draft) => (draft.notify_on_error = value))}
+                  />
+                  <Switch
+                    label="单机保活恢复"
+                    hint="单机保活的实例被拉起成功后提醒"
+                    checked={form.notify_on_keepalive}
+                    onChange={(value) => patch((draft) => (draft.notify_on_keepalive = value))}
+                  />
+                </>
+              )}
             </>
           )}
 
@@ -699,6 +803,11 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
 
         {tab !== 'about' && (
           <div className="modal-foot">
+            <span className="foot-note">
+              {newUsername !== (settings.admin_username ?? '') || newPassword
+                ? '账号有改动，保存后生效'
+                : '修改会即时生效'}
+            </span>
             <span className="spacer" />
             <button className="btn" onClick={onClose}>
               取消
@@ -743,20 +852,6 @@ function AboutPanel({ repo, version }: { repo: string; version: string }) {
         <label>当前版本</label>
         <div style={{ fontFamily: 'ui-monospace, Consolas, monospace', fontSize: 13 }}>
           v{version || '未知'}
-        </div>
-      </div>
-      <div className="field">
-        <label>上游与致谢</label>
-        <div className="hint" style={{ lineHeight: 1.75 }}>
-          面板与交互参考{' '}
-          <a href="https://github.com/wang4386/CDT-Monitor" target="_blank" rel="noreferrer">
-            wang4386/CDT-Monitor
-          </a>
-          （MIT，作者 青柠）；安装脚本形态参考{' '}
-          <a href="https://github.com/BeacherZ/dailycheckin-plus" target="_blank" rel="noreferrer">
-            BeacherZ/dailycheckin-plus
-          </a>
-          。本项目的换班、DDNS 与通知逻辑为独立实现。
         </div>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>

@@ -7,18 +7,40 @@
 | 模块 | 干什么 |
 | --- | --- |
 | **单机保活** | 实例掉线（含抢占被回收）就自动拉起来，不换班、不停机 |
-| **联合换班** | 多台服务器编成一组，各自运行指定小时数，轮流当班，同一时刻只留一台在线 |
+| **联合换班** | 多台服务器编成一组，各自运行指定时长，轮流当班，同一时刻只留一台在线 |
 | **DNS** | 域名记录集中管理，一条记录显式绑一台机器或一个换班组，没绑的谁也不会动 |
 
 当班实例的公网 IP 会同步到它绑定的那条 Cloudflare A 记录，换班、故障转移、熔断、抢占恢复都会推一条结构化通知。
 
-没编进任何流程的**闲散服务器**照旧可以手动开关机：服务器页点「关机」按节省停机模式停（不计规格费），点「开机」拉起。托管中的机器按钮会灰掉，避免和自动流程互相拉扯。
+没编进任何流程的**闲散服务器**照旧可以手动开关机。
 
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 ![python](https://img.shields.io/badge/python-3.13-blue)
 ![docker](https://img.shields.io/badge/docker-amd64%20%7C%20arm64-2496ed)
 
-> 界面与交互参考 [wang4386/CDT-Monitor](https://github.com/wang4386/CDT-Monitor)（MIT，作者 **青柠**）；安装脚本形态参考 [BeacherZ/dailycheckin-plus](https://github.com/BeacherZ/dailycheckin-plus)。换班、DDNS、通知逻辑为本项目独立实现。详见 [NOTICE.md](NOTICE.md)。
+> 界面与交互参考 [wang4386/CDT-Monitor](https://github.com/wang4386/CDT-Monitor)（MIT，作者 **青柠**）。换班、DDNS、通知逻辑为本项目独立实现。详见 [NOTICE.md](NOTICE.md)。
+
+## 界面
+
+登录后左侧三个总菜单，点进去分别是概览、保活、DNS。
+
+![登录](docs/screenshots/01-login.png)
+
+概览最上面四张卡：**服务器 / 单机保活 / 联合换班 / 月累计流量**。前三张可以直接点进去。
+
+![概览](docs/screenshots/02-dashboard.png)
+
+**联合换班**：按顺序一台一台当班，时间轴按各自时长按比例画出来，谁在线上、下次几点换、待机几台，一屏看完。
+
+![联合换班](docs/screenshots/04-shift.png)
+
+**服务器**：一台实例一张卡，别名、地域、公网 IP、流量进度、本月费用与余额一眼看全。没编进流程的机器可以手动开关机，托管中的机器按钮会灰掉，避免和自动流程拉扯。
+
+![服务器](docs/screenshots/05-servers.png)
+
+**DNS**：一条域名一行，绑定目标直接在下拉里选（单机保活 / 非保活实例 / 换班组），右侧是它现在解析到哪、该解析到哪。
+
+![DNS](docs/screenshots/15-dns.png)
 
 ## 快速开始
 
@@ -32,9 +54,7 @@
 curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/install.sh | bash
 ```
 
-内部走【方式三】的 `docker run`；没装 Docker 会自动装。
-
-换端口或换目录自行加参数：
+内部走【方式三】的 `docker run`；没装 Docker 会自动装。换端口或换目录自行加参数：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/install.sh | PORT=18282 DIR=/srv/cdt bash
@@ -66,15 +86,6 @@ docker compose up -d
 docker compose logs -f cdt-management
 ```
 
-不需要提前 `chown`：容器启动时会自己把 `/data` 的属主调整到运行用户，再降权拉起应用。
-如果宿主机目录属于别的用户（NAS、家目录部署），填 `PUID`/`PGID` 让容器按那个身份跑即可：
-
-```yaml
-    environment:
-      PUID: 1000
-      PGID: 1000
-```
-
 **升级**（两行一起粘，任意目录都能跑）：
 
 ```bash
@@ -94,9 +105,6 @@ docker run -d --name cdt-management --restart unless-stopped --init \
   -v /opt/docker/cdt-management:/data \
   ghcr.io/beacherz/cdt-management:latest
 ```
-
-不需要提前 `chown`，容器会自己把挂载目录交给运行用户。宿主机目录属于非 root 用户时，
-加 `-e PUID=$(id -u) -e PGID=$(id -g)` 让容器按你的身份运行，宿主机权限一个字都不用动。
 
 **升级**：
 
@@ -120,155 +128,28 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 
 两条都会问一次 `yes`，输对了才动手。
 
-## 界面
-
-登录后左侧有三个总菜单，子项缩进挂在下面：
-
-```
-概览              ← 点进去是概览页
-  └ 服务器
-保活              ← 分组标题，点了没反应
-  ├ 单机保活
-  └ 联合换班
-DNS               ← 域名记录与绑定（右侧数字是记录条数）
-```
-
-![概览](docs/screenshots/02-dashboard.png)
-
-概览最上面四张卡：**服务器 / 单机保活 / 联合换班 / 累计流量**。前三张可以直接点进去，
-不用再从侧栏绕一圈。
-
-**联合换班**：按顺序一台一台当班，时间轴按各自时长按比例画出来，谁在线上、下次几点换、待机几台，一屏看完。
-
-![联合换班](docs/screenshots/04-shift.png)
-
-**单机保活**：只做一件事——实例掉线就拉起来，不参与换班。
-
-![单机保活](docs/screenshots/03-keepalive.png)
-
-**换班组成员编辑**：顺序上下移、每台运行几小时，都在这一屏改完；改完自动按新排班重新计时。DDNS 域名只在这里只读显示，改绑在「DNS」页做。
-
-![编辑换班组](docs/screenshots/10-group-dialog.png)
-
-**DNS**：一条域名一行，绑定目标直接在下拉里选（单机保活 / 非保活实例 / 换班组），右侧是它现在解析到哪、该解析到哪。
-
-![DNS](docs/screenshots/15-dns.png)
-
-**服务器**：一台实例一张卡。卡片上只放日常要看的六样东西——**别名、真实地域（中文名）、公网 IP、
-流量进度、实例 ID、本月费用与余额**；AccessKey 打码值不上卡片（对判断没用，要换密钥去编辑弹窗）。
-地域名从 `web/src/regions.ts` 统一取，`ap-northeast-1` 这类 API 代码不直接摆给用户看，
-原始代码放在鼠标悬停提示里。已编进换班组的机器不再提供"加入单机保活"入口，避免两套流程互相拉扯。
-
-每张卡片底部都有一行「归属」标记，一眼看出这台机器现在归谁管：
-
-| 卡片底部标记 | 含义 | 手动开关机 |
-| --- | --- | --- |
-| `闲散 · 手动` | 没编进单机保活 / 换班组 | **可用**，点「开机」「关机」直接下发 |
-| `换班组「xxx」托管` | 正在按班次自动启停 | 灰掉，避免和自动流程打架 |
-| `单机保活托管` | 掉线会被自动拉起 | 灰掉，避免关掉又被拉起来 |
-| `xx 已暂停` | 流程被关掉了，机器暂时没人管 | 可用 |
-
-托管中的机器如果确实要手动干预，先把对应流程暂停或把机器移出，按钮就会恢复。这样设计是因为：对托管中的机器手动关机，下一轮同步（默认 60 秒）会立刻按流程纠正，还会额外推一条假的「抢占恢复」通知。
-
-**删除一律二次确认**：删除服务器、删除换班组、把机器移出单机保活，都会弹应用内确认框，
-并写清后果（比如「只删本地配置，云上实例不受影响」）。不用 `window.confirm`——它在桌面壳和
-部分内嵌浏览器里会被静默吞掉，表现就是点一下直接删了。
-
-![服务器](docs/screenshots/05-servers.png)
-
-**添加服务器**：先选站点，地域列表跟着站点变——国际站不会出现中国大陆地域。
-
-| 中国站 | 国际站 |
-| --- | --- |
-| ![添加服务器](docs/screenshots/11-server-dialog.png) | ![国际站](docs/screenshots/12-server-dialog-intl.png) |
-
-设置抽屉分四页：常规 / DDNS / 通知 / 关于。
-
-| DDNS | 通知 |
-| --- | --- |
-| ![DDNS 设置](docs/screenshots/07-ddns.png) | ![通知设置](docs/screenshots/08-notify.png) |
-
-窄屏也能用，导航收成两行：
-
-<img src="docs/screenshots/13-mobile.png" width="330" alt="移动端" />
-
-登录页与"关于"页（保留上游署名）：
-
-<img src="docs/screenshots/01-login.png" width="49%" alt="登录页" /> <img src="docs/screenshots/09-about.png" width="49%" alt="关于" />
-
-## 数据放在哪
-
-| 路径 | 内容 |
-| --- | --- |
-| `cdt-management.db` | SQLite（WAL）：服务器、换班组、轮次状态、事件、流量采样 |
-| `master.key` | 加密主密钥，**必须与 db 一起备份**，丢了 AccessKey Secret 无法解密 |
-| `logs/` | 预留日志目录 |
-
-备份就把整个目录拷走；换机器时两个文件一起搬。
-
 ## 配一遍的流程
 
 1. **服务器** → 添加服务器：填别名、Region、AccessKey ID/Secret、实例 ID、配额与限流阈值
 2. 二选一（或都要，但**同一台不要同时挂两边**）：
    - **单机保活** → 添加保活，勾上这台
-   - **联合换班** → 新建换班组，按顺序添加成员并填各自运行几小时（例如两台各 12 小时）
+   - **联合换班** → 新建换班组，按顺序添加成员并填各自运行时长
 3. **设置 → DDNS**：填 Cloudflare Token（或 Global API Key）、TTL，开启
 4. **DNS**：加域名记录，再把它绑到某台机器或某个换班组（不绑就谁也不会去动它）
 5. **设置 → 通知**：填 Telegram Bot Token + Chat ID，点「发送测试」确认能收到
 6. 回概览点「立即同步」，看第一轮结果
 
-## 功能细节
+## 主要功能
 
 ### 联合换班
 
 轮换是**队列式**的：按成员顺序，每人跑自己设定的时长，跑完切下一台，循环。
 
-- 一个周期 = 所有启用成员时长之和；比如 `A 12h → B 12h` 就是 24 小时一循环，`A 8h → B 8h → C 8h` 也行
 - 当班那台必须是 `Running`，其余全部 `Stopped (StopCharging)` 节省停机
-- 换班判定要同时满足：当班已 `Running`、其余都已节省停机、当班有公网 IP（DDNS 开启时）
+- 换班要同时满足：当班已运行、其余都已节省停机、当班有公网 IP（DDNS 开启时）
 - 满足后**先同步 DDNS，再发通知**，保证通知里的解析状态是真的
-- 中途改成员或改时长，会以「现在」为新的轮换起点重算，避免时序错乱
-- 手动「立即换班」= 把轮换起点平移到当前班的结束时刻，直接跳下一台
-
-### 站点类型（中国站 / 国际站）
-
-阿里云有中国站（aliyun.com）和国际站（alibabacloud.com）两套账号体系。添加服务器时可以选，
-这个选择影响两件事：
-
-| 影响 | 说明 |
-| --- | --- |
-| 地域候选 | 国际站不提供中国大陆地域，选了国际站就只列港澳与海外 |
-| 费用接口 | 两站的 BSS（余额 / 账单）地址不同：中国站 `business.aliyuncs.com`，国际站 `business.ap-southeast-1.aliyuncs.com` |
-
-**保活和流量统计不受影响**：ECS 用 `ecs.{地域}.aliyuncs.com`、CDT 用 `cdt.aliyuncs.com`，
-两个站完全一致。站点只影响费用接口与地域候选。
-
-选错了也不至于卡住：费用接口返回 `AuthSiteFail` 时会自动换另一个站点再试一次，成功后把站点
-纠正过来并记一条事件——阿里云的 RAM 子账号是绑站点的，与其让人对着错误码猜，不如自己试出来。
-
-### 费用与余额
-
-服务器卡片上的「本月 ¥xx / 余额 ¥xx」来自 BSS OpenAPI，只在**读**这一步：
-
-| 显示 | 接口 | 说明 |
-| --- | --- | --- |
-| 本月 | `DescribeInstanceBill`（`BillingCycle=当月`，`Granularity=MONTHLY`） | 把该实例所有明细行的 `PretaxAmount` 累加 |
-| 余额 | `QueryAccountBalance` | `AvailableAmount` + `Currency` |
-
-几个实现上的取舍：
-
-- **慢数据不进请求路径**：后台每 30 分钟刷一次并落 SQLite，打开页面只读库，不会卡在阿里云那。
-- **余额另有一层 6 小时缓存**：同一个 AK 的余额短时间不会变，多台机器共用账号时只查一次。
-- **跨月会标「上月」**：账单记着所属账期，跨月后旧数字不会被当成本月费用。
-- **查不到不等于 0 元**：没拿到数字显示 `—`，和真正的 0.00 区分开。
-- **卡片右下角可手动重查**：手动刷新走 `POST /api/v1/servers/{id}/billing`，失败原因直接弹出来。
-
-需要 RAM 具备 `AliyunBSSReadOnlyAccess`（或 `bss:QueryAccountBalance` + `bss:DescribeInstanceBill`）。
-没给权限时卡片显示 `—` 加一个黄色感叹号，鼠标悬停能看到具体错误；不想看就在**设置 → 费用与余额**关掉，
-关掉后不会再发任何 BSS 请求。
-
-一处容易踩的坑：阿里云的 `PretaxAmount` 是**税前**金额，优惠券、代金券不在里面，所以这个数字
-可能高于你账单页实际付的钱。要看实付请以阿里云费用中心为准。
+- 手动「立即换班」一键切到下一台
+- 支持固定时刻表模式：给每个成员填上班时刻，到点自动切换
 
 ### 流量保护
 
@@ -283,90 +164,37 @@ DNS               ← 域名记录与绑定（右侧数字是记录条数）
 
 关掉「允许流量故障转移」后，当班超限就直接走「超限停机」。
 
-一处细节：**故障转移在一个班次内只发生一次**。切到替补后，本班次剩下的时间都固定在替补上，
-不会每分钟重新判一次、也不会重复记事件或重复推送。
-
 ### DNS
 
-顶栏第三个大菜单，管两件事：**有哪些域名**、**每条归谁**。
+- 只支持 Cloudflare A 记录，Token 与 Global API Key 两种认证
+- 一条记录只能绑一个目标（一台服务器或一个换班组），没绑的记录谁也不会动
+- 后台每分钟巡检一次，只有 IP 变了才真发请求
+- 删除服务器、换班组、把机器移出保活，对应的记录会自动松开
 
-- 只支持 Cloudflare A 记录，Token 与 Global API Key 两种认证；Zone ID 可留空，按记录名自动反查根域
-- 一条记录只能绑一个目标：一台服务器（单机保活或闲散都算）或一个换班组。
-  反过来也一样，一个目标最多占一条记录 —— 所以「这台机器用哪个域名」永远只有一个答案
-- **没绑的记录谁也不会动**。不再有「默认记录」兜底：以前不填就用第一条，
-  几条保活任务、两个换班组会轮流往同一个域名上写，谁最后跑完谁说了算
-- 换班 / 保活结算时写的是**它自己绑的那条**；手动开机的闲散机器也会立刻把解析指过来
-- 后台每分钟巡检一次：只有「目标在跑、且当前 IP 和历史记录不一样」时才真发请求，稳定状态零开销
-- 状态四档：`已同步` / `待同步`（该指向 A，实际还在 B）/ `目标未运行`（不做处理）/ `未绑定`
-- 绑定随目标一起消失：删服务器、删换班组、把机器移出保活，对应的记录都会自动松开
-
-### 通知类型
+### 通知
 
 | 事件 | 触发时机 |
 | --- | --- |
 | ✅ 换班完成 | 到点换班，且新当班 Running + 旧的全部节省停机 + DDNS 已同步 |
-| ✅ 换班成功（延迟恢复） | 同上，但本班次先发过「换班异常」，后来才达成 |
-| ⚠️ 临时换班 | 非换班时点因流量超限触发故障转移，新旧状态都就绪后 |
-| 🚨 全局熔断 | 全部成员流量达标，确认都已节省停机后，附真实状态参数 |
+| ⚠️ 临时换班 | 因流量超限触发故障转移 |
+| 🚨 全局熔断 | 全部成员流量达标，确认都已节省停机后 |
 | 🔴 超限停机 | 当班达标但换不了班，强制节省停机生效后 |
-| 🟢 抢占恢复 | 结算过的班次里当班被回收，自动拉起成功并同步解析后；单机保活拉起停机实例也走这一版 |
-| ⚠️ 换班异常 | 班次开始 10 分钟仍未达到预期状态 |
-| 📊 每日汇总 | 到设定时间（默认 23:58）推全部服务器的流量与额度 |
+| 🟢 抢占恢复 | 当班被回收，自动拉起成功并同步解析后 |
+| ⚠️ 换班异常 | 班次开始后仍未达到预期状态 |
+| 📊 每日汇总 | 到设定时间推全部服务器的流量与额度 |
 
-通知的标题、图标、字段顺序与分隔线全部照搬最初脚本 `cdt.py`，文案集中放在 `app/messages.py`，
-只有「成员多于两台、脚本的两块结构装不下」时才会补块：停止账号按台数逐个列，当前班次写成
-`机名（起–止）`（三台轮班时 AM 段可能有好几台，只写 AM / PM 分不出是谁）。
+通知的标题、图标、字段顺序全部照搬最初脚本 `cdt.py`，支持 Telegram、邮件、Webhook 三类渠道同时开启。
 
-停机模式一律读实例返回的真实 `StoppedMode`：`StopCharging` 显示「节省停机」，
-`KeepCharging` 显示「普通停机」。面板徽章、通知正文、熔断汇总、手动停机的事件与提示都用真实值——
-普通停机照常收实例规格费，写成节省停机就等于谎报账单。
+## 数据放在哪
 
-Telegram 走 HTML 富文本，邮件走 HTML，Webhook 支持 `{title}` `{text}` `{kind}` 占位符。三类渠道可同时开。
-
-## 环境变量
-
-| 变量 | 默认 | 说明 |
-| --- | --- | --- |
-| `TZ` | `Asia/Shanghai` | 容器时区，影响班次计算 |
-| `CDT_DATA_DIR` | `/data` | 数据目录 |
-| `CDT_LISTEN_PORT` | `8080` | 容器内监听端口，改这个要同步改 `-p` |
-| `CDT_ADMIN_USERNAME` / `CDT_ADMIN_PASSWORD` | 空 | 跳过初始化向导；密码至少 10 位，只在未初始化时生效 |
-| `CDT_BRAND` | `CDT-Management` | 顶栏与标签页品牌名 |
-| `CDT_REPO` | `BeacherZ/cdt-management` | 「关于」里检查更新的比对对象 |
-| `CDT_RECONCILE_INTERVAL` | `60` | 同步间隔秒数（下限 30） |
-| `CDT_SHIFT_TIMEOUT_MINUTES` | `10` | 换班超时判定分钟数 |
-| `CDT_EVENT_RETAIN_DAYS` | `14` | 事件保留天数 |
-| `CDT_HTTP_TIMEOUT` | `12` | 单次 HTTP / 阿里云调用超时 |
-| `CDT_DRY_RUN` | `0` | `1` 时不调真实阿里云接口，用于本地 UI 调试 |
-| `PUID` / `PGID` | `10001` / `10001` | 应用进程以哪个 uid/gid 运行；NAS、家目录部署时填宿主机用户 |
-
-## 权限模型
-
-容器入口不是直接跑应用，而是先做三件事：修 `/data` 属主 → 降权 → `exec` 应用。
-
-这么绕是因为 bind mount 的宿主机目录通常属于 root，而应用不该以 root 跑。所以镜像里
-没有写 `USER`，进程先以 root 进来把挂载目录交给运行用户（默认 `10001:10001`），
-**立刻 `setuid` 降下来**，之后业务代码碰不到 root 权限。副作用是一个都不需要的：
-
-| 场景 | 行为 |
+| 路径 | 内容 |
 | --- | --- |
-| 普通部署（宿主机目录 root 拥有） | 自动改属主，第一次启动会把整棵树调整一遍，之后只扫第一层 |
-| NAS / 宿主机目录属于你的用户 | 加 `PUID`/`PGID`，按你的身份跑，宿主机权限不用动 |
-| `docker run --user 10001:10001` | 已经是目标用户，跳过改属主和降权 |
-| 只读挂载 / NFS `root_squash` | 改不动属主，启动前探测到不可写就打印三种解法并退出，不会反复重启刷 traceback |
+| `cdt-management.db` | SQLite：服务器、换班组、轮次状态、事件、流量采样 |
+| `master.key` | 加密主密钥，**必须与 db 一起备份**，丢了 AccessKey Secret 无法解密 |
 
-## 安全
-
-- AccessKey Secret、CDT/Cloudflare Token、SMTP 密码、Telegram Token、Webhook headers **全部 AES-GCM 加密**后入库，密钥是 `master.key`（容器内 600 权限）
-- 面板密码 PBKDF2-SHA256 加盐存储；会话是 HMAC 签名票据，重启不掉线
-- 登录失败按 IP 限速（5 分钟 8 次）
-- 所有写操作校验 CSRF 双提交 Cookie
-- RAM 子账号只给 `AliyunECSFullAccess`（或等价启停策略）+ `AliyunCDTReadOnlyAccess`；想看费用再加 `AliyunBSSReadOnlyAccess`（纯读，看不到也改不了支付方式）
-- 挂公网务必套 HTTPS 反向代理
+备份就把整个目录拷走；换机器时两个文件一起搬。
 
 ## 常见问题
-
-**为什么不用 Go？** 这台机器上没有 Go 工具链，Python 能本地跑通端到端逻辑再交付。运行时是单进程 uvicorn + SQLite，不依赖外部数据库。
 
 **换班了但没收到通知？** 先看「设置 → 通知」里的渠道是否启用、点测试能不能发出去；再看概览页的「最近事件」是否有对应记录。通知失败只记事件，不会阻塞换班。
 
@@ -376,11 +204,7 @@ Telegram 走 HTML 富文本，邮件走 HTML，Webhook 支持 `{title}` `{text}`
 
 **能不能不下线，只保活？** 用「单机保活」模块，不要放进换班组。
 
-**忘了面板密码？** 删掉数据目录里的 `cdt-management.db` 会重置所有配置（`master.key` 留着无影响）。
-
-**启动就报 `PermissionError: '/data/logs'`？** 宿主机挂载目录属于 root，容器用户写不进去。
-镜像自己会处理这一步（见「权限模型」），如果还报，说明挂载方式不给改属主（只读挂载、NFS `root_squash`）。
-三种解法：`sudo chown -R 10001:10001 /你的目录`、加 `-e PUID=$(id -u) -e PGID=$(id -g)`、或换成具名卷 `-v cdt-data:/data`。
+**忘了面板密码？** 删掉数据目录里的 `cdt-management.db` 会重置所有配置。
 
 ## 本地开发
 
@@ -388,28 +212,14 @@ Telegram 走 HTML 富文本，邮件走 HTML，Webhook 支持 `{title}` `{text}`
 python -m venv .venv && ./.venv/bin/pip install -r requirements.txt
 ./.venv/bin/python -m app.main              # 后端 :8080
 cd web && npm install && npm run dev        # 前端 :5273，已配 /api 代理
-npm run build                               # 产物输出到 app/static
 CDT_DRY_RUN=1 ./venv/bin/python -m app.main # 不调真实阿里云
 ```
 
-`CDT_DRY_RUN=1` 时阿里云调用走内存桩：实例状态会在 Stopped → Running 之间流转、流量给固定假值，整条换班链路都能在本地跑通，不会碰真实账号。
-
-配套脚本（都只对本地 dry-run 实例、只用假数据）：
-
-```bash
-python scripts/smoke_test.py http://127.0.0.1:8099   # 18 组端到端断言
-python scripts/test_messages.py                      # 通知文案逐字对照脚本原文
-python scripts/test_dns.py                           # DNS 绑定/同步逻辑（不连网）
-python scripts/seed_demo.py  http://127.0.0.1:8099   # 灌 6 台假服务器 + 换班组
-node   scripts/screenshot.cjs http://127.0.0.1:8099  # 重新生成 docs/screenshots
-```
-
-截图脚本直接走 CDP 驱动本机 Chrome / Edge，不需要额外装 Playwright。
+`CDT_DRY_RUN=1` 时阿里云调用走内存桩，整条换班链路都能在本地跑通，不会碰真实账号。
 
 ## 致谢与许可
 
-- 面板的信息架构、视觉语言、交互细节参考 [**wang4386/CDT-Monitor**](https://github.com/wang4386/CDT-Monitor)，作者 **青柠**，MIT 协议。感谢他把 CDT 监控面板做成这么干净的样子。
-- 一键安装脚本的形态（版本比对、交互升级、分级卸载）参考 [**BeacherZ/dailycheckin-plus**](https://github.com/BeacherZ/dailycheckin-plus)。
-- 阿里云 API 调用走官方 SDK（`aliyun-python-sdk-core` / `aliyun-python-sdk-ecs`），CDT 流量查询用 `ListCdtInternetTraffic`。
+- 面板的信息架构、视觉语言、交互细节参考 [**wang4386/CDT-Monitor**](https://github.com/wang4386/CDT-Monitor)，作者 **青柠**，MIT 协议。
+- 一键安装脚本的形态参考 [**BeacherZ/dailycheckin-plus**](https://github.com/BeacherZ/dailycheckin-plus)。
 
 本项目以 MIT 协议发布，`LICENSE` 里同时保留了上游版权声明。

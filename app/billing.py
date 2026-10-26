@@ -23,8 +23,16 @@ from . import aliyun, repo, settings
 
 log = logging.getLogger("cdt-management.billing")
 
-# 本月账单刷新间隔。账单是按天的落账，30 分钟完全够，再密就是白打接口。
-BILL_TTL = 30 * 60
+# 本月账单刷新间隔的默认值（秒）。实际间隔从设置 billing_interval 读，
+# 用户可在「设置-常规」里调；默认 10 分钟。
+DEFAULT_BILL_TTL = 10 * 60
+
+
+def _bill_ttl(config: dict[str, str]) -> int:
+    try:
+        return max(60, int(config.get("billing_interval") or DEFAULT_BILL_TTL))
+    except (TypeError, ValueError):
+        return DEFAULT_BILL_TTL
 
 
 def _timezone(name: str) -> dt.tzinfo:
@@ -127,13 +135,14 @@ def refresh_due(now_ts: float | None = None) -> int:
 
     now = now_ts or time.time()
     refreshed = 0
+    bill_ttl = _bill_ttl(config)
     for server in repo.list_servers():
         if not server.get("secret_configured"):
             continue
         last = float(server.get("billing_updated_at") or 0)
         cycle = str(server.get("billing_cycle") or "")
         # 跨月立即刷新：上个月的账单数字留着会误导
-        if last and now - last < BILL_TTL and cycle == current_cycle(config):
+        if last and now - last < bill_ttl and cycle == current_cycle(config):
             continue
         try:
             if refresh_server(int(server["id"])) is not None:

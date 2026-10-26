@@ -107,6 +107,11 @@ export type ShiftMember = {
   hours: number
   enabled: boolean
   is_duty: boolean
+  /** 班次名称，如「白班」「夜班」 */
+  slot_name: string
+  /** 固定起止时刻 HH:MM（时刻表模式）；空串 = 走老 hours 累加 */
+  start_time: string
+  end_time: string
   server: Server | null
 }
 
@@ -138,6 +143,12 @@ export type EventItem = {
   server_id: number
   title: string
   detail: string
+  /** running 进行中 / done 完成 / error 失败 */
+  status: string
+  /** 完成过程日志 [{ts, text}]：几点几分干了什么 */
+  progress: { ts: number; text: string }[]
+  /** 完成 / 失败时间戳，0 = 还没结束 */
+  finished_at: number
 }
 
 export type Overview = {
@@ -161,10 +172,12 @@ export type Overview = {
 }
 
 export type Settings = {
+  admin_username: string
   timezone: string
   traffic_threshold_pct: string
   reconcile_interval: string
   billing_enabled: boolean
+  billing_interval: string
   daily_report_enabled: boolean
   daily_report_time: string
   notify_on_shift: boolean

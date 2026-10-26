@@ -10,7 +10,6 @@
 
 from __future__ import annotations
 
-import datetime as dt
 import sys
 import unittest
 from pathlib import Path
@@ -85,30 +84,23 @@ class ShiftDone(unittest.TestCase):
         self.assertIn(f"🕒 <b>当前班次</b>：PM\n{SEP}", message.html)
 
     def test_three_members_adds_block_and_names_duty(self):
-        tz = dt.timezone(dt.timedelta(hours=8))
-        start = dt.datetime(2026, 10, 26, 0, 0, tzinfo=tz).timestamp()
-        period = messages.shift_period(A["label"], int(start), 12, 3, tz)
+        period = messages.shift_period("白班", "00:00", "12:00")
         message = messages.shift_done(A, [B, C], period, "✅ 已同步")
         self.assertEqual(message.html.count("⚪ <b>停止账号 </b>"), 2)
-        # 三台以上不能只写 AM：同一 AM 段可能有好几台，必须给出机名和班次时间段
+        # 当前班次用「班次名称（时间段）」，不再只写 AM/PM
         self.assertIn(
-            f"🕒 <b>当前班次</b>：AliCloud-CDT-AM（00:00–12:00）\n", message.html
+            f"🕒 <b>当前班次</b>：白班（00:00–12:00）\n", message.html
         )
 
-    def test_two_members_period_is_plain_am_pm(self):
-        tz = dt.timezone(dt.timedelta(hours=8))
-        morning = dt.datetime(2026, 10, 26, 0, 0, tzinfo=tz).timestamp()
-        afternoon = dt.datetime(2026, 10, 26, 12, 0, tzinfo=tz).timestamp()
-        self.assertEqual(messages.shift_period(A["label"], int(morning), 12, 2, tz), "AM")
-        self.assertEqual(messages.shift_period(A["label"], int(afternoon), 12, 2, tz), "PM")
+    def test_period_with_slot_name(self):
+        self.assertEqual(messages.shift_period("白班", "06:00", "18:00"), "白班（06:00–18:00）")
+        self.assertEqual(messages.shift_period("", "06:00", "18:00"), "06:00–18:00")
 
     def test_period_marks_next_day(self):
         # 跨天班次写「次日」，否则 22:00–06:00 看着像时间倒流
-        tz = dt.timezone(dt.timedelta(hours=8))
-        start = dt.datetime(2026, 10, 26, 22, 0, tzinfo=tz).timestamp()
         self.assertEqual(
-            messages.shift_period(A["label"], int(start), 8, 3, tz),
-            "AliCloud-CDT-AM（22:00–次日 06:00）",
+            messages.shift_period("夜班", "22:00", "06:00"),
+            "夜班（22:00–次日 06:00）",
         )
 
     def test_stopped_block_uses_real_mode(self):
@@ -133,6 +125,15 @@ class ShiftDone(unittest.TestCase):
     def test_no_usage_line_in_shift_report(self):
         # 脚本的换班报告里没有「已用」这一行，别被顺手加回来
         self.assertNotIn("已用", messages.shift_done(A, [B], "AM", "✅ 已同步").html)
+
+    def test_group_name_in_title(self):
+        # 标题插入组名；单机保活等无组名场景保持脚本原样
+        message = messages.shift_done(A, [B], "AM", "✅ 已同步", group_name="主力组")
+        self.assertTrue(message.html.startswith("✅ <b>CDT 主力组 换班完成报告</b>\n\n"))
+        self.assertEqual(message.title, "CDT 主力组 换班完成报告")
+        # 不传组名时保持原样
+        plain = messages.shift_done(A, [B], "AM", "✅ 已同步")
+        self.assertEqual(plain.title, "CDT 换班完成报告")
 
 
 class DdnsStatus(unittest.TestCase):

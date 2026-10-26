@@ -4,7 +4,14 @@ import { post } from '../api'
 import type { Server, ShiftGroup } from '../types'
 import { Modal, Switch } from './ui'
 
-type Row = { server_id: number; hours: number; enabled: boolean }
+type Row = {
+  server_id: number
+  hours: number
+  enabled: boolean
+  slot_name: string
+  start_time: string
+  end_time: string
+}
 
 type Props = {
   group: ShiftGroup | null
@@ -24,6 +31,9 @@ export default function GroupDialog({ group, servers, onClose, onSaved }: Props)
         server_id: member.server_id,
         hours: member.hours,
         enabled: member.enabled,
+        slot_name: member.slot_name ?? '',
+        start_time: member.start_time ?? '',
+        end_time: member.end_time ?? '',
       }))
     }
     const seed = servers.slice(0, 2)
@@ -31,6 +41,9 @@ export default function GroupDialog({ group, servers, onClose, onSaved }: Props)
       server_id: server.id,
       hours: Math.round(24 / Math.max(1, seed.length)),
       enabled: true,
+      slot_name: '',
+      start_time: '',
+      end_time: '',
     }))
   })
   const [error, setError] = useState('')
@@ -63,7 +76,10 @@ export default function GroupDialog({ group, servers, onClose, onSaved }: Props)
       setError('所有服务器都已经在这个组里了')
       return
     }
-    setRows((current) => [...current, { server_id: candidate.id, hours: 12, enabled: true }])
+    setRows((current) => [
+      ...current,
+      { server_id: candidate.id, hours: 12, enabled: true, slot_name: '', start_time: '', end_time: '' },
+    ])
     setError('')
   }
 
@@ -82,6 +98,15 @@ export default function GroupDialog({ group, servers, onClose, onSaved }: Props)
       setError('同一台服务器不能重复添加')
       return
     }
+    // 起止时刻要么全空（走老 hours 累加），要么成对填写
+    for (const row of rows) {
+      const hasStart = Boolean(row.start_time)
+      const hasEnd = Boolean(row.end_time)
+      if (hasStart !== hasEnd) {
+        setError('班次起止时刻要成对填写，或都留空')
+        return
+      }
+    }
     setBusy(true)
     try {
       await post('/api/v1/groups', {
@@ -94,6 +119,9 @@ export default function GroupDialog({ group, servers, onClose, onSaved }: Props)
           server_id: row.server_id,
           hours: row.hours,
           enabled: row.enabled,
+          slot_name: row.slot_name,
+          start_time: row.start_time,
+          end_time: row.end_time,
         })),
       })
       onSaved(editing ? '换班组已更新' : '换班组已创建')
@@ -144,7 +172,7 @@ export default function GroupDialog({ group, servers, onClose, onSaved }: Props)
       </div>
 
       <div className="field">
-        <label>轮换顺序（每台运行多少小时）</label>
+        <label>轮换顺序（每台运行多少小时 / 班次时刻）</label>
         <div className="member-editor">
           {rows.map((row, index) => (
             <div className="member-row" key={`${row.server_id}-${index}`}>
@@ -167,6 +195,29 @@ export default function GroupDialog({ group, servers, onClose, onSaved }: Props)
                   )
                 })}
               </select>
+              <input
+                className="input member-slot"
+                value={row.slot_name}
+                placeholder="班次名称"
+                onChange={(event) => update(index, { slot_name: event.target.value })}
+              />
+              <div className="member-times">
+                <input
+                  className="input"
+                  type="time"
+                  value={row.start_time}
+                  onChange={(event) => update(index, { start_time: event.target.value })}
+                  title="起始时刻"
+                />
+                <span className="member-time-sep">–</span>
+                <input
+                  className="input"
+                  type="time"
+                  value={row.end_time}
+                  onChange={(event) => update(index, { end_time: event.target.value })}
+                  title="结束时刻（可跨天）"
+                />
+              </div>
               <div className="member-hours">
                 <input
                   className="input"
@@ -210,6 +261,9 @@ export default function GroupDialog({ group, servers, onClose, onSaved }: Props)
         <button className="btn sm" style={{ alignSelf: 'flex-start' }} onClick={add}>
           <Plus size={13} /> 添加成员
         </button>
+        <div className="hint">
+          填写「班次名称 + 起止时刻」后按固定时刻表每天自动换班；留空则按「小时数」顺序轮换。
+        </div>
       </div>
 
       <div className="field">
