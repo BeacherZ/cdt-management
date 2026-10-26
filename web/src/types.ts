@@ -24,6 +24,39 @@ export type Billing = {
   error: string
 }
 
+/** DNS 绑定的目标：一台服务器（含单机保活）或一个换班组 */
+export type DnsTarget = {
+  kind: 'server' | 'group'
+  id: number
+  label: string
+  status: string
+  running: boolean
+  ip: string
+  /** 换班组专用：此刻当班那台叫什么 */
+  duty?: string
+}
+
+/** 一条域名记录 + 它绑给了谁 + 上次同步结果 */
+export type DnsRecord = {
+  record: string
+  target: DnsTarget | null
+  last_ip: string
+  last_status: string
+  last_at: number
+  /** 目标现在在跑的话，应该解析到的 IP；没跑就是空串 */
+  desired_ip: string
+  state: 'unbound' | 'idle' | 'pending' | 'synced' | 'error'
+}
+
+export type DnsState = {
+  enabled: boolean
+  provider: string
+  configured: boolean
+  ttl: string
+  proxied: boolean
+  records: DnsRecord[]
+}
+
 export type Server = {
   id: number
   label: string
@@ -44,6 +77,8 @@ export type Server = {
   secret_configured: boolean
   managed?: Managed | null
   billing: Billing
+  /** 绑定的 DNS 域名；空串 = 没占任何记录 */
+  dns_record?: string
 }
 
 export type Keepalive = {
@@ -62,6 +97,7 @@ export type Keepalive = {
   region_id: string
   site?: SiteType
   status_checked_at: number
+  dns_record?: string
 }
 
 export type ShiftMember = {
@@ -114,14 +150,7 @@ export type Overview = {
   servers: Server[]
   keepalives: Keepalive[]
   groups: ShiftGroup[]
-  ddns: {
-    enabled: boolean
-    record: string
-    records: string[]
-    last_ip: string
-    last_status: string
-    last_at: number
-  }
+  dns: DnsState
   notifications: {
     channels: string[]
     telegram: boolean

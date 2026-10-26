@@ -9,17 +9,15 @@ type Row = { server_id: number; hours: number; enabled: boolean }
 type Props = {
   group: ShiftGroup | null
   servers: Server[]
-  ddnsRecords: string[]
   onClose: () => void
   onSaved: (message: string) => void
 }
 
-export default function GroupDialog({ group, servers, ddnsRecords, onClose, onSaved }: Props) {
+export default function GroupDialog({ group, servers, onClose, onSaved }: Props) {
   const editing = Boolean(group && group.id)
   const [name, setName] = useState(group?.name ?? '联合换班')
   const [enabled, setEnabled] = useState(group?.enabled ?? true)
   const [failover, setFailover] = useState(group?.failover_enabled ?? true)
-  const [ddnsRecord, setDdnsRecord] = useState(group?.ddns_record ?? '')
   const [rows, setRows] = useState<Row[]>(() => {
     if (group?.members?.length) {
       return group.members.map((member) => ({
@@ -91,7 +89,7 @@ export default function GroupDialog({ group, servers, ddnsRecords, onClose, onSa
         name,
         enabled,
         failover_enabled: failover,
-        ddns_record: ddnsRecord,
+        // 域名绑定不在这里改：由 DNS 页统一维护，避免两个入口写出不一致的绑定
         members: rows.map((row) => ({
           server_id: row.server_id,
           hours: row.hours,
@@ -215,29 +213,16 @@ export default function GroupDialog({ group, servers, ddnsRecords, onClose, onSa
       </div>
 
       <div className="field">
-        <label htmlFor="ddnsRecord">本组 DDNS 记录</label>
-        <select
-          id="ddnsRecord"
-          className="select"
-          value={ddnsRecord}
-          onChange={(event) => setDdnsRecord(event.target.value)}
-          disabled={ddnsRecords.length === 0 && !ddnsRecord}
-        >
-          <option value="">
-            {ddnsRecords.length ? `跟随默认（${ddnsRecords[0]}）` : '跟随默认（还没配记录名）'}
-          </option>
-          {ddnsRecords.map((name) => (
-            <option key={name} value={name}>
-              {name}
-            </option>
-          ))}
-          {/* 换班组以前填过、但设置里已经删掉的记录名，保留一项免得被静默改掉 */}
-          {ddnsRecord && !ddnsRecords.includes(ddnsRecord) && (
-            <option value={ddnsRecord}>{ddnsRecord}（已不在记录名列表）</option>
+        <label>DDNS 记录</label>
+        <div className="readonly-value">
+          {group?.ddns_record ? (
+            <code>{group.ddns_record}</code>
+          ) : (
+            <span className="muted">未绑定 —— 这个组换班时不会去动任何域名</span>
           )}
-        </select>
+        </div>
         <div className="hint">
-          选项来自「设置 → DDNS」里的记录名，可以先去那里加多条，再回来给每个组挑一条。
+          绑定在左侧「DNS」页维护：一条域名只归一个组，两边不会抢。
         </div>
       </div>
 

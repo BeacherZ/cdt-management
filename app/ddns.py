@@ -176,6 +176,11 @@ def sync(
         log.warning("DDNS 跳过：IP 不可用 (%s)", ip)
         return DDNSResult(STATUS_INVALID_IP, f"IP={ip or '空'}", ip=ip)
 
+    if settings.DRY_RUN:
+        # 演示/截图模式：照常走完上面的校验，但不碰真实的 Cloudflare
+        log.info("DRY RUN：假装已把 %s 同步到 %s", name, ip)
+        return DDNSResult(STATUS_SYNCED, f"{name} → {ip}", changed=True, ip=ip)
+
     # 记录名与 IP 都没变就免掉一次 API 调用
     if (
         not force
@@ -239,6 +244,8 @@ def test(config: dict[str, str]) -> DDNSResult:
     names = records(config)
     if not names:
         return DDNSResult(STATUS_ERROR, "记录名未配置")
+    if settings.DRY_RUN:
+        return DDNSResult("✅ 连接正常", f"{len(names)} 条记录（DRY RUN，未真的访问 Cloudflare）")
     try:
         headers = _headers(config)
         zone_id = _resolve_zone_id(headers, config, names[0])

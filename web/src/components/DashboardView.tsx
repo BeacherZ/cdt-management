@@ -67,13 +67,16 @@ export default function DashboardView({
           </p>
         </div>
         <div className="page-actions">
-          {overview.ddns.enabled ? (
-            <Badge tone={overview.ddns.last_status.startsWith('✅') ? 'green' : 'amber'} dot>
-              DDNS {overview.ddns.record || '已开启'}
+          {overview.dns.enabled ? (
+            <Badge
+              tone={overview.dns.records.some((item) => item.state === 'error') ? 'amber' : 'green'}
+              dot
+            >
+              DNS {overview.dns.records.length} 条记录
             </Badge>
           ) : (
             <Badge tone="gray" dot>
-              DDNS 关闭
+              DNS 关闭
             </Badge>
           )}
           {overview.notifications.channels.length > 0 ? (

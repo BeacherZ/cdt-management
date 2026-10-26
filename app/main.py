@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import api, db, repo, scheduler, security, settings
+from . import api, db, dns, repo, scheduler, security, settings
 
 log = logging.getLogger("cdt-management")
 
@@ -75,6 +75,13 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     def _startup() -> None:  # noqa: ANN202
+        # 老版本把域名直接写在换班组上，启动时接进绑定表（只接还没绑过的）
+        try:
+            config = repo.get_settings()
+            dns.sync_registry(config)
+            dns.adopt_legacy(config)
+        except Exception:  # noqa: BLE001
+            log.exception("DNS 绑定初始化失败，等待下次对账重试")
         scheduler.start()
         log.info("%s v%s 已启动，数据目录 %s", settings.BRAND, settings.VERSION, settings.DATA_DIR)
 

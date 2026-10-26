@@ -216,6 +216,12 @@ def delete_server(server_id: int) -> None:
     db.execute("DELETE FROM servers WHERE id=?", (server_id,))
     db.execute("DELETE FROM keepalives WHERE server_id=?", (server_id,))
     db.execute("DELETE FROM traffic_samples WHERE server_id=?", (server_id,))
+    # 目标没了，DNS 绑定必须一并松掉，否则记录还挂在已经不存在的机器上
+    db.execute(
+        "UPDATE dns_records SET target_kind='', target_id=0, updated_at=? "
+        "WHERE target_kind='server' AND target_id=?",
+        (int(time.time()), server_id),
+    )
 
 
 def update_server_site(server_id: int, site: str) -> None:
@@ -349,7 +355,85 @@ def set_keepalive_enabled(keepalive_id: int, enabled: bool) -> None:
 
 
 def delete_keepalive(keepalive_id: int) -> None:
+    row = db.query_one("SELECT server_id FROM keepalives WHERE id=?", (keepalive_id,))
     db.execute("DELETE FROM keepalives WHERE id=?", (keepalive_id,))
+    if row is not None:
+        # 移出保活后这台机器回到闲散状态，DNS 绑定跟着作废，避免域名指向没人管的机器
+        db.execute(
+            "UPDATE dns_records SET target_kind='', target_id=0, updated_at=? "
+            "WHERE target_kind='server' AND target_id=?",
+            (int(time.time()), int(row["server_id"])),
+        )
+
+
+# --------------------------------------------------------------------------
+# DNS 记录 + 绑定
+# --------------------------------------------------------------------------
+
+def list_dns_records() -> list[dict[str, Any]]:
+    return [dict(row) for row in db.query("SELECT * FROM dns_records ORDER BY rowid")]
+
+
+def get_dns_record(record: str) -> dict[str, Any] | None:
+    row = db.query_one("SELECT * FROM dns_records WHERE record=?", (record,))
+    return dict(row) if row else None
+
+
+def ensure_dns_record(record: str) -> None:
+    """登记一条记录名。已存在时什么都不改，绑定与状态都保留。"""
+    now = int(time.time())
+    db.execute(
+        "INSERT INTO dns_records(record, updated_at) VALUES(?, ?) "
+        "ON CONFLICT(record) DO NOTHING",
+        (record, now),
+    )
+
+
+def delete_dns_record(record: str) -> None:
+    db.execute("DELETE FROM dns_records WHERE record=?", (record,))
+
+
+def bind_dns_record(record: str, kind: str, target: int) -> None:
+    """把记录绑到某个目标上。
+
+    一个目标只能占一条记录：先把它原来占的那条松开，再绑这条。
+    这样「哪台机器用哪个域名」永远只有一个答案。
+    """
+    now = int(time.time())
+    conn = db.connect()
+    conn.execute("BEGIN")
+    try:
+        if kind:
+            conn.execute(
+                "UPDATE dns_records SET target_kind='', target_id=0, updated_at=? "
+                "WHERE target_kind=? AND target_id=? AND record<>?",
+                (now, kind, target, record),
+            )
+        conn.execute(
+            "UPDATE dns_records SET target_kind=?, target_id=?, updated_at=? WHERE record=?",
+            (kind, target if kind else 0, now, record),
+        )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+
+def dns_record_of(kind: str, target: int) -> str:
+    """这个目标当前占着哪条记录；没绑返回空串。"""
+    if not kind or not target:
+        return ""
+    row = db.query_one(
+        "SELECT record FROM dns_records WHERE target_kind=? AND target_id=?", (kind, target)
+    )
+    return str(row["record"]) if row else ""
+
+
+def set_dns_state(record: str, ip: str, status: str, at: int | None = None) -> None:
+    db.execute(
+        "UPDATE dns_records SET last_ip=?, last_status=?, last_at=? WHERE record=?",
+        (ip, status, int(at if at is not None else time.time()), record),
+    )
 
 
 # --------------------------------------------------------------------------
@@ -389,7 +473,12 @@ def upsert_group(payload: dict[str, Any]) -> int:
     name = str(payload.get("name") or "").strip() or "换班组"
     enabled = 1 if payload.get("enabled", True) else 0
     failover = 1 if payload.get("failover_enabled", True) else 0
-    ddns_record = str(payload.get("ddns_record") or "").strip()
+    # 域名绑定已经挪到 DNS 页，这里只管老字段：没传就保持原值，别被整表提交清空
+    if "ddns_record" in payload:
+        ddns_record = str(payload.get("ddns_record") or "").strip()
+    else:
+        row = db.query_one("SELECT ddns_record FROM shift_groups WHERE id=?", (group_id,))
+        ddns_record = str(row["ddns_record"] or "") if row else ""
 
     raw_members = payload.get("members") or []
     members: list[dict[str, Any]] = []
@@ -468,6 +557,11 @@ def delete_group(group_id: int) -> None:
         conn.execute("DELETE FROM shift_members WHERE group_id=?", (group_id,))
         conn.execute("DELETE FROM shift_runs WHERE group_id=?", (group_id,))
         conn.execute("DELETE FROM shift_groups WHERE id=?", (group_id,))
+        conn.execute(
+            "UPDATE dns_records SET target_kind='', target_id=0, updated_at=? "
+            "WHERE target_kind='group' AND target_id=?",
+            (int(time.time()), group_id),
+        )
         conn.execute("COMMIT")
     except Exception:
         conn.execute("ROLLBACK")

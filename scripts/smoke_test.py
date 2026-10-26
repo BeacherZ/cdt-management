@@ -530,6 +530,87 @@ call("POST", "/api/v1/settings", {"billing_enabled": True})
 settings_body = call("GET", "/api/v1/settings")[1]
 check("开关能读回", settings_body.get("billing_enabled") is True, str(settings_body.get("billing_enabled")))
 
+print("\n== 18. DNS 记录与绑定 ==")
+# 记录名仍然由设置维护（DNS 页负责加删与绑定），先确保有两条
+call("POST", "/api/v1/settings", {"ddns": {"records": ["cdt.example.com", "cdn.example.com"]}})
+status, body = call("GET", "/api/v1/dns")
+check("DNS 列表可读", status == 200 and len(body.get("records", [])) == 2, str(body)[:200])
+check("没绑的记录状态是 unbound", all(r["state"] == "unbound" for r in body["records"]), str(body)[:200])
+
+# 关键回归：以前没绑也会拿第一条记录兜底，多台机器互相覆盖同一个域名
+call("POST", "/api/v1/settings", {"ddns": {"enabled": True, "cf_token": "fake-token", "ttl": "60"}})
+status, body = call("POST", "/api/v1/dns/records/cdt.example.com/sync")
+check(
+    "未绑定的记录同步返回「未绑定」而不是偷偷用第一条",
+    status == 200 and body.get("status") == "⏸ 未绑定",
+    str(body)[:200],
+)
+
+target = servers[0]
+status, body = call(
+    "POST", "/api/v1/dns/records/cdt.example.com/bind", {"kind": "server", "id": target}
+)
+check("绑定到服务器", status == 200 and (body.get("target") or {}).get("id") == target, str(body)[:200])
+
+status, body = call("GET", "/api/v1/dns")
+row = {item["record"]: item for item in body["records"]}["cdt.example.com"]
+check("列表回显绑定目标", (row.get("target") or {}).get("kind") == "server", str(row)[:200])
+check("绑完之后 state 不再是 unbound", row["state"] in ("idle", "pending", "synced"), row["state"])
+
+# 一个目标只能占一条记录：改绑另一条，旧的那条必须自动松开
+status, body = call(
+    "POST", "/api/v1/dns/records/cdn.example.com/bind", {"kind": "server", "id": target}
+)
+check("同一目标改绑会释放上一条", body.get("released") == "cdt.example.com", str(body)[:200])
+status, body = call("GET", "/api/v1/dns")
+rows = {item["record"]: item for item in body["records"]}
+check("旧记录回到未绑定", rows["cdt.example.com"]["target"] is None, str(rows["cdt.example.com"])[:200])
+
+# 绑到换班组
+status, body = call(
+    "POST", "/api/v1/dns/records/cdt.example.com/bind", {"kind": "group", "id": group_id}
+)
+check("绑定到换班组", status == 200, str(body)[:200])
+groups = call("GET", "/api/v1/groups")[1]["items"]
+check(
+    "换班组回显绑定的域名",
+    groups[0]["ddns_record"] == "cdt.example.com",
+    str(groups[0]["ddns_record"]),
+)
+
+# 解绑
+status, _ = call("POST", "/api/v1/dns/records/cdt.example.com/bind", {"kind": "", "id": 0})
+status, body = call("GET", "/api/v1/dns")
+row = {item["record"]: item for item in body["records"]}["cdt.example.com"]
+check("解绑生效", row["target"] is None and row["state"] == "unbound", str(row)[:200])
+
+# 参数校验
+status, _ = call("POST", "/api/v1/dns/records/cdt.example.com/bind", {"kind": "alien", "id": 1})
+check("非法绑定目标被拒", status == 400, f"HTTP {status}")
+status, _ = call("POST", "/api/v1/dns/records", {"record": "bad name.example.com"})
+check("带空格的域名被拒", status == 400, f"HTTP {status}")
+status, _ = call("POST", "/api/v1/dns/records", {"record": "nodots"})
+check("没有点的域名被拒", status == 400, f"HTTP {status}")
+status, _ = call("POST", "/api/v1/dns/records", {"record": "new.example.com"})
+check("添加记录名", status == 200, f"HTTP {status}")
+status, body = call("GET", "/api/v1/dns")
+check("新记录已入列表", any(r["record"] == "new.example.com" for r in body["records"]))
+status, _ = call("DELETE", "/api/v1/dns/records/new.example.com")
+status, body = call("GET", "/api/v1/dns")
+check("删除记录名", not any(r["record"] == "new.example.com" for r in body["records"]))
+
+# DDNS 关着时不允许同步
+call("POST", "/api/v1/settings", {"ddns": {"enabled": False}})
+status, _ = call("POST", "/api/v1/dns/sync")
+check("DDNS 关闭时拒绝全部同步", status == 400, f"HTTP {status}")
+
+# 删掉换班组后，挂在它身上的绑定必须松开
+call("POST", "/api/v1/dns/records/cdn.example.com/bind", {"kind": "group", "id": group_id})
+call("DELETE", f"/api/v1/groups/{group_id}")
+status, body = call("GET", "/api/v1/dns")
+row = {item["record"]: item for item in body["records"]}["cdn.example.com"]
+check("删除换班组后绑定被解除", row["target"] is None, str(row)[:200])
+
 print("\n" + "=" * 46)
 if failures:
     print(f"❌ {len(failures)} 项未通过：")

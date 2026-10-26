@@ -97,6 +97,23 @@ CREATE TABLE IF NOT EXISTS shift_runs (
     PRIMARY KEY (group_id, slot)
 );
 
+-- DNS 记录登记表：一条域名 = 一个显式绑定的目标 + 一份同步状态。
+-- 不再有「默认记录」兜底：谁都可能被绑上，多台机器抢同一个域名就是这么来的。
+CREATE TABLE IF NOT EXISTS dns_records (
+    record      TEXT    PRIMARY KEY,
+    -- '' 未绑定 / 'server' 服务器（含单机保活）/ 'group' 换班组
+    target_kind TEXT    NOT NULL DEFAULT '',
+    target_id   INTEGER NOT NULL DEFAULT 0,
+    -- 上一次成功同步到的 IP，用来判断「IP 变了没有」，也是界面上的当前解析
+    last_ip     TEXT    NOT NULL DEFAULT '',
+    last_status TEXT    NOT NULL DEFAULT '',
+    last_at     INTEGER NOT NULL DEFAULT 0,
+    updated_at  INTEGER NOT NULL DEFAULT 0
+);
+-- 一个目标只允许占一条记录，否则通知里到底报哪条、界面上到底指向谁都会含糊
+CREATE UNIQUE INDEX IF NOT EXISTS idx_dns_target
+    ON dns_records(target_kind, target_id) WHERE target_kind <> '';
+
 CREATE TABLE IF NOT EXISTS events (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     ts         INTEGER NOT NULL DEFAULT 0,

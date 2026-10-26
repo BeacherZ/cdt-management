@@ -2,14 +2,15 @@
 
 跑在 Docker 里的一体化面板：**阿里云 CDT 抢占式实例的单机保活 + 多机联合换班 + DDNS + 通知**，全部在浏览器里配完。
 
-两条独立流程，互不干扰：
+三个模块各管一段，互不干扰：
 
 | 模块 | 干什么 |
 | --- | --- |
 | **单机保活** | 实例掉线（含抢占被回收）就自动拉起来，不换班、不停机 |
 | **联合换班** | 多台服务器编成一组，各自运行指定小时数，轮流当班，同一时刻只留一台在线 |
+| **DNS** | 域名记录集中管理，一条记录显式绑一台机器或一个换班组，没绑的谁也不会动 |
 
-当班实例的公网 IP 会同步到 Cloudflare 的 A 记录，换班、故障转移、熔断、抢占恢复都会推一条结构化通知。
+当班实例的公网 IP 会同步到它绑定的那条 Cloudflare A 记录，换班、故障转移、熔断、抢占恢复都会推一条结构化通知。
 
 没编进任何流程的**闲散服务器**照旧可以手动开关机：服务器页点「关机」按节省停机模式停（不计规格费），点「开机」拉起。托管中的机器按钮会灰掉，避免和自动流程互相拉扯。
 
@@ -121,7 +122,7 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 
 ## 界面
 
-登录后左侧只有两个总菜单，子项缩进挂在下面：
+登录后左侧有三个总菜单，子项缩进挂在下面：
 
 ```
 概览              ← 点进去是概览页
@@ -129,6 +130,7 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 保活              ← 分组标题，点了没反应
   ├ 单机保活
   └ 联合换班
+DNS               ← 域名记录与绑定（右侧数字是记录条数）
 ```
 
 ![概览](docs/screenshots/02-dashboard.png)
@@ -144,9 +146,13 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 
 ![单机保活](docs/screenshots/03-keepalive.png)
 
-**换班组成员编辑**：顺序上下移、每台运行几小时、本组 DDNS 域名（从已配好的记录名里下拉选），都在这一屏改完；改完自动按新排班重新计时。
+**换班组成员编辑**：顺序上下移、每台运行几小时，都在这一屏改完；改完自动按新排班重新计时。DDNS 域名只在这里只读显示，改绑在「DNS」页做。
 
 ![编辑换班组](docs/screenshots/10-group-dialog.png)
+
+**DNS**：一条域名一行，绑定目标直接在下拉里选（单机保活 / 非保活实例 / 换班组），右侧是它现在解析到哪、该解析到哪。
+
+![DNS](docs/screenshots/15-dns.png)
 
 **服务器**：一台实例一张卡。卡片上只放日常要看的六样东西——**别名、真实地域（中文名）、公网 IP、
 流量进度、实例 ID、本月费用与余额**；AccessKey 打码值不上卡片（对判断没用，要换密钥去编辑弹窗）。
@@ -206,9 +212,10 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 2. 二选一（或都要，但**同一台不要同时挂两边**）：
    - **单机保活** → 添加保活，勾上这台
    - **联合换班** → 新建换班组，按顺序添加成员并填各自运行几小时（例如两台各 12 小时）
-3. **设置 → DDNS**：填 Cloudflare Token（或 Global API Key）、记录名，开启
-4. **设置 → 通知**：填 Telegram Bot Token + Chat ID，点「发送测试」确认能收到
-5. 回概览点「立即对账」，看第一轮结果
+3. **设置 → DDNS**：填 Cloudflare Token（或 Global API Key）、TTL，开启
+4. **DNS**：加域名记录，再把它绑到某台机器或某个换班组（不绑就谁也不会去动它）
+5. **设置 → 通知**：填 Telegram Bot Token + Chat ID，点「发送测试」确认能收到
+6. 回概览点「立即对账」，看第一轮结果
 
 ## 功能细节
 
@@ -279,13 +286,19 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 一处细节：**故障转移在一个班次内只发生一次**。切到替补后，本班次剩下的时间都固定在替补上，
 不会每分钟重新判一次、也不会重复记事件或重复推送。
 
-### DDNS
+### DNS
 
-- 只支持 Cloudflare A 记录，Token 与 Global API Key 两种认证
-- Zone ID 可以留空，按记录名自动反查根域
-- IP 没变就跳过 API 调用；多组用不同域名时缓存按记录名分开
-- **记录名可以配多条**（设置 → DDNS 里增删）：第一条是默认记录，单机保活和没单独指定域名的换班组都用它
-- 换班组编辑框里的「本组 DDNS 记录」是从这些记录名里下拉选的，不用手打；留空则跟随默认
+顶栏第三个大菜单，管两件事：**有哪些域名**、**每条归谁**。
+
+- 只支持 Cloudflare A 记录，Token 与 Global API Key 两种认证；Zone ID 可留空，按记录名自动反查根域
+- 一条记录只能绑一个目标：一台服务器（单机保活或闲散都算）或一个换班组。
+  反过来也一样，一个目标最多占一条记录 —— 所以「这台机器用哪个域名」永远只有一个答案
+- **没绑的记录谁也不会动**。不再有「默认记录」兜底：以前不填就用第一条，
+  几条保活任务、两个换班组会轮流往同一个域名上写，谁最后跑完谁说了算
+- 换班 / 保活结算时写的是**它自己绑的那条**；手动开机的闲散机器也会立刻把解析指过来
+- 后台每分钟巡检一次：只有「目标在跑、且当前 IP 和历史记录不一样」时才真发请求，稳定状态零开销
+- 状态四档：`已同步` / `待同步`（该指向 A，实际还在 B）/ `目标未运行`（不做处理）/ `未绑定`
+- 绑定随目标一起消失：删服务器、删换班组、把机器移出保活，对应的记录都会自动松开
 
 ### 通知类型
 
@@ -384,8 +397,9 @@ CDT_DRY_RUN=1 ./venv/bin/python -m app.main # 不调真实阿里云
 配套脚本（都只对本地 dry-run 实例、只用假数据）：
 
 ```bash
-python scripts/smoke_test.py http://127.0.0.1:8099   # 17 组端到端断言
+python scripts/smoke_test.py http://127.0.0.1:8099   # 18 组端到端断言
 python scripts/test_messages.py                      # 通知文案逐字对照脚本原文
+python scripts/test_dns.py                           # DNS 绑定/同步逻辑（不连网）
 python scripts/seed_demo.py  http://127.0.0.1:8099   # 灌 6 台假服务器 + 换班组
 node   scripts/screenshot.cjs http://127.0.0.1:8099  # 重新生成 docs/screenshots
 ```

@@ -285,8 +285,9 @@ def _mock(account: dict) -> dict[str, str]:
             state = {
                 "status": "Stopped",
                 "stopped_mode": "StopCharging",
-                # 203.0.113.0/24 是文档保留网段，不会指向任何真实主机
-                "public_ip": f"203.0.113.{index}",
+                # 47.243.x 是阿里云香港的公网段，看着像真的；
+                # 这里只是内存桩，dry-run 下不会真的往 Cloudflare 写解析
+                "public_ip": f"47.243.{index}.{20 + index}",
                 "traffic": f"{quota * 0.42:.2f}",
                 "cost": f"{quota * 0.072 + 9 + (seed % 420) / 100:.2f}",
                 "balance": f"{800 + seed % 1600}.{(seed * 7) % 100:02d}",

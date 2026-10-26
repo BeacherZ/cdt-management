@@ -253,6 +253,31 @@ class Cdp {
     await cdp.clickByText('.sidebar .nav-item', '服务器')
     await cdp.shot('05-servers.png')
 
+    // 3.5 DNS 页：一条域名只绑一个目标，没绑的不动
+    await cdp.clickByText('.sidebar .nav-parent', 'DNS')
+    await cdp.waitSelector('.dns-row')
+    await sleep(400)
+    await cdp.shot('15-dns.png')
+    const dnsRows = await cdp.evaluate(`(() => {
+      const rows = [...document.querySelectorAll('.dns-row')]
+      return rows.map((row) => {
+        const name = row.querySelector('.dns-name')
+        const badge = row.querySelector('.badge')
+        const select = row.querySelector('select')
+        const bound = select && select.selectedIndex >= 0 ? select.options[select.selectedIndex].text : ''
+        return [name ? name.textContent.trim() : '', badge ? badge.textContent.trim() : '', bound.trim()].join('=')
+      }).join('|')
+    })()`)
+    const expectedDns = [
+      'cdt-demo.example.com=已同步=港新联合保活',
+      'cdt-demo-2.example.com=已同步=日本-临时',
+      'cdt-demo-3.example.com=目标未运行=德国-闲置',
+    ].join('|')
+    if (dnsRows !== expectedDns) {
+      throw new Error('DNS 列表不对：' + dnsRows)
+    }
+    console.log('  ✓ DNS 三条记录各自绑到换班组 / 保活 / 闲散实例')
+
     // 4. 设置抽屉四个页签
     await cdp.clickByText('.sidebar-foot .nav-item', '设置')
     await cdp.waitSelector('.drawer')

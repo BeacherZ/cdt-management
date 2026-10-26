@@ -13,7 +13,7 @@ import threading
 import time
 from typing import Any
 
-from . import aliyun, db as dbmod, ddns, messages, notify, repo, settings
+from . import aliyun, db as dbmod, ddns, dns, messages, notify, repo, settings
 
 log = logging.getLogger("cdt-management.engine")
 
@@ -228,7 +228,7 @@ class Engine:
             elif status == "Running" and repo.get_flag(f"keepalive_wait:{server_id}"):
                 repo.clear_flag(f"keepalive_wait:{server_id}")
                 if config.get("notify_on_keepalive") == "1":
-                    ddns_status = self._sync_ddns(server, config, None)
+                    ddns_status = self._sync_ddns(server, config, dns.TARGET_SERVER, server_id)
                     # 单机保活拉起的是停机实例，语义上就是脚本里的「抢占恢复」，
                     # 所以共用同一套版式，只把「当班实例」换成「实例」。
                     notify.send_all(
@@ -476,7 +476,7 @@ class Engine:
             return summary
 
         # 5) DDNS 先行，再通知（保证通知里的解析状态真实）
-        ddns_status = self._sync_ddns(duty, config, group.get("ddns_record") or None)
+        ddns_status = self._sync_ddns(duty, config, dns.TARGET_GROUP, group_id)
         summary["ddns"] = str(ddns_status)
 
         if not notify_enabled:
@@ -651,26 +651,17 @@ class Engine:
 
     # -- DDNS -------------------------------------------------------------
     def _sync_ddns(
-        self, server: dict[str, Any], config: dict[str, str], record_override: str | None
+        self, server: dict[str, Any], config: dict[str, str], kind: str, target_id: int
     ) -> ddns.DDNSResult:
-        ip = str(server.get("public_ip") or "")
-        record = (record_override or "").strip() or ddns.default_record(config)
-        cache_key = f"ddns_last_ip:{record}" if record else "ddns_last_ip"
-        cached = repo.get_setting(cache_key) or (
-            "" if record_override else config.get("ddns_last_ip") or ""
-        )
-        result = ddns.sync(ip, {**config, "ddns_last_ip": cached}, record=record)
+        """把「这台机器正在跑」写进它绑定的那条记录。
 
-        update: dict[str, str] = {
-            "ddns_last_status": result.status,
-            "ddns_last_at": str(int(time.time())),
-        }
-        if result.status in (ddns.STATUS_SYNCED, ddns.STATUS_UNCHANGED):
-            update[cache_key] = ip
-            if not record_override:
-                update["ddns_last_ip"] = ip
-        repo.set_settings(update)
-        return result
+        没绑就没有记录可写，返回「未绑定」而不是偷偷用第一条 —— 以前就是那样，
+        两台机器抢同一个域名，谁最后跑完谁说了算。
+        """
+        record = repo.dns_record_of(kind, target_id)
+        if not record:
+            return ddns.DDNSResult(dns.STATUS_UNBOUND, "未在 DNS 页绑定记录")
+        return dns.sync_record(record, config, ip=str(server.get("public_ip") or ""))
 
     # -- 结算通知 ---------------------------------------------------------
     def _notify_settled(
@@ -828,6 +819,18 @@ class Engine:
         if note:
             detail += f" · 由{note}托管，下一轮对账会按流程纠正"
 
+        # 闲散机器也能绑域名：手动开机后立刻把解析指过来，不用等下一轮巡检
+        if action == "start" and info is not None:
+            record = repo.dns_record_of(dns.TARGET_SERVER, server_id)
+            if record:
+                result = dns.sync_record(record, repo.get_settings(), ip=info.public_ip)
+                detail += f" · 解析 {record} {result.status}"
+                payload_dns = {"record": record, "status": result.status}
+            else:
+                payload_dns = None
+        else:
+            payload_dns = None
+
         if info is not None:
             repo.update_server_runtime(
                 server_id,
@@ -845,6 +848,7 @@ class Engine:
 
         repo.add_event("manual", f"{server.get('label')}：手动{label}", detail, server_id=server_id)
         payload["managed_note"] = note
+        payload["dns"] = payload_dns
         return payload
 
     def refresh(self, server_id: int) -> dict[str, Any]:

@@ -3,6 +3,7 @@ import {
   Activity,
   AlertTriangle,
   Gauge,
+  Globe2,
   HeartPulse,
   LogOut,
   Plus,
@@ -23,10 +24,11 @@ import ServerDialog from './components/ServerDialog'
 import GroupDialog from './components/GroupDialog'
 import SettingsDrawer from './components/SettingsDrawer'
 import ConfirmDialog from './components/ConfirmDialog'
+import DNSView from './components/DNSView'
 import { Badge, Empty, Modal, statusLabel, statusTone, stoppedModeLabel } from './components/ui'
 
 type Phase = 'loading' | 'setup' | 'login' | 'ready' | 'fatal'
-type View = 'dashboard' | 'keepalive' | 'shift' | 'servers'
+type View = 'dashboard' | 'keepalive' | 'shift' | 'servers' | 'dns'
 type Toast = { id: number; tone: 'success' | 'error' | 'info'; message: string }
 
 /** 删除这类不可撤销的操作，统一走应用内二次确认（window.confirm 在桌面壳里可能被吞掉） */
@@ -44,8 +46,8 @@ const REFRESH_MS = 10_000
 type NavLeaf = { key: View; label: string; icon: typeof Gauge }
 
 /**
- * 侧栏只有两个总菜单：概览 / 保活。
- * 带 key 的总菜单本身就是页面（概览可点），不带的只作分组标签（保活）。
+ * 侧栏三个总菜单：概览 / 保活 / DNS。
+ * 带 key 的总菜单本身就是页面（概览、DNS 可点），不带的只作分组标签（保活）。
  * 子项统一缩进挂在总菜单下面。
  */
 type NavSection = {
@@ -70,12 +72,24 @@ const NAV_SECTIONS: NavSection[] = [
       { key: 'shift', label: '联合换班', icon: Repeat },
     ],
   },
+  {
+    title: 'DNS',
+    key: 'dns',
+    icon: Globe2,
+    children: [],
+  },
 ]
 
 function navCount(key: View, overview: Overview): number {
   if (key === 'servers') return overview.servers.length
   if (key === 'keepalive') return overview.keepalives.length
   if (key === 'shift') return overview.groups.length
+  return 0
+}
+
+/** 总菜单那一行右侧的数字（DNS 用它显示记录条数） */
+function sectionCount(section: NavSection, overview: Overview): number {
+  if (section.key === 'dns') return overview.dns?.records.length ?? 0
   return 0
 }
 
@@ -107,6 +121,8 @@ export default function App() {
   const [keepalivePicker, setKeepalivePicker] = useState(false)
   const [confirmBox, setConfirmBox] = useState<ConfirmRequest | null>(null)
   const [confirmBusy, setConfirmBusy] = useState(false)
+  const [busyDns, setBusyDns] = useState<string | null>(null)
+  const [dnsSyncingAll, setDnsSyncingAll] = useState(false)
   const polling = useRef<number | null>(null)
 
   const toast = useCallback((message: string, tone: Toast['tone'] = 'info') => {
@@ -311,6 +327,100 @@ export default function App() {
     })
   }
 
+  // -- DNS -----------------------------------------------------------
+  async function bindDns(record: string, kind: string, id: number) {
+    setBusyDns(record)
+    try {
+      const result = await post<{ released?: string }>(
+        `/api/v1/dns/records/${encodeURIComponent(record)}/bind`,
+        { kind, id },
+      )
+      await loadAll()
+      if (!kind) {
+        toast('已解绑，这条记录不再被动', 'success')
+      } else if (result?.released) {
+        toast(`已绑定，原来的 ${result.released} 同时解绑`, 'success')
+      } else {
+        toast('已绑定', 'success')
+      }
+    } catch (error) {
+      toast(error instanceof Error ? error.message : '绑定失败', 'error')
+    } finally {
+      setBusyDns(null)
+    }
+  }
+
+  async function syncDns(record: string) {
+    setBusyDns(record)
+    try {
+      const result = await post<{ status?: string; detail?: string }>(
+        `/api/v1/dns/records/${encodeURIComponent(record)}/sync`,
+      )
+      await loadAll()
+      const ok = (result?.status ?? '').startsWith('✅')
+      toast(`${record}：${result?.status ?? '已处理'}${result?.detail && !ok ? `（${result.detail}）` : ''}`,
+        ok ? 'success' : 'info')
+    } catch (error) {
+      toast(error instanceof Error ? error.message : '同步失败', 'error')
+    } finally {
+      setBusyDns(null)
+    }
+  }
+
+  async function syncAllDns() {
+    setDnsSyncingAll(true)
+    try {
+      const result = await post<{ items?: { record: string; status: string }[] }>('/api/v1/dns/sync')
+      await loadAll()
+      const items = result?.items ?? []
+      if (items.length === 0) {
+        toast('没有需要同步的记录（目标都没在跑，或解析已经是最新的）', 'info')
+      } else {
+        const failed = items.filter((item) => !item.status.startsWith('✅'))
+        toast(
+          failed.length === 0
+            ? `${items.length} 条记录已同步`
+            : `${items.length - failed.length} 条成功，${failed.length} 条失败：${failed
+                .map((item) => item.record)
+                .join('、')}`,
+          failed.length === 0 ? 'success' : 'error',
+        )
+      }
+    } catch (error) {
+      toast(error instanceof Error ? error.message : '同步失败', 'error')
+    } finally {
+      setDnsSyncingAll(false)
+    }
+  }
+
+  /** 返回 true 表示加成功了，DNS 页据此收起输入框 */
+  async function addDnsRecord(name: string): Promise<boolean> {
+    try {
+      await post('/api/v1/dns/records', { record: name })
+      await loadAll()
+      toast(`已添加 ${name}`, 'success')
+      return true
+    } catch (error) {
+      toast(error instanceof Error ? error.message : '添加失败', 'error')
+      return false
+    }
+  }
+
+  function removeDnsRecord(record: string) {
+    setConfirmBox({
+      title: '删除记录名',
+      message: `确定删除「${record}」？`,
+      hint: '只从本机列表里移除，Cloudflare 上的 DNS 记录不会被删；如果它绑了机器，绑定会一并解除。',
+      confirmText: '删除记录名',
+      failText: '删除失败',
+      run: async () => {
+        await del(`/api/v1/dns/records/${encodeURIComponent(record)}`)
+        await loadAll()
+        toast('记录名已删除', 'success')
+      },
+    })
+  }
+
   async function runConfirm() {
     if (!confirmBox) return
     setConfirmBusy(true)
@@ -415,29 +525,34 @@ export default function App() {
                   >
                     <ParentIcon size={15} />
                     <span className="nav-text">{section.title}</span>
+                    {sectionCount(section, overview) > 0 && (
+                      <span className="nav-count">{sectionCount(section, overview)}</span>
+                    )}
                   </button>
                 ) : (
                   <div className="nav-parent label">{section.title}</div>
                 )}
 
-                <div className="nav-sub">
-                  {section.children.map((item) => {
-                    const Icon = item.icon
-                    const count = navCount(item.key, overview)
-                    return (
-                      <button
-                        key={item.key}
-                        className={`nav-item${view === item.key ? ' on' : ''}`}
-                        aria-current={view === item.key ? 'page' : undefined}
-                        onClick={() => setView(item.key)}
-                      >
-                        <Icon size={14} />
-                        <span className="nav-text">{item.label}</span>
-                        {count > 0 && <span className="nav-count">{count}</span>}
-                      </button>
-                    )
-                  })}
-                </div>
+                {section.children.length > 0 && (
+                  <div className="nav-sub">
+                    {section.children.map((item) => {
+                      const Icon = item.icon
+                      const count = navCount(item.key, overview)
+                      return (
+                        <button
+                          key={item.key}
+                          className={`nav-item${view === item.key ? ' on' : ''}`}
+                          aria-current={view === item.key ? 'page' : undefined}
+                          onClick={() => setView(item.key)}
+                        >
+                          <Icon size={14} />
+                          <span className="nav-text">{item.label}</span>
+                          {count > 0 && <span className="nav-count">{count}</span>}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
             )
           })}
@@ -513,6 +628,23 @@ export default function App() {
           />
         )}
 
+        {view === 'dns' && (
+          <DNSView
+            dns={overview.dns}
+            servers={overview.servers}
+            keepalives={overview.keepalives}
+            groups={overview.groups}
+            busy={busyDns}
+            syncingAll={dnsSyncingAll}
+            onBind={bindDns}
+            onSync={syncDns}
+            onSyncAll={syncAllDns}
+            onAddRecord={addDnsRecord}
+            onRemoveRecord={removeDnsRecord}
+            onOpenSettings={() => setSettingsOpen(true)}
+          />
+        )}
+
         <div
           style={{
             marginTop: 28,
@@ -551,7 +683,6 @@ export default function App() {
         <GroupDialog
           group={groupDialog.group}
           servers={overview.servers}
-          ddnsRecords={settings.ddns.records || []}
           onClose={() => setGroupDialog({ open: false, group: null })}
           onSaved={async (message) => {
             setGroupDialog({ open: false, group: null })

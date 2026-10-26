@@ -5,11 +5,9 @@ import {
   Download,
   Globe2,
   LoaderCircle,
-  Plus,
   Save,
   Send,
   SlidersHorizontal,
-  Trash2,
   TriangleAlert,
   X,
 } from 'lucide-react'
@@ -85,7 +83,6 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
           cf_email: form.ddns.cf_email,
           cf_key: (form.ddns as unknown as { cf_key?: string }).cf_key || '',
           zone_id: form.ddns.zone_id,
-          records: form.ddns.records.map((name) => name.trim()).filter(Boolean),
           ttl: form.ddns.ttl,
           proxied: form.ddns.proxied,
         },
@@ -399,61 +396,17 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
               )}
 
               <div className="field">
-                <label htmlFor="record">记录名</label>
-                <div className="record-list">
-                  {(form.ddns.records.length ? form.ddns.records : ['']).map((name, index) => (
-                    <div className="record-row" key={index}>
-                      <input
-                        id={index === 0 ? 'record' : undefined}
-                        className="input"
-                        value={name}
-                        onChange={(event) =>
-                          patch((draft) => {
-                            const list = draft.ddns.records.length
-                              ? draft.ddns.records
-                              : ['']
-                            list[index] = event.target.value
-                            draft.ddns.records = list
-                          })
-                        }
-                        placeholder="cdt.example.com"
-                      />
-                      {index === 0 ? (
-                        <span className="record-tag">默认</span>
-                      ) : (
-                        <button
-                          type="button"
-                          className="btn ghost icon sm"
-                          title="删除这条记录"
-                          onClick={() =>
-                            patch((draft) => {
-                              draft.ddns.records = draft.ddns.records.filter(
-                                (_, i) => i !== index,
-                              )
-                            })
-                          }
-                        >
-                          <Trash2 size={13} style={{ color: 'var(--red)' }} />
-                        </button>
-                      )}
+                <label>域名记录</label>
+                <div className="hint" style={{ lineHeight: 1.7 }}>
+                  记录名和绑定都挪到了左侧「DNS」页：那里能加删域名，并把每条域名指派给
+                  单机保活实例、闲散实例或某个换班组。这里只负责 Cloudflare 的认证与 TTL。
+                  {form.ddns.records.length > 0 && (
+                    <div style={{ marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {form.ddns.records.map((name) => (
+                        <code key={name}>{name}</code>
+                      ))}
                     </div>
-                  ))}
-                </div>
-                <button
-                  type="button"
-                  className="btn sm"
-                  style={{ alignSelf: 'flex-start' }}
-                  onClick={() =>
-                    patch((draft) => {
-                      if (!draft.ddns.records.length) draft.ddns.records = ['']
-                      draft.ddns.records.push('')
-                    })
-                  }
-                >
-                  <Plus size={13} /> 添加记录名
-                </button>
-                <div className="hint">
-                  第一条是默认记录：单机保活、以及没单独指定域名的换班组都用它。换班组可以在组里另选一条。
+                  )}
                 </div>
               </div>
 

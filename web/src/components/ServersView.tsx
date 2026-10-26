@@ -1,5 +1,6 @@
 import {
   AlertTriangle,
+  Globe2,
   HeartPulse,
   LoaderCircle,
   MapPin,
@@ -164,6 +165,12 @@ export default function ServersView({
                 )}
 
                 <div className="card-foot">
+                  {server.dns_record && (
+                    <span className="dns-chip" title="已绑定的 DNS 记录">
+                      <Globe2 size={10} />
+                      {server.dns_record}
+                    </span>
+                  )}
                   <span className={`owner-tag${owner ? (locked ? ' locked' : ' paused') : ' free'}`}>
                     {owner ? (
                       <>

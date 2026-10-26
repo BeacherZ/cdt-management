@@ -12,7 +12,7 @@ from typing import Any
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from . import aliyun, billing, ddns, notify, repo, security, settings
+from . import aliyun, billing, ddns, dns, notify, repo, security, settings
 from .shift import (
     PHASE_BREAKER,
     PHASE_ERROR,
@@ -176,7 +176,9 @@ def _managed_map() -> dict[int, dict[str, Any]]:
 
 
 def server_summary(
-    server: dict[str, Any], managed: dict[int, dict[str, Any]] | None = None
+    server: dict[str, Any],
+    managed: dict[int, dict[str, Any]] | None = None,
+    dns_map: dict[int, str] | None = None,
 ) -> dict[str, Any]:
     used = server.get("traffic_used")
     quota = float(server.get("quota_gb") or 0) or 1
@@ -203,6 +205,8 @@ def server_summary(
         "managed": owner,
         # 本月账单 + 账户余额快照（慢数据，后台定时刷新，读库不出网）
         "billing": billing.summary_of(server),
+        # 绑定的 DNS 域名；空串表示这条机器没占任何记录
+        "dns_record": (dns_map or {}).get(int(server.get("id") or 0), ""),
     }
 
 
@@ -211,6 +215,7 @@ def _group_payload(
     config: dict[str, str],
     now_ts: float,
     managed: dict[int, dict[str, Any]] | None = None,
+    books: dict[str, dict[int, str]] | None = None,
 ) -> dict[str, Any]:
     members = active_members(group)
     picked = duty_at(group, now_ts)
@@ -236,7 +241,9 @@ def _group_payload(
                 "hours": member["hours"],
                 "enabled": bool(member["enabled"]),
                 "is_duty": int(member["server_id"]) == duty_id,
-                "server": server_summary(server, managed) if server else None,
+                "server": server_summary(server, managed, (books or {}).get("servers"))
+                if server
+                else None,
             }
         )
 
@@ -245,7 +252,8 @@ def _group_payload(
         "name": group.get("name") or "",
         "enabled": bool(group.get("enabled")),
         "failover_enabled": bool(group.get("failover_enabled")),
-        "ddns_record": group.get("ddns_record") or "",
+        # 绑定关系在 DNS 页维护，这里只是读出来显示
+        "ddns_record": (books or {}).get("groups", {}).get(int(group["id"]), ""),
         "anchor_at": group.get("anchor_at") or 0,
         "cycle_hours": round(sum(float(m["hours"]) for m in members), 2),
         "members": member_payload,
@@ -352,6 +360,7 @@ def register(app: FastAPI) -> None:
         channels = notify.enabled_channels(config)
         keepalives = repo.list_keepalives()
         managed = _managed_map()
+        books = dns.record_books()
 
         return {
             "now": now.isoformat(),
@@ -360,19 +369,19 @@ def register(app: FastAPI) -> None:
             "version": settings.VERSION,
             "brand": settings.BRAND,
             "repo": settings.REPO,
-            "servers": [server_summary(s, managed) for s in repo.list_servers()],
-            "keepalives": keepalives,
-            "groups": [
-                _group_payload(g, config, now.timestamp(), managed) for g in repo.list_groups()
+            "servers": [
+                server_summary(s, managed, books.get("servers")) for s in repo.list_servers()
             ],
-            "ddns": {
-                "enabled": config.get("ddns_enabled") == "1",
-                "record": ddns.default_record(config),
-                "records": ddns.records(config),
-                "last_ip": config.get("ddns_last_ip") or "",
-                "last_status": config.get("ddns_last_status") or "",
-                "last_at": int(config.get("ddns_last_at") or 0),
-            },
+            "keepalives": [
+                {**item, "dns_record": books.get("servers", {}).get(int(item["server_id"]), "")}
+                for item in keepalives
+            ],
+            "groups": [
+                _group_payload(g, config, now.timestamp(), managed, books)
+                for g in repo.list_groups()
+            ],
+            # DNS 页的全部数据：记录名 + 绑定目标 + 上次同步结果
+            "dns": dns.snapshot(config, now.timestamp()),
             "notifications": {
                 "channels": channels,
                 "telegram": "telegram" in channels,
@@ -385,13 +394,20 @@ def register(app: FastAPI) -> None:
     @app.post("/api/v1/reconcile")
     def reconcile(request: Request, user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
         require_csrf(request)
-        return {"results": engine.reconcile_all()}
+        results = engine.reconcile_all()
+        # 手动对账时顺手把 DNS 也过一遍，免得「点了立即对账但域名没跟上」
+        return {"results": results, "dns": dns.reconcile(repo.get_settings())}
 
     # -- 服务器 ---------------------------------------------------------
     @app.get("/api/v1/servers")
     def servers(user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
         managed = _managed_map()
-        return {"items": [server_summary(s, managed) for s in repo.list_servers()]}
+        books = dns.record_books()
+        return {
+            "items": [
+                server_summary(s, managed, books.get("servers")) for s in repo.list_servers()
+            ]
+        }
 
     @app.post("/api/v1/servers")
     def save_server(request: Request, payload: dict[str, Any], user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
@@ -459,7 +475,10 @@ def register(app: FastAPI) -> None:
     def groups(user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
         config = repo.get_settings()
         now_ts = dt.datetime.now(_timezone(config.get("timezone") or "Asia/Shanghai")).timestamp()
-        return {"items": [_group_payload(g, config, now_ts) for g in repo.list_groups()]}
+        books = dns.record_books()
+        return {
+            "items": [_group_payload(g, config, now_ts, None, books) for g in repo.list_groups()]
+        }
 
     @app.post("/api/v1/groups")
     def save_group(request: Request, payload: dict[str, Any], user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
@@ -476,6 +495,58 @@ def register(app: FastAPI) -> None:
     def switch_group(request: Request, group_id: int, user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
         require_csrf(request)
         return {"result": engine.manual_switch(group_id)}
+
+    # -- DNS -----------------------------------------------------------
+    @app.get("/api/v1/dns")
+    def get_dns(user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
+        return dns.snapshot(repo.get_settings())
+
+    @app.post("/api/v1/dns/records")
+    def add_dns_record(request: Request, payload: dict[str, Any], user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
+        require_csrf(request)
+        name = dns.add_record(str(payload.get("record") or ""), repo.get_settings())
+        repo.add_event("dns", "DNS 记录名已添加", name)
+        return {"record": name}
+
+    @app.delete("/api/v1/dns/records/{record}")
+    def remove_dns_record(request: Request, record: str, user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
+        require_csrf(request)
+        row = repo.get_dns_record(record)
+        if row is None:
+            raise HTTPException(status_code=404, detail="记录不存在")
+        dns.remove_record(record, repo.get_settings())
+        repo.add_event(
+            "dns", "DNS 记录名已删除", f"{record}（绑定已一并解除）" if row.get("target_kind") else record
+        )
+        return {"ok": True}
+
+    @app.post("/api/v1/dns/records/{record}/bind")
+    def bind_dns(request: Request, record: str, payload: dict[str, Any], user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
+        require_csrf(request)
+        kind = str(payload.get("kind") or "")
+        target_id = int(payload.get("id") or 0)
+        if kind and not target_id:
+            raise ValueError("请选择绑定目标")
+        config = repo.get_settings()
+        dns.sync_registry(config)
+        return dns.bind(record, kind, target_id)
+
+    @app.post("/api/v1/dns/records/{record}/sync")
+    def sync_dns(request: Request, record: str, user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
+        require_csrf(request)
+        config = repo.get_settings()
+        if config.get("ddns_enabled") != "1":
+            raise HTTPException(status_code=400, detail="DDNS 未启用，请先在设置里打开")
+        result = dns.sync_record(record, config, force=True)
+        return {"record": record, "status": result.status, "detail": result.detail, "ip": result.ip}
+
+    @app.post("/api/v1/dns/sync")
+    def sync_all_dns(request: Request, user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
+        require_csrf(request)
+        config = repo.get_settings()
+        if config.get("ddns_enabled") != "1":
+            raise HTTPException(status_code=400, detail="DDNS 未启用，请先在设置里打开")
+        return {"items": dns.reconcile(config, force=True)}
 
     # -- 设置 -----------------------------------------------------------
     @app.get("/api/v1/settings")

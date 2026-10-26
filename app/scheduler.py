@@ -7,7 +7,7 @@ import logging
 import threading
 import time
 
-from . import billing, repo, settings
+from . import billing, dns, repo, settings
 from .shift import engine, _timezone
 
 log = logging.getLogger("cdt-management.scheduler")
@@ -43,6 +43,12 @@ def _loop() -> None:
             _maybe_daily_report()
         except Exception:  # noqa: BLE001
             log.exception("日报检查异常")
+
+        # DNS：只在「目标在跑但解析对不上」时才真发请求，稳定状态零开销
+        try:
+            dns.reconcile(repo.get_settings())
+        except Exception:  # noqa: BLE001
+            log.exception("DNS 巡检异常")
 
         # 费用是慢数据，refresh_due 内部按 30 分钟 TTL 自行筛，命中时才真打接口
         try:

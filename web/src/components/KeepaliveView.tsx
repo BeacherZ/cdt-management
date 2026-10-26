@@ -1,4 +1,5 @@
 import {
+  Globe2,
   HeartPulse,
   LoaderCircle,
   MapPin,
@@ -130,6 +131,15 @@ export default function KeepaliveView({
                   quota={item.quota_gb}
                   threshold={item.threshold_gb}
                 />
+
+                {item.dns_record && (
+                  <div className="meta-line">
+                    <span className="dns-chip" title="已绑定的 DNS 记录">
+                      <Globe2 size={10} />
+                      {item.dns_record}
+                    </span>
+                  </div>
+                )}
 
                 <div className="toggle-row" style={{ paddingTop: 4, paddingBottom: 0, borderBottom: 0 }}>
                   <div className="toggle-text">

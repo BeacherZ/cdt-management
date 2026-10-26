@@ -135,6 +135,18 @@ class ShiftDone(unittest.TestCase):
         self.assertNotIn("已用", messages.shift_done(A, [B], "AM", "✅ 已同步").html)
 
 
+class DdnsStatus(unittest.TestCase):
+    """域名没绑定时通知里也要如实写，不能悄悄显示成「已同步」。"""
+
+    def test_unbound_is_shown_verbatim(self):
+        message = messages.shift_done(A, [B], "AM", "⏸ 未绑定")
+        self.assertIn("┃ ☁️ DDNS：⏸ 未绑定", message.html)
+
+    def test_disabled_is_shown_verbatim(self):
+        message = messages.shift_done(A, [B], "AM", "⏸ DDNS 未启用")
+        self.assertIn("┃ ☁️ DDNS：⏸ DDNS 未启用", message.html)
+
+
 class ShiftFailover(unittest.TestCase):
     def test_two_members_exactly_like_script(self):
         expected = (

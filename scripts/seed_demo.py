@@ -137,11 +137,13 @@ if len(members) >= 2:
             "name": "港新联合保活",
             "enabled": True,
             "failover_enabled": True,
-            "ddns_record": "cdt-demo.example.com",
             "members": members,
         },
     )
-    print(f"换班组 -> {code} id={body.get('id')}")
+    group_id = int(body.get("id") or 0)
+    print(f"换班组 -> {code} id={group_id}")
+else:
+    group_id = 0
 
 # -- 5. 配置项（凭据全部假值，渠道保持关闭以免真的外发）--------------------
 code, _ = call(
@@ -160,12 +162,16 @@ code, _ = call(
         "notify_on_error": True,
         "notify_on_keepalive": True,
         "ddns": {
-            "enabled": False,
+            "enabled": True,
             "provider": "cloudflare",
             "cf_auth_mode": "token",
             "cf_email": "noreply@example.com",
             "zone_id": "0123456789abcdef0123456789abcdef",
-            "records": ["cdt-demo.example.com", "cdt-demo-2.example.com"],
+            "records": [
+                "cdt-demo.example.com",
+                "cdt-demo-2.example.com",
+                "cdt-demo-3.example.com",
+            ],
             "ttl": "120",
             "proxied": False,
             "cf_token": "demo-cloudflare-token-not-real",
@@ -188,6 +194,19 @@ code, _ = call(
     },
 )
 print(f"配置项 -> {code}")
+
+# -- 5.5 DNS 绑定：一条域名只归一个目标 ----------------------------------
+# 演示三条不同形态的绑定：换班组 / 单机保活 / 闲散实例
+DNS_BINDINGS = [
+    ("cdt-demo.example.com", "group", group_id, "换班组"),
+    ("cdt-demo-2.example.com", "server", server_ids.get("日本-临时", 0), "单机保活"),
+    ("cdt-demo-3.example.com", "server", server_ids.get("德国-闲置", 0), "闲散实例"),
+]
+for record, kind, target_id, label in DNS_BINDINGS:
+    if not target_id:
+        continue
+    code, payload = call("POST", f"/api/v1/dns/records/{record}/bind", {"kind": kind, "id": target_id})
+    print(f"DNS 绑定 {record} -> {label} ({code})")
 
 # -- 6. 跑两轮对账：第一轮拉起实例，第二轮实例就绪后结算，截图里才是「已就绪」
 for round_index in (1, 2):

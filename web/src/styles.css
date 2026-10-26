@@ -370,40 +370,204 @@ label {
 
 /* ------------------------------------------------- 设置里可增删的 DDNS 记录名 */
 
-.record-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+/* -------------------------------------------------------------- DNS 页 */
+
+.muted {
+  color: var(--muted-soft);
 }
 
-.record-row {
+/* 只读值：绑定结果这类「能看不能在这里改」的东西 */
+.readonly-value {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--panel-inset);
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+
+.readonly-value code {
+  font-size: 11.5px;
+  color: var(--ink);
+}
+
+/* 提示条：DDNS 关着 / 没配 Token */
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 9px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  background: var(--panel-inset);
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.notice.amber {
+  border-color: color-mix(in srgb, var(--amber) 28%, var(--line));
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
+.notice > span {
+  flex: 1;
+  min-width: 0;
+}
+
+.dns-add {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+
+.dns-add-actions {
+  display: flex;
+  gap: 8px;
+  padding-top: 22px;
+  flex: none;
+}
+
+.dns-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dns-row {
+  padding: 13px 15px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.dns-row:hover {
+  border-color: color-mix(in srgb, var(--accent) 20%, var(--line));
+}
+
+.dns-row-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.dns-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dns-tag {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel-inset);
+  font-size: 10px;
+  color: var(--muted-soft);
+}
+
+.dns-row-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 2px;
+  flex: none;
+}
+
+.dns-bind {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.record-row .input {
+.dns-bind > label {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.dns-bind .select {
   flex: 1;
+  min-width: 0;
+  max-width: 340px;
+  height: 32px;
+}
+
+.dns-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  row-gap: 4px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.dns-target {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   min-width: 0;
 }
 
-.record-tag {
+.dns-target svg {
   flex: none;
-  padding: 2px 7px;
-  border-radius: var(--radius-pill, 999px);
+  opacity: 0.75;
+}
+
+.dns-run {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 999px;
   border: 1px solid var(--line);
-  font-size: 10.5px;
-  font-weight: 600;
-  color: var(--muted-soft);
-  white-space: nowrap;
-}
-
-.foot-note {
-  font-size: 11.5px;
+  font-size: 10px;
   color: var(--muted-soft);
 }
 
-.input,
+.dns-run.on {
+  border-color: color-mix(in srgb, var(--green) 34%, var(--line));
+  color: var(--green);
+}
+
+.dns-ip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.dns-ip code {
+  font-size: 11px;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--panel-inset);
+  border: 1px solid var(--line);
+  color: var(--ink-soft);
+}
+
+/* 该指向 vs 现在指向：还没同步时用琥珀色提醒 */
+.dns-ip code.want {
+  border-color: color-mix(in srgb, var(--amber) 34%, var(--line));
+  color: var(--amber);
+}
+
+.dns-time {
+  color: var(--muted-soft);
+}
+
+.dns-error {
+  color: var(--red);
+}
+
 .select,
 .textarea {
   width: 100%;
@@ -1026,6 +1190,29 @@ label {
   font-size: 11px;
   color: var(--ink-soft);
   white-space: nowrap;
+}
+
+/* 卡片上的域名小标签 */
+.dns-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel-inset);
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 10px;
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dns-chip svg {
+  flex: none;
+  opacity: 0.7;
 }
 
 /* ---------------------------------------------------- 卡片底部：托管 / 手动 */
