@@ -231,6 +231,7 @@ chown -R 10001:10001 "$DIR" 2>/dev/null ||
 say "启动容器"
 if ! docker run -d --name "$NAME" --restart unless-stopped \
     --init \
+    --log-opt max-size=10m --log-opt max-file=3 \
     -p "${PORT}:8080" \
     -e TZ=Asia/Shanghai \
     -e CDT_DATA_DIR=/data \

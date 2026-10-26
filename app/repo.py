@@ -673,15 +673,19 @@ def add_event(
     group_id: int = 0,
     server_id: int = 0,
     status: str = "done",
+    pending_status: str = "",
+    pending_kind: str = "",
 ) -> int:
     """写入一条事件。返回事件 ID，供后续 add_event_progress 追加过程。
 
     status 取值：done（一次成型，历史事件）/ running（进行中）/ error（失败）。
+    pending_status：异步事件待确认的目标状态（如 Stopped/Running），空串表示无需轮询。
+    pending_kind：异步事件类型（manual/keepalive），确认器据此决定到位后是否补发通知。
     """
     now = int(time.time())
     return db.insert(
         "INSERT INTO events(ts, level, kind, group_id, server_id, title, detail, "
-        "status, finished_at) VALUES(?,?,?,?,?,?,?,?,?)",
+        "status, finished_at, pending_status, pending_kind) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
         (
             now,
             level,
@@ -692,14 +696,33 @@ def add_event(
             detail,
             status,
             now if status != "running" else 0,
+            pending_status if status == "running" else "",
+            pending_kind if status == "running" else "",
         ),
     )
+
+
+def list_pending_events() -> list[dict[str, Any]]:
+    """所有「进行中且需要轮询确认」的事件：确认器线程据此查状态、打完成标志。"""
+    rows = db.query(
+        "SELECT * FROM events WHERE status='running' AND pending_status<>'' "
+        "ORDER BY id"
+    )
+    events = [dict(row) for row in rows]
+    for event in events:
+        event["progress"] = _parse_progress(event.get("progress"))
+    return events
+
+
+# 单个事件最多保留的进度条数，超出丢弃最旧的，防止长期卡住的事件把进度撑爆
+PROGRESS_MAX_STEPS = 50
 
 
 def add_event_progress(event_id: int, text: str) -> None:
     """往事件的过程日志追加一条，并刷新 updated 时间戳（用 ts 近似当 updated_at）。
 
     相邻两条 text 相同就跳过，避免换班每轮 reconcile 反复追加同一条进度刷屏。
+    单事件进度条数封顶 PROGRESS_MAX_STEPS，超出丢最旧的。
     """
     if not event_id:
         return
@@ -714,6 +737,8 @@ def add_event_progress(event_id: int, text: str) -> None:
     if progress and progress[-1].get("text") == text:
         return
     progress.append({"ts": now, "text": text})
+    if len(progress) > PROGRESS_MAX_STEPS:
+        progress = progress[-PROGRESS_MAX_STEPS:]
     db.execute(
         "UPDATE events SET progress=? WHERE id=?",
         (json.dumps(progress, ensure_ascii=False), event_id),

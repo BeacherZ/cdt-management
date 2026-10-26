@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 APP_NAME = "cdt-management"
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 
 DATA_DIR = Path(os.environ.get("CDT_DATA_DIR", "./data")).resolve()
 DB_PATH = DATA_DIR / "cdt-management.db"
@@ -39,6 +39,10 @@ SHIFT_TIMEOUT_MINUTES = max(2, int(os.environ.get("CDT_SHIFT_TIMEOUT_MINUTES", "
 
 # dry-run：不调真实阿里云接口，用于本地 UI 调试
 DRY_RUN = os.environ.get("CDT_DRY_RUN", "0") == "1"
+
+# dry-run 桩模拟实例异步操作（开机/停机）到位的延迟秒数。默认 3 秒便于手动
+# 观察「转圈确认」流程；冒烟测试设 0 保持同步语义，专注测业务流程而非轮询时序。
+MOCK_OP_DELAY = max(0.0, float(os.environ.get("CDT_MOCK_OP_DELAY", "3")))
 
 SESSION_COOKIE = "cdt_mgmt_session"
 CSRF_COOKIE = "cdt_mgmt_csrf"

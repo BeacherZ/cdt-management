@@ -51,6 +51,7 @@ export const STOPPED_MODE_LABEL: Record<string, string> = {
   StopCharging: '节省停机',
   KeepCharging: '普通停机',
   Stop: '普通停机',
+  'Not-applicable': '普通停机',
 }
 
 export function stoppedModeLabel(mode?: string | null): string {

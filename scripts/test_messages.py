@@ -122,6 +122,18 @@ class ShiftDone(unittest.TestCase):
         self.assertIn("均已普通停机", message.html)
         self.assertNotIn("均已节省停机", message.html)
 
+    def test_not_applicable_shown_as_normal_stop(self):
+        # Not-applicable = 本实例不支持停机不收费，停机后照常收费，语义等同普通停机，
+        # 不能原样漏成英文 Not-applicable
+        na = {**B, "stopped_mode": "Not-applicable"}
+        message = messages.shift_done(A, [na], "AM", "✅ 已同步")
+        self.assertIn("┃ ⚪ 状态：Stopped (KeepCharging)", message.html)
+        self.assertNotIn("Not-applicable", message.html)
+        # 尾巴也要说「普通停机」，不能说「节省停机」
+        message = messages.breaker([{**na, "traffic_used": 200.0}, {**na, "label": "C2"}])
+        self.assertIn("均已普通停机", message.html)
+        self.assertNotIn("均已节省停机", message.html)
+
     def test_no_usage_line_in_shift_report(self):
         # 脚本的换班报告里没有「已用」这一行，别被顺手加回来
         self.assertNotIn("已用", messages.shift_done(A, [B], "AM", "✅ 已同步").html)

@@ -429,22 +429,21 @@ check("闲散机器 managed 为空", idle.get("managed") is None, str(idle.get("
 
 status, body = call("POST", f"/api/v1/servers/{idle['id']}/actions/stop")
 check("闲散机器可手动关机", status == 200, f"HTTP {status} {str(body)[:120]}")
-check("关机后状态为 Stopped", body.get("status") == "Stopped", str(body.get("status")))
+# 手动开关机现在是异步：立即返回 pending + 事件 ID，实例状态由后台确认器轮询确认
+check("关机返回 pending", body.get("status") == "pending", str(body.get("status")))
+check("关机带事件 ID", bool(body.get("event_id")), str(body.get("event_id")))
+check("关机目标状态为 Stopped", body.get("target_status") == "Stopped", str(body.get("target_status")))
 check("闲散机器不带托管提示", not body.get("managed_note"), str(body.get("managed_note")))
-check(
-    "关机返回真实停机模式",
-    body.get("stopped_mode") == "StopCharging",
-    str(body.get("stopped_mode")),
-)
 
 status, body = call("POST", f"/api/v1/servers/{idle['id']}/actions/start")
-check("闲散机器可手动开机", status == 200 and body.get("status") == "Running", str(body)[:120])
+check("闲散机器可手动开机", status == 200, f"HTTP {status}")
+check("开机目标状态为 Running", body.get("target_status") == "Running", str(body.get("target_status")))
 
 events = call("GET", "/api/v1/overview")[1]["events"]
 check(
-    # 事件标题带上真实停机模式，省得和普通停机混在一起看不出来
+    # 手动停机事件已记录（异步 running 事件，标题带「手动停机」）
     "手动操作已记录事件",
-    any("手动停机（节省停机）" in e.get("title", "") for e in events),
+    any("手动停机" in e.get("title", "") for e in events),
     str([e.get("title") for e in events[:5]]),
 )
 

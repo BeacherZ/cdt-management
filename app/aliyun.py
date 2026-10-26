@@ -264,16 +264,24 @@ def sdk_ready() -> bool:
 # dry-run 桩：内存里模拟实例状态流转，方便本地把换班流程跑完
 # --------------------------------------------------------------------------
 
-_MOCK: dict[str, dict[str, str]] = {}
+_MOCK: dict[str, dict[str, Any]] = {}
 # 可重入：_mock_set 持锁时会再进 _mock
 _MOCK_LOCK = threading.RLock()
+
+# dry-run 下模拟云操作异步到位的延迟（秒）：start/stop 后进入 Starting/Stopping
+# 中间态，等这个时长后才在 get_instance 里推进到最终态，便于验证「转圈确认」流程。
+# 由 settings.MOCK_OP_DELAY 控制，测试可设 0 关闭延迟。
+
+
+def _mock_op_delay() -> float:
+    return settings.MOCK_OP_DELAY
 
 
 def _mock_key(account: dict) -> str:
     return str(account.get("instance_id") or account.get("access_key_id") or "mock")
 
 
-def _mock(account: dict) -> dict[str, str]:
+def _mock(account: dict) -> dict[str, Any]:
     key = _mock_key(account)
     with _MOCK_LOCK:
         state = _MOCK.get(key)
@@ -292,15 +300,33 @@ def _mock(account: dict) -> dict[str, str]:
                 "cost": f"{quota * 0.072 + 9 + (seed % 420) / 100:.2f}",
                 "balance": f"{800 + seed % 1600}.{(seed * 7) % 100:02d}",
                 "currency": "CNY",
+                # 异步流转辅助字段：目标状态 + 到位时刻（0 表示无进行中的操作）
+                "pending_until": 0.0,
+                "target_status": "",
             }
             _MOCK[key] = state
         return state
 
 
-def _mock_set(account: dict, **fields: str) -> None:
+def _mock_set(account: dict, **fields: Any) -> None:
     with _MOCK_LOCK:
         state = _mock(account)
         state.update(fields)
+
+
+def _mock_advance(state: dict[str, Any]) -> None:
+    """dry-run 桩内部：若存在进行中的操作且已到延迟点，把状态推进到目标态。"""
+    pending_until = float(state.get("pending_until") or 0)
+    target = str(state.get("target_status") or "")
+    if pending_until and target and time.time() >= pending_until:
+        state["pending_until"] = 0.0
+        state["target_status"] = ""
+        state["status"] = target
+        if target == "Stopped":
+            # 停机目标态默认按节省停机
+            state.setdefault("stopped_mode", "StopCharging")
+        else:
+            state["stopped_mode"] = ""
 
 
 def get_traffic_gb(account: dict) -> float:
@@ -326,8 +352,10 @@ def get_traffic_gb(account: dict) -> float:
 
 def get_instance(account: dict) -> InstanceInfo:
     if settings.DRY_RUN:
-        state = _mock(account)
-        return InstanceInfo(state["status"], state["stopped_mode"], state["public_ip"])
+        with _MOCK_LOCK:
+            state = _mock(account)
+            _mock_advance(state)
+            return InstanceInfo(state["status"], state["stopped_mode"], state["public_ip"])
     client = _client(account)
     request = DescribeInstancesRequest.DescribeInstancesRequest()
     request.set_InstanceIds(json.dumps([account["instance_id"]]))
@@ -352,7 +380,19 @@ def get_instance(account: dict) -> InstanceInfo:
 def start_instance(account: dict) -> None:
     if settings.DRY_RUN:
         log.info("[dry-run] start %s", account.get("instance_id"))
-        _mock_set(account, status="Running", stopped_mode="")
+        with _MOCK_LOCK:
+            state = _mock(account)
+            delay = _mock_op_delay()
+            if delay <= 0:
+                state["status"] = "Running"
+                state["stopped_mode"] = ""
+                state["pending_until"] = 0.0
+                state["target_status"] = ""
+            else:
+                state["status"] = "Starting"
+                state["stopped_mode"] = ""
+                state["target_status"] = "Running"
+                state["pending_until"] = time.time() + delay
         return
     client = _client(account)
     request = StartInstancesRequest.StartInstancesRequest()
@@ -374,7 +414,19 @@ def stop_instance(account: dict, mode: str = "StopCharging", fallback: bool = Fa
     """
     if settings.DRY_RUN:
         log.info("[dry-run] stop %s mode=%s", account.get("instance_id"), mode)
-        _mock_set(account, status="Stopped", stopped_mode=mode)
+        with _MOCK_LOCK:
+            state = _mock(account)
+            delay = _mock_op_delay()
+            if delay <= 0:
+                state["status"] = "Stopped"
+                state["stopped_mode"] = mode
+                state["pending_until"] = 0.0
+                state["target_status"] = ""
+            else:
+                state["status"] = "Stopping"
+                state["stopped_mode"] = mode
+                state["target_status"] = "Stopped"
+                state["pending_until"] = time.time() + delay
         return
     client = _client(account)
     request = StopInstancesRequest.StopInstancesRequest()

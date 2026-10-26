@@ -25,7 +25,7 @@ import GroupDialog from './components/GroupDialog'
 import SettingsDrawer from './components/SettingsDrawer'
 import ConfirmDialog from './components/ConfirmDialog'
 import DNSView from './components/DNSView'
-import { Badge, Empty, Modal, statusLabel, statusTone, stoppedModeLabel } from './components/ui'
+import { Badge, Empty, Modal, statusLabel, statusTone } from './components/ui'
 
 type Phase = 'loading' | 'setup' | 'login' | 'ready' | 'fatal'
 type View = 'dashboard' | 'keepalive' | 'shift' | 'servers' | 'dns'
@@ -194,18 +194,15 @@ export default function App() {
     try {
       const result = await post<{
         status?: string
+        target_status?: string
         stopped_mode?: string
         managed_note?: string
       }>(`/api/v1/servers/${serverId}/actions/${action}`)
       await loadAll()
-      // 停机模式以实例真实返回为准：不支持节省停机的规格会退化成普通停机
-      const mode = stoppedModeLabel(result?.stopped_mode)
+      // 手动开关机是异步的：指令已下发，实例状态由后台轮询确认到位后打完成标志。
+      // 概览「最近事件」里能看到这条事件的转圈过程。
       toast(
-        action === 'start'
-          ? '已下发开机指令'
-          : mode
-            ? `已下发停机指令（${mode}）`
-            : '已下发停机指令',
+        action === 'start' ? '已下发开机指令，正在确认状态…' : '已下发停机指令，正在确认状态…',
         'success',
       )
       if (result?.managed_note) {

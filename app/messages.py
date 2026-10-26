@@ -24,8 +24,14 @@ from . import notify
 
 SEP = "━━━━━━━━━━━━━━━"
 
-# 阿里云 StoppedMode 的两种取值，面板与通知统一用这套说法
-MODE_LABELS = {"StopCharging": "节省停机", "KeepCharging": "普通停机", "Stop": "普通停机"}
+# 阿里云 StoppedMode 的取值，面板与通知统一用这套说法。
+# Not-applicable = 本实例不支持停机不收费，停机后照常收费，语义等同普通停机。
+MODE_LABELS = {
+    "StopCharging": "节省停机",
+    "KeepCharging": "普通停机",
+    "Stop": "普通停机",
+    "Not-applicable": "普通停机",
+}
 
 _TAG_RE = re.compile(r"<[^>]+>")
 
@@ -64,13 +70,18 @@ def _ip(server: dict[str, Any]) -> str:
 
 
 def _mode(server: dict[str, Any]) -> str:
-    return str(server.get("stopped_mode") or "-")
+    # Not-applicable = 本实例不支持停机不收费，停机后照常收费，语义等同普通停机
+    # （KeepCharging）。归一化后再走 mode_label / _status，避免漏成英文。
+    mode = str(server.get("stopped_mode") or "-")
+    return "KeepCharging" if mode == "Not-applicable" else mode
 
 
 def _status(server: dict[str, Any]) -> str:
     """脚本里的 disp：Running 时不带括号，其它状态带上停机模式。
 
     模式还没读到（刚下发指令、实例还在 Stopping）时只写状态，不补空括号。
+    脚本里模式名是英文原值（StopCharging / KeepCharging），保持一致；唯独
+    Not-applicable 是「不支持节省停机」的说明性值，映射成「普通停机」以免漏英文。
     """
     status = str(server.get("instance_status") or "Unknown")
     if status == "Running":

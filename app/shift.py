@@ -309,13 +309,19 @@ class Engine:
             if status == "Stopped":
                 try:
                     aliyun.start_instance(server)
-                    repo.add_event(
+                    # 保活拉起是异步的：建 running 事件，交给确认器轮询到 Running 后
+                    # 补发「抢占恢复」通知并打完成标志，不在这里同步等状态。
+                    event_id = repo.add_event(
                         "start",
                         f"{server.get('label')}：保活拉起",
                         f"原状态 {status}",
                         level="warning",
                         server_id=server_id,
+                        status="running",
+                        pending_status="Running",
+                        pending_kind="keepalive",
                     )
+                    repo.add_event_progress(event_id, f"已下发启动指令（原状态 {status}）")
                     repo.set_flag(f"keepalive_wait:{server_id}")
                     if repo.get_flag(f"keepalive_fail:{server_id}"):
                         repo.clear_flag(f"keepalive_fail:{server_id}")
@@ -332,20 +338,9 @@ class Engine:
                             server_id=server_id,
                         )
             elif status == "Running" and repo.get_flag(f"keepalive_wait:{server_id}"):
+                # 拉起成功、状态已 Running：清理等待标记。抢占恢复通知由确认器
+                # 在「Running 到位」时统一发出（见 scheduler._confirm_pending_events）。
                 repo.clear_flag(f"keepalive_wait:{server_id}")
-                if config.get("notify_on_keepalive") == "1":
-                    ddns_status = self._sync_ddns(server, config, dns.TARGET_SERVER, server_id)
-                    # 单机保活拉起的是停机实例，语义上就是脚本里的「抢占恢复」，
-                    # 所以共用同一套版式，只把「当班实例」换成「实例」。
-                    notify.send_all(
-                        config,
-                        messages.recovery(
-                            server,
-                            str(ddns_status),
-                            headline="实例疑被抢占，已自动恢复运行。",
-                            kind="keepalive",
-                        ),
-                    )
 
             results.append(
                 {
@@ -572,10 +567,14 @@ class Engine:
         # 当班 Running 且 IP 就绪 → 同步 DDNS（此时域名指向新当班机）
         ddns_status = self._sync_ddns(duty, config, dns.TARGET_GROUP, group_id)
 
-        # 换班事件进度：当班已开机 + DDNS 结果
+        # 本班次是否已经结算过：结算过就不重复记进度、不重复停非当班、不重复 finish。
+        previously_settled = run.get("phase") in (PHASE_SETTLED, PHASE_FAILOVER)
+
+        # 换班事件进度：当班已开机 + DDNS 结果（只在首次进行时记，避免每轮 reconcile 刷屏）
         event_id = self._shift_event(group_id, slot_key, name, duty.get("label") or "")
-        repo.add_event_progress(event_id, f"当班 {duty.get('label')} 已开机")
-        repo.add_event_progress(event_id, f"DDNS：{ddns_status}")
+        if not previously_settled:
+            repo.add_event_progress(event_id, f"当班 {duty.get('label')} 已开机")
+            repo.add_event_progress(event_id, f"DDNS：{ddns_status}")
 
         # DDNS 只有「已设置且已绑定」时才要求同步成功，否则不卡流程：
         #   - 未启用 / 未绑定（⏸ 开头）→ 跳过确认，不阻塞
@@ -584,11 +583,11 @@ class Engine:
         ddns_bound = bool(repo.dns_record_of(dns.TARGET_GROUP, group_id))
         ddns_ok = (not ddns_enabled) or (not ddns_bound) or ddns_text.startswith("✅")
 
-        # 5) 停非当班（此时才停）。只有「节省停机」到位（Stopped 且 StopCharging）才算停好；
-        #    普通停机（KeepCharging）照常收费，要重新下发节省停机指令。
+        # 5) 停非当班（此时才停）。物理停机（StopCharging / KeepCharging / Stop /
+        #    Not-applicable）就算停好，不再重发；普通停机照常收费但已到位，无需死循环。
         all_stopped = True
         for server in others:
-            if _is_charging_stopped(server):
+            if _is_stopped_any_mode(server):
                 continue
             if server.get("instance_status") in TRANSIENT_STATUS:
                 # 已在停机过程中，等它落地
@@ -621,7 +620,6 @@ class Engine:
 
         ready = duty_status == "Running" and all_stopped and (has_ip or not ddns_enabled) and ddns_ok
 
-        previously_settled = run.get("phase") in (PHASE_SETTLED, PHASE_FAILOVER)
         first_settle = ready and not previously_settled
         phase = (PHASE_FAILOVER if failover_flag else PHASE_SETTLED) if ready else PHASE_SWITCHING
         stage = "" if ready else "stopping_standby"
@@ -652,8 +650,9 @@ class Engine:
             )
             return summary
 
-        # 换班完成：确认全部到位，把进行中的事件打上完成标志
-        if event_id:
+        # 换班完成：确认全部到位，把进行中的事件打上完成标志（只在首次 settle 时做，
+        # 之后每轮 reconcile 维持 settled 状态，不再重复追加进度、重复 finish）
+        if first_settle and event_id:
             repo.add_event_progress(event_id, "非当班均已节省停机")
             repo.add_event_progress(event_id, "全部状态确认完毕")
             repo.finish_event(event_id, "done")
@@ -710,8 +709,8 @@ class Engine:
             repo.finish_event(int(run["event_id"]), "error")
 
         for server in everyone:
-            # 已经是「节省停机」到位就不再下指令；普通停机（KeepCharging）也要重下
-            if not _is_charging_stopped(server):
+            # 已经物理停机就不再下指令（含 Not-applicable，避免死循环）
+            if not _is_stopped_any_mode(server):
                 try:
                     aliyun.stop_instance(server, "StopCharging")
                 except Exception as exc:  # noqa: BLE001
@@ -737,8 +736,8 @@ class Engine:
         flag = f"breaker:{group_id}:{slot_key}"
         if notify_enabled and config.get("notify_on_breaker") == "1" and not repo.get_flag(flag):
             fresh = [repo.get_server(int(s["id"])) or s for s in everyone]
-            # 全部成员都「节省停机」到位才发通知 —— 普通停机照常收费，不算熔断成功
-            if _all_charging_stopped(fresh):
+            # 全部成员物理停机到位即发通知；真实停机模式由 stop_tail 如实呈现
+            if _all_stopped_any_mode(fresh):
                 notify.send_all(config, messages.breaker(fresh, group_name=name))
                 repo.set_flag(flag)
                 repo.add_event(
@@ -772,8 +771,8 @@ class Engine:
             repo.add_event_progress(int(run["event_id"]), "当班流量超限，触发超限停机")
             repo.finish_event(int(run["event_id"]), "error")
 
-        # 只有「节省停机」到位（Stopped 且 StopCharging）才算数；普通停机要重下指令
-        if not _is_charging_stopped(duty):
+        # 只有物理停机（Stopped 且 mode 合法）才算到位；否则（运行中/中间态）下指令
+        if not _is_stopped_any_mode(duty):
             if duty_status not in TRANSIENT_STATUS:
                 try:
                     aliyun.stop_instance(duty, "StopCharging")
@@ -800,7 +799,7 @@ class Engine:
             if (
                 notify_enabled
                 and config.get("notify_on_limit_stop") == "1"
-                and _is_charging_stopped(fresh)
+                and _is_stopped_any_mode(fresh)
                 and not repo.get_flag(flag)
             ):
                 notify.send_all(config, messages.limit_stop(fresh, group_name=name))
@@ -1073,7 +1072,11 @@ class Engine:
 
     def manual_action(self, server_id: int, action: str) -> dict[str, Any]:
         """手动开关机。闲散服务器（没编进任何自动化流程）可以随便用；
-        托管中的机器依旧允许操作，但会提示下一轮对账会按流程纠正。"""
+        托管中的机器依旧允许操作，但会提示下一轮对账会按流程纠正。
+
+        流程：下发指令 → 创建 running 事件 → 立即返回。实例状态由后台
+        事件确认器每 5 秒轮询，到位后把事件标记为完成。
+        """
         if action not in ("start", "stop"):
             raise ValueError("只支持 start / stop")
         server = repo.get_server(server_id, decrypt_secret=True)
@@ -1082,62 +1085,44 @@ class Engine:
         if not str(server.get("instance_id") or "").strip():
             raise ValueError("这台服务器还没填实例 ID，无法启停")
 
+        label = "开机" if action == "start" else "停机"
+        target_status = "Running" if action == "start" else "Stopped"
+        note = self._managed_note(server_id)
+
+        # 1) 下发指令。停机用节省停机，不支持则退化普通停机（不报错）。
         if action == "start":
             aliyun.start_instance(server)
         else:
-            # 部分规格不支持节省停机，退化成普通停机，别让手动关机直接报错
             aliyun.stop_instance(server, "StopCharging", fallback=True)
 
-        try:
-            info = aliyun.get_instance(server)
-        except Exception as exc:  # noqa: BLE001
-            # 指令已经下发成功了，读状态失败不该让整个操作算失败
-            log.warning("手动启停后读取实例状态失败: %s", exc)
-            info = None
-
-        label = "开机" if action == "start" else "停机"
-        note = self._managed_note(server_id)
-        detail = f"当前 {info.status}" if info else "指令已下发，状态待刷新"
-        # 实际停机模式以实例返回为准：不支持节省停机的规格会退化成普通停机，
-        # 事件里照旧写「节省停机」会让人以为没在花钱
-        mode_text = messages.mode_label(info.stopped_mode) if info is not None else ""
-        if action == "stop" and mode_text:
-            label = f"停机（{mode_text}）"
-            detail += f" · {mode_text}"
+        # 2) 建 running 事件，交给后台确认器轮询确认，不在这里同步等状态。
+        detail = f"已下发{label}指令"
+        if action == "stop":
+            detail += "（节省停机）"
         if note:
             detail += f" · 由{note}托管，下一轮同步会按流程纠正"
 
-        # 闲散机器也能绑域名：手动开机后立刻把解析指过来，不用等下一轮巡检
-        if action == "start" and info is not None:
-            record = repo.dns_record_of(dns.TARGET_SERVER, server_id)
-            if record:
-                result = dns.sync_record(record, repo.get_settings(), ip=info.public_ip)
-                detail += f" · 解析 {record} {result.status}"
-                payload_dns = {"record": record, "status": result.status}
-            else:
-                payload_dns = None
-        else:
-            payload_dns = None
+        event_id = repo.add_event(
+            "manual",
+            f"{server.get('label')}：手动{label}",
+            detail,
+            level="info",
+            server_id=server_id,
+            status="running",
+            pending_status=target_status,
+            pending_kind="manual",
+        )
+        repo.add_event_progress(event_id, f"已下发{label}指令")
 
-        if info is not None:
-            repo.update_server_runtime(
-                server_id,
-                status=info.status,
-                stopped_mode=info.stopped_mode,
-                public_ip=info.public_ip,
-            )
-            payload = info.to_dict()
-        else:
-            payload = {
-                "status": server.get("instance_status") or "Unknown",
-                # 读状态失败也要把已知模式带回去，前端 toast 才好写真实结果
-                "stopped_mode": server.get("stopped_mode") or "",
-            }
-
-        repo.add_event("manual", f"{server.get('label')}：手动{label}", detail, server_id=server_id)
-        payload["managed_note"] = note
-        payload["dns"] = payload_dns
-        return payload
+        # 3) 立即返回。卡片状态由确认器轮询到位后刷新。
+        return {
+            "status": "pending",
+            "event_id": event_id,
+            "target_status": target_status,
+            "managed_note": note,
+            "instance_status": server.get("instance_status") or "Unknown",
+            "stopped_mode": server.get("stopped_mode") or "",
+        }
 
     def refresh(self, server_id: int) -> dict[str, Any]:
         server = repo.get_server(server_id, decrypt_secret=True)
@@ -1235,19 +1220,26 @@ def _over_threshold(server: dict[str, Any]) -> bool:
     return threshold > 0 and float(used) >= threshold
 
 
-def _is_charging_stopped(server: dict[str, Any]) -> bool:
-    """这台机器是否已经「节省停机」到位：Stopped 且 StoppedMode=StopCharging。
+# 物理上已停机、可以不再下停机指令的 StoppedMode 取值。
+# 其中 Not-applicable 表示「本实例不支持停机不收费」，停机后照常收费，
+# 且无论怎么重发 StopCharging 都不可能变成节省停机 —— 必须认它「已停机」，
+# 否则换班/熔断会陷入无限重发停机指令 + 永远不 ready 的死循环。
+_STOPPED_MODES = {"StopCharging", "KeepCharging", "Stop", "Not-applicable"}
 
-    普通停机（KeepCharging / Stop）照常收规格费，不算到位 —— 通知必须等到
-    节省停机确认，否则报告里写「已节省停机」就是骗人。
+
+def _is_stopped_any_mode(server: dict[str, Any]) -> bool:
+    """这台机器是否已经物理停机到位（无论是否节省停机）。
+
+    用于换班/熔断/超限停机的「到位判断」：物理停机就不该再重发停机指令，
+    避免对不支持节省停机的实例（StoppedMode=Not-applicable）陷入死循环。
     """
     if str(server.get("instance_status") or "") != "Stopped":
         return False
-    return str(server.get("stopped_mode") or "") == "StopCharging"
+    return str(server.get("stopped_mode") or "") in _STOPPED_MODES
 
 
-def _all_charging_stopped(servers: list[dict[str, Any]]) -> bool:
-    return all(_is_charging_stopped(server) for server in servers)
+def _all_stopped_any_mode(servers: list[dict[str, Any]]) -> bool:
+    return all(_is_stopped_any_mode(server) for server in servers)
 
 
 def _refresh(server: dict[str, Any]) -> None:

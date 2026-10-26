@@ -140,7 +140,12 @@ CREATE TABLE IF NOT EXISTS events (
     -- 完成过程日志（JSON 数组）：[{ts, text}]，记录「几点几分干了什么」
     progress   TEXT    NOT NULL DEFAULT '',
     -- 完成 / 失败时间戳，0 表示还没结束
-    finished_at INTEGER NOT NULL DEFAULT 0
+    finished_at INTEGER NOT NULL DEFAULT 0,
+    -- 异步事件待确认的目标状态：如 Stopped / Running。空串表示无需轮询确认
+    pending_status TEXT    NOT NULL DEFAULT '',
+    -- 异步事件类型：manual（手动开关机）/ keepalive（保活拉起）。确认器据此
+    -- 决定到位后是否补发通知（保活到位要发「抢占恢复」）
+    pending_kind   TEXT    NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts DESC);
 
@@ -257,6 +262,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
             "status": "TEXT NOT NULL DEFAULT 'done'",
             "progress": "TEXT NOT NULL DEFAULT ''",
             "finished_at": "INTEGER NOT NULL DEFAULT 0",
+            "pending_status": "TEXT NOT NULL DEFAULT ''",
+            "pending_kind": "TEXT NOT NULL DEFAULT ''",
         },
         "shift_runs": {
             "stage": "TEXT NOT NULL DEFAULT ''",
