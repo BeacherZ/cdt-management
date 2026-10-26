@@ -122,9 +122,7 @@ export default function ShiftView({
                         className={`timeline-seg${member.is_duty ? ' duty' : ''}`}
                         style={{ flexGrow: member.hours }}
                         title={`${member.server?.label ?? '?'} · ${member.hours} 小时`}
-                      >
-                        {member.server?.label ?? '—'}
-                      </div>
+                      />
                     ))}
                 </div>
 

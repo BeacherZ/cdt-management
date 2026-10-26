@@ -504,14 +504,20 @@ export default function App() {
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div className="brand">
+        <button
+          type="button"
+          className="brand"
+          title="回到概览"
+          aria-label="回到概览"
+          onClick={() => setView('dashboard')}
+        >
           <div className="brand-mark">
             <Repeat size={18} />
           </div>
           <div className="brand-text">
             <strong>{overview.brand}</strong>
           </div>
-        </div>
+        </button>
 
         <nav className="nav-list" aria-label="主视图">
           {NAV_SECTIONS.map((section) => {

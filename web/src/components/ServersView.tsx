@@ -379,7 +379,9 @@ function ServerTable({
                   </span>
                 </td>
                 <td>
-                  <code style={{ fontSize: 11 }}>{server.instance_id || '—'}</code>
+                  <code style={{ fontSize: 11 }} className="server-table-id">
+                    {server.instance_id || '—'}
+                  </code>
                 </td>
                 <td>
                   <span className="server-table-mono">{server.public_ip || '—'}</span>

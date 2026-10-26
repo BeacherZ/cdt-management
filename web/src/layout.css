@@ -49,6 +49,23 @@
   gap: 10px;
   margin: 0 2px 18px;
   padding: 0 4px;
+  /* button 重置：作为可点击的 Logo，去掉原生外观但保留点击反馈 */
+  border: 0;
+  background: transparent;
+  width: auto;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 10px;
+  transition: background var(--t-base) var(--ease);
+}
+
+.sidebar .brand:hover {
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
+
+.sidebar .brand:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .brand-mark {

@@ -42,6 +42,36 @@ def mode_label(mode: str | None) -> str:
     return MODE_LABELS.get(mode, mode) if mode else ""
 
 
+# 实例状态的中文说法，事件进度文案用（Running 到位 = 运行中；停机到位 = 真实停机模式）。
+STATUS_LABELS = {
+    "Running": "运行中",
+    "Stopped": "已停机",
+    "Starting": "启动中",
+    "Stopping": "停止中",
+    "Pending": "等待中",
+}
+
+
+def status_suffix(status: str | None, stopped_mode: str | None) -> str:
+    """给「已确认 / 当前」后面的状态一个括号后缀。
+
+    - Running → （运行中），不带停机模式（运行时 StoppedMode 可能是上次停机的残留值，
+      硬拼「普通停机」是误导）
+    - Stopped → （节省停机 / 普通停机 / 已停机），按真实 StoppedMode
+    - 中间态 → （启动中 / 停止中 …）
+    """
+    status = str(status or "").strip()
+    if not status:
+        return ""
+    if status == "Running":
+        return "（运行中）"
+    if status == "Stopped":
+        label = mode_label(stopped_mode)
+        return f"（{label}）" if label else "（已停机）"
+    label = STATUS_LABELS.get(status)
+    return f"（{label}）" if label else ""
+
+
 def stop_tail(servers: list[dict[str, Any]]) -> str:
     """一句话说明这批机器到底是怎么停的，按实例返回的真实 StoppedMode。"""
     modes = {_mode(s) for s in servers}

@@ -147,8 +147,7 @@ def _confirm_pending_events() -> None:
             pass
 
         if _status_reached(info, pending):
-            mode_text = messages.mode_label(info.stopped_mode) if info.stopped_mode else ""
-            suffix = f"（{mode_text}）" if mode_text else ""
+            suffix = messages.status_suffix(info.status, info.stopped_mode)
 
             # 到位后的收尾动作按事件类型区分
             if pending_kind == "keepalive":
@@ -187,8 +186,7 @@ def _confirm_pending_events() -> None:
             repo.finish_event(event_id, "done")
         else:
             # 还没到位：记录一次当前状态，方便用户在进度里看到中间态
-            mode_text = messages.mode_label(info.stopped_mode) if info.stopped_mode else ""
-            suffix = f"（{mode_text}）" if mode_text else ""
+            suffix = messages.status_suffix(info.status, info.stopped_mode)
             repo.add_event_progress(
                 event_id,
                 f"当前 {info.status}{suffix}，等待到位",
