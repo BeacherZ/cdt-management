@@ -2187,6 +2187,106 @@ input[type='number']::-webkit-inner-spin-button {
   background: var(--accent-grad);
 }
 
+/* -------------------------------------------------------------- 关于面板 */
+
+.about-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--ink);
+}
+
+.about-repo {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel-inset);
+  color: var(--ink-soft);
+  font-size: 13px;
+  font-family: ui-monospace, Consolas, monospace;
+  text-decoration: none;
+  transition: border-color var(--t-base) var(--ease), color var(--t-base) var(--ease);
+}
+
+.about-repo:hover {
+  color: var(--accent);
+  border-color: var(--accent-ring);
+}
+
+.about-versions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.about-version-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.about-key {
+  color: var(--muted);
+  min-width: 64px;
+}
+
+.about-version-row b {
+  font-family: ui-monospace, Consolas, monospace;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.about-latest {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12.5px;
+}
+
+.about-latest .about-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* 已是最新：绿色圆点 */
+.about-latest.latest {
+  color: var(--green);
+}
+
+.about-latest.latest .about-dot {
+  background: var(--green);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 18%, transparent);
+}
+
+/* 有新版：黄色圆点 */
+.about-latest.newer {
+  color: var(--amber);
+}
+
+.about-latest.newer .about-dot {
+  background: var(--amber);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--amber) 18%, transparent);
+}
+
+.about-latest.dim {
+  color: var(--muted-soft);
+}
+
+.about-latest.checking {
+  color: var(--muted);
+}
+
+.about-latest.error {
+  color: var(--red);
+}
+
 /* -------------------------------------------------------------- 提示条 */
 
 .toasts {

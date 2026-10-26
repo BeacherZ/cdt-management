@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   BellRing,
   Cloud,
   Download,
+  Github,
   Globe2,
   KeyRound,
   LoaderCircle,
@@ -851,27 +852,67 @@ function AboutPanel({ repo, version }: { repo: string; version: string }) {
     }
   }
 
-  const newer = latest && latest.replace(/^v/, '') !== version
+  // 打开「关于」时自动查一次最新版本，无需手动点
+  useEffect(() => {
+    if (repo) void check()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repo])
+
+  const newer = Boolean(latest) && latest.replace(/^v/, '') !== version
+  const repoUrl = repo ? `https://github.com/${repo}` : ''
+  const latestText = latest ? latest.replace(/^v/, 'v') : ''
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <div className="field">
-        <label>当前版本</label>
-        <div style={{ fontFamily: 'ui-monospace, Consolas, monospace', fontSize: 13 }}>
-          v{version || '未知'}
+      <div>
+        <h3 className="about-title">关于本项目</h3>
+      </div>
+
+      {repoUrl && (
+        <a
+          className="about-repo"
+          href={repoUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          title="打开 GitHub 仓库"
+        >
+          <Github size={16} />
+          <span>{repo}</span>
+        </a>
+      )}
+
+      <div className="about-versions">
+        <div className="about-version-row">
+          <span className="about-key">当前版本</span>
+          <b>v{version || '未知'}</b>
+        </div>
+        <div className="about-version-row">
+          <span className="about-key">最新版本</span>
+          {busy ? (
+            <span className="about-latest checking">
+              <LoaderCircle size={12} className="spin" /> 检查中…
+            </span>
+          ) : error ? (
+            <span className="about-latest error" title={error}>
+              获取失败
+            </span>
+          ) : latest ? (
+            <span className={`about-latest ${newer ? 'newer' : 'latest'}`}>
+              <span className="about-dot" />
+              {latestText}
+              {newer ? '（可更新）' : '（已是最新）'}
+            </span>
+          ) : (
+            <span className="about-latest dim">未检查</span>
+          )}
         </div>
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <button className="btn" onClick={check} disabled={busy}>
+
+      <div>
+        <button className="btn" onClick={check} disabled={busy || !repo}>
           {busy ? <LoaderCircle size={14} className="spin" /> : <Download size={14} />}
           检查更新
         </button>
-        {latest && (
-          <span style={{ fontSize: 12, color: newer ? 'var(--amber)' : 'var(--muted)' }}>
-            {newer ? `发现新版本 ${latest}` : `已是最新（${latest}）`}
-          </span>
-        )}
-        {error && <span style={{ fontSize: 12, color: 'var(--red)' }}>{error}</span>}
       </div>
     </div>
   )
