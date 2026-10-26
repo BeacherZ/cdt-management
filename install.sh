@@ -8,6 +8,7 @@
 #   DIR=/srv/cdt          数据目录，默认 /opt/docker/cdt-management
 #   NO_DOCKER_INSTALL=1   没装 Docker 时不要自动装，直接报错退出
 #   FORCE=1               已是最新版本也强制重建容器
+#   IMAGE=...             自备镜像地址（默认 ghcr.io/beacherz/cdt-management:latest）
 #   UNINSTALL=1           卸载本项目（容器、镜像、数据目录一起删，要确认）
 #   UNINSTALL=docker      连 Docker 一起卸
 #
@@ -15,7 +16,7 @@
 # 非交互环境（没有终端）不询问，直接比对版本升级。
 set -euo pipefail
 
-IMAGE="ghcr.io/beacherz/cdt-management:latest"
+IMAGE="${IMAGE:-ghcr.io/beacherz/cdt-management:latest}"
 NAME="cdt-management"
 PORT="${PORT:-8282}"
 DIR="${DIR:-/opt/docker/cdt-management}"
@@ -193,9 +194,9 @@ docker info >/dev/null 2>&1 ||
 
 say "拉取镜像"
 if ! docker pull "$IMAGE"; then
-    warn "从 ghcr.io 拉取失败，试试 Docker Hub 镜像"
-    IMAGE="qninq/cdt-management:latest"
-    docker pull "$IMAGE" || die "镜像拉取失败，检查网络或换用 docker compose 手动部署"
+    warn "从 ghcr.io 拉取失败（国内网络常见），改用 Docker Hub 同名镜像"
+    IMAGE="${DOCKERHUB_IMAGE:-beacherz/cdt-management:latest}"
+    docker pull "$IMAGE" || die "镜像拉取失败。可以自己 build（见 README），或用 IMAGE=你的镜像地址 重跑。"
 fi
 LATEST="$(image_version)"
 
