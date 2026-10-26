@@ -1,0 +1,7 @@
+fastapi>=0.115,<1.0
+uvicorn>=0.30,<1.0
+cryptography>=43.0
+requests>=2.32
+PySocks>=1.7.1
+aliyun-python-sdk-core>=2.16.0
+aliyun-python-sdk-ecs>=2.24.0

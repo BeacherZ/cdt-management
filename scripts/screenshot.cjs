@@ -1,0 +1,280 @@
+/* UI 截图：直接走 Chrome DevTools Protocol，驱动本机 Edge/Chrome 无头模式。
+   不依赖 playwright/puppeteer，任何装了 Edge 或 Chrome 的机器都能跑。
+
+   前置：本地已用 dry-run 起服务并灌好演示数据
+     CDT_DRY_RUN=1 CDT_DATA_DIR=./test-data ./.venv/Scripts/python.exe -m app.main
+     python scripts/seed_demo.py
+
+   用法：node scripts/screenshot.cjs [base_url]
+*/
+
+const { spawn } = require('child_process')
+const fs = require('fs')
+const os = require('os')
+const path = require('path')
+
+const BASE = process.argv[2] || 'http://127.0.0.1:8099'
+const OUT = path.join(__dirname, '..', 'docs', 'screenshots')
+const PORT = 9333
+const VIEWPORT = { width: 1440, height: 980, dsf: 2 }
+const MOBILE = { width: 420, height: 900, dsf: 2 }
+
+const BROWSERS = [
+  'C:/Program Files/Google/Chrome/Application/chrome.exe',
+  'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
+  'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
+  'C:/Program Files/Microsoft/Edge/Application/msedge.exe',
+  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  '/usr/bin/google-chrome',
+  '/usr/bin/chromium',
+]
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+function findBrowser() {
+  for (const candidate of BROWSERS) {
+    if (fs.existsSync(candidate)) return candidate
+  }
+  throw new Error('没找到 Chrome / Edge，可用 CHROME_PATH 环境变量指定')
+}
+
+async function waitForDevtools(timeoutMs = 20000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${PORT}/json/list`)
+      const targets = await response.json()
+      const page = targets.find((item) => item.type === 'page' && item.webSocketDebuggerUrl)
+      if (page) return page.webSocketDebuggerUrl
+    } catch (_error) {
+      /* 还没起来，继续等 */
+    }
+    await sleep(300)
+  }
+  throw new Error('DevTools 端口没就绪')
+}
+
+class Cdp {
+  constructor(socket) {
+    this.socket = socket
+    this.seq = 0
+    this.pending = new Map()
+    this.listeners = new Map()
+    socket.addEventListener('message', (event) => {
+      const message = JSON.parse(event.data)
+      if (message.id && this.pending.has(message.id)) {
+        const { resolve, reject } = this.pending.get(message.id)
+        this.pending.delete(message.id)
+        message.error ? reject(new Error(message.error.message)) : resolve(message.result)
+        return
+      }
+      for (const handler of this.listeners.get(message.method) || []) handler(message.params)
+    })
+  }
+
+  send(method, params = {}) {
+    const id = ++this.seq
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject })
+      this.socket.send(JSON.stringify({ id, method, params }))
+    })
+  }
+
+  on(method, handler) {
+    if (!this.listeners.has(method)) this.listeners.set(method, [])
+    this.listeners.get(method).push(handler)
+  }
+
+  waitFor(method, timeoutMs = 15000) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`等待 ${method} 超时`)), timeoutMs)
+      this.on(method, (params) => {
+        clearTimeout(timer)
+        resolve(params)
+      })
+    })
+  }
+
+  async evaluate(expression) {
+    const result = await this.send('Runtime.evaluate', {
+      expression,
+      awaitPromise: true,
+      returnByValue: true,
+    })
+    if (result.exceptionDetails) {
+      throw new Error(result.exceptionDetails.text + ' ' + (result.exceptionDetails.exception?.description || ''))
+    }
+    return result.result.value
+  }
+
+  async goto(url) {
+    const loaded = this.waitFor('Page.loadEventFired')
+    await this.send('Page.navigate', { url })
+    await loaded
+  }
+
+  async viewport({ width, height, dsf }, mobile = false) {
+    await this.send('Emulation.setDeviceMetricsOverride', {
+      width,
+      height,
+      deviceScaleFactor: dsf,
+      mobile,
+    })
+  }
+
+  async shot(file) {
+    await sleep(500)
+    const { data } = await this.send('Page.captureScreenshot', { format: 'png', fromSurface: true })
+    fs.writeFileSync(path.join(OUT, file), Buffer.from(data, 'base64'))
+    console.log('  ✓ ' + file)
+  }
+
+  async waitSelector(selector, timeoutMs = 15000) {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      if (await this.evaluate(`!!document.querySelector(${JSON.stringify(selector)})`)) return
+      await sleep(200)
+    }
+    throw new Error('等不到元素 ' + selector)
+  }
+
+  async clickByText(selector, text) {
+    const ok = await this.evaluate(`(() => {
+      const nodes = [...document.querySelectorAll(${JSON.stringify(selector)})]
+      const target = nodes.find((node) => node.textContent.replace(/\\s+/g, '').includes(${JSON.stringify(
+        text.replace(/\s+/g, ''),
+      )}))
+      if (!target) return false
+      target.click()
+      return true
+    })()`)
+    if (!ok) throw new Error(`点不到 ${selector} 里的「${text}」`)
+    await sleep(600)
+  }
+
+  async clickSelector(selector) {
+    const ok = await this.evaluate(`(() => {
+      const node = document.querySelector(${JSON.stringify(selector)})
+      if (!node) return false
+      node.click()
+      return true
+    })()`)
+    if (!ok) throw new Error('点不到 ' + selector)
+    await sleep(600)
+  }
+}
+
+;(async () => {
+  fs.mkdirSync(OUT, { recursive: true })
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cdt-shot-'))
+  const browser = spawn(
+    findBrowser(),
+    [
+      '--headless=new',
+      `--remote-debugging-port=${PORT}`,
+      `--user-data-dir=${profile}`,
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--disable-extensions',
+      '--disable-background-networking',
+      '--hide-scrollbars',
+      '--force-color-profile=srgb',
+      '--window-size=1440,980',
+      'about:blank',
+    ],
+    { stdio: 'ignore' },
+  )
+
+  let cdp
+  try {
+    const wsUrl = await waitForDevtools()
+    const socket = new WebSocket(wsUrl)
+    await new Promise((resolve, reject) => {
+      socket.addEventListener('open', resolve)
+      socket.addEventListener('error', reject)
+    })
+    cdp = new Cdp(socket)
+    await cdp.send('Page.enable')
+    await cdp.send('Runtime.enable')
+    await cdp.viewport(VIEWPORT)
+
+    // 1. 登录页（此时还没登录）
+    await cdp.goto(BASE)
+    await sleep(800)
+    await cdp.shot('01-login.png')
+
+    // 2. 用接口登录，再重新进入应用
+    const status = await cdp.evaluate(`fetch('/api/v1/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: 'test-password-12345' }),
+    }).then((response) => response.status)`)
+    if (status !== 200) throw new Error('登录失败，HTTP ' + status)
+
+    await cdp.goto(BASE)
+    await cdp.waitSelector('.app-shell')
+    await sleep(1200)
+    await cdp.shot('02-dashboard.png')
+
+    // 3. 左侧两个保活流程 + 服务器
+    await cdp.clickByText('.sidebar .nav-item', '单机保活')
+    await cdp.shot('03-keepalive.png')
+
+    await cdp.clickByText('.sidebar .nav-item', '联合换班')
+    await cdp.shot('04-shift.png')
+
+    await cdp.clickByText('.sidebar .nav-item', '服务器')
+    await cdp.shot('05-servers.png')
+
+    // 4. 设置抽屉四个页签
+    await cdp.clickByText('.sidebar-foot .nav-item', '设置')
+    await cdp.waitSelector('.drawer')
+    await cdp.shot('06-settings.png')
+
+    await cdp.clickByText('.tabs button', 'DDNS')
+    await cdp.shot('07-ddns.png')
+
+    await cdp.clickByText('.tabs button', '通知')
+    await cdp.shot('08-notify.png')
+
+    // 关于页签顺手存一张，README 里讲"致敬上游"用得上
+    await cdp.clickByText('.tabs button', '关于')
+    await cdp.shot('09-about.png')
+
+    await cdp.clickSelector('.drawer .close')
+
+    // 5. 换班组成员编辑器
+    await cdp.clickByText('.sidebar .nav-item', '联合换班')
+    await cdp.clickSelector('.group-actions button[title="编辑"]')
+    await cdp.waitSelector('.modal')
+    await cdp.shot('10-group-dialog.png')
+    await cdp.clickSelector('.modal .close')
+
+    // 6. 窄屏
+    await cdp.viewport(MOBILE, true)
+    await cdp.goto(BASE)
+    await cdp.waitSelector('.app-shell')
+    await sleep(1000)
+    await cdp.shot('11-mobile.png')
+
+    console.log('\n截图已输出到 ' + OUT)
+  } finally {
+    if (cdp) {
+      try {
+        await cdp.send('Browser.close')
+      } catch (_error) {
+        /* ignore */
+      }
+    }
+    browser.kill()
+    await sleep(400)
+    try {
+      fs.rmSync(profile, { recursive: true, force: true })
+    } catch (_error) {
+      /* Windows 上偶发占用，忽略 */
+    }
+  }
+})().catch((error) => {
+  console.error('截图失败：' + error.message)
+  process.exit(1)
+})
