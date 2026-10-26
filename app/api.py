@@ -48,6 +48,7 @@ SETTING_LABELS = {
     "notify_on_failover": "故障转移通知",
     "notify_on_recovery": "抢占恢复通知",
     "notify_on_breaker": "熔断通知",
+    "notify_on_limit_stop": "超限停机通知",
     "notify_on_error": "异常通知",
     "notify_on_keepalive": "保活通知",
     "ddns_enabled": "DDNS 开关",
@@ -100,8 +101,17 @@ def _is_initialized() -> bool:
     return repo.get_setting("initialized") == "1"
 
 
+def _session_epoch() -> int:
+    try:
+        return int(repo.get_setting("session_epoch") or 0)
+    except Exception:
+        return 0
+
+
 def _current_user(request: Request) -> str | None:
-    return security.read_session(request.cookies.get(settings.SESSION_COOKIE, ""))
+    return security.read_session(
+        request.cookies.get(settings.SESSION_COOKIE, ""), _session_epoch()
+    )
 
 
 def require_admin(request: Request) -> str:
@@ -158,6 +168,10 @@ def _group_payload(group: dict[str, Any], config: dict[str, str], now_ts: float)
     shift_start = picked[1] if picked else 0
     slot_key = str(shift_start)
     run = repo.get_run(int(group["id"]), slot_key) or {} if picked else {}
+    # 本班次内发生过故障转移时，真正在跑的是替补，界面上的「当班」必须跟着它走，
+    # 否则会高亮一台已经停机的机器
+    if run.get("failover") and int(run.get("duty_server_id") or 0):
+        duty_id = int(run["duty_server_id"])
     nxt = next_switch_at(group, now_ts)
     servers = {int(s["id"]): s for s in repo.list_servers()}
 
@@ -411,6 +425,7 @@ def register(app: FastAPI) -> None:
             "notify_on_failover": config.get("notify_on_failover") == "1",
             "notify_on_recovery": config.get("notify_on_recovery") == "1",
             "notify_on_breaker": config.get("notify_on_breaker") == "1",
+            "notify_on_limit_stop": config.get("notify_on_limit_stop") == "1",
             "notify_on_error": config.get("notify_on_error") == "1",
             "notify_on_keepalive": config.get("notify_on_keepalive") == "1",
             "ddns": {
@@ -488,6 +503,7 @@ def register(app: FastAPI) -> None:
             "notify_on_failover",
             "notify_on_recovery",
             "notify_on_breaker",
+            "notify_on_limit_stop",
             "notify_on_error",
             "notify_on_keepalive",
         ):
@@ -536,15 +552,25 @@ def register(app: FastAPI) -> None:
             if wh.get("headers"):
                 updates["notify_wh_headers"] = str(wh["headers"])
 
+        bumped_epoch: int | None = None
         new_password = payload.get("new_password")
         if new_password:
             if len(str(new_password)) < 10:
                 raise ValueError("新密码至少 10 个字符")
             updates["admin_password"] = security.hash_password(str(new_password))
+            # 改密码就让所有旧票据失效，别让别的浏览器继续挂着
+            bumped_epoch = int(time.time())
+            updates["session_epoch"] = str(bumped_epoch)
 
         if updates:
             repo.set_settings(updates)
             repo.add_event("system", "配置已更新", _setting_labels(list(updates)))
+
+        if bumped_epoch is not None:
+            # 改密码的这个浏览器要留住，给它发一张新票据
+            response = JSONResponse({"ok": True})
+            _attach_session(response, user, bumped_epoch)
+            return response
         return {"ok": True}
 
     # -- 测试 -----------------------------------------------------------
@@ -580,8 +606,8 @@ def register(app: FastAPI) -> None:
 # 会话 cookie
 # --------------------------------------------------------------------------
 
-def _attach_session(response: JSONResponse, username: str) -> None:
-    token = security.issue_session(username)
+def _attach_session(response: JSONResponse, username: str, epoch: int | None = None) -> None:
+    token = security.issue_session(username, _session_epoch() if epoch is None else epoch)
     response.set_cookie(
         settings.SESSION_COOKIE,
         token,

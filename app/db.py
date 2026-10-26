@@ -115,6 +115,8 @@ DEFAULTS: dict[str, str] = {
     "admin_username": "",
     "admin_password": "",
     "initialized": "0",
+    # 改密码时递增，用来让所有已发出的会话票据失效
+    "session_epoch": "0",
     "timezone": "Asia/Shanghai",
     "traffic_threshold_pct": "94",
     "reconcile_interval": str(settings.RECONCILE_INTERVAL),
@@ -124,6 +126,7 @@ DEFAULTS: dict[str, str] = {
     "notify_on_failover": "1",
     "notify_on_recovery": "1",
     "notify_on_breaker": "1",
+    "notify_on_limit_stop": "1",
     "notify_on_error": "1",
     "notify_on_keepalive": "1",
     # DDNS

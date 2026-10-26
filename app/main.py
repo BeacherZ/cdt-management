@@ -57,7 +57,8 @@ def create_app() -> FastAPI:
             if full_path.startswith("api/"):
                 return JSONResponse(status_code=404, content={"error": {"code": "not_found", "message": "接口不存在"}})
             candidate = (static / full_path).resolve()
-            if full_path and candidate.is_file() and str(candidate).startswith(str(static)):
+            # is_relative_to 才是真正的目录包含判断；字符串 startswith 会放过 static2/ 这类同前缀目录
+            if full_path and candidate.is_file() and candidate.is_relative_to(static.resolve()):
                 return FileResponse(candidate)
             return FileResponse(static / "index.html")
     else:
@@ -111,8 +112,9 @@ app = create_app()
 def run() -> None:
     import uvicorn
 
+    # 直接传 app 对象，避免 uvicorn 再 import 一次 app.main（那样会重复建 app、重复初始化）
     uvicorn.run(
-        "app.main:app",
+        app,
         host=settings.LISTEN_HOST,
         port=settings.LISTEN_PORT,
         log_level=os.environ.get("CDT_LOG_LEVEL", "info").lower(),

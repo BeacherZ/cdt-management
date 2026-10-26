@@ -26,6 +26,9 @@ say() { printf '\033[32m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[33m[!]\033[0m %s\n' "$*"; }
 die() { printf '\033[31m错误:\033[0m %s\n' "$*" >&2; exit 1; }
 
+# label 里是构建号（可能是 40 位 sha），终端里只显示前 8 位
+short() { printf '%s' "${1:-未知}" | cut -c1-8; }
+
 image_version() {
     docker image inspect -f "{{index .Config.Labels \"$VER_LABEL\"}}" "$IMAGE" 2>/dev/null || true
 }
@@ -67,6 +70,12 @@ show_url() {
 }
 
 remove_project() {
+    # 防手滑：DIR 传成系统目录时直接拒绝，rm -rf 不能赌
+    case "$DIR" in
+        "" | "/" | "/root" | "/home" | "/etc" | "/usr" | "/var" | "/opt" | "/bin" | "/boot")
+            die "拒绝删除 $DIR：这不像项目数据目录，请用 DIR=/your/path 明确指定"
+            ;;
+    esac
     if command -v docker >/dev/null 2>&1; then
         say "删除容器 $NAME"
         docker rm -f "$NAME" >/dev/null 2>&1 || true
@@ -204,30 +213,36 @@ if docker ps -a --format '{{.Names}}' | grep -qx "$NAME"; then
     CUR="$(container_version)"
     RUNNING="$(docker inspect -f '{{.State.Running}}' "$NAME" 2>/dev/null || echo false)"
     if [ "${FORCE:-0}" != "1" ] && [ -n "$CUR" ] && [ "$CUR" = "$LATEST" ] && [ "$RUNNING" = "true" ]; then
-        say "已安装，当前版本 ${CUR}，已是最新，容器不动（要强制重建加 FORCE=1）"
+        say "已安装，当前构建 $(short "$CUR")，已是最新，容器不动（要强制重建加 FORCE=1）"
         [ -n "${URL_SHOWN:-}" ] || show_url
         exit 0
     fi
-    say "已安装：当前 ${CUR:-未知} → 最新 ${LATEST:-未知}，开始升级"
+    say "已安装：当前 $(short "$CUR") → 最新 $(short "$LATEST")，开始升级"
     docker rm -f "$NAME" >/dev/null
 fi
 
 say "数据目录：$DIR"
 mkdir -p "$DIR"
+# 容器里是非 root（uid 10001），宿主目录必须先交给它，否则写不了数据库
+chown -R 10001:10001 "$DIR" 2>/dev/null ||
+    warn "改不了 $DIR 的属主；若启动后报权限错误，手动执行：sudo chown -R 10001:10001 $DIR"
 
 say "启动容器"
-docker run -d --name "$NAME" --restart unless-stopped \
+if ! docker run -d --name "$NAME" --restart unless-stopped \
     --init \
     -p "${PORT}:8080" \
     -e TZ=Asia/Shanghai \
     -e CDT_DATA_DIR=/data \
     -v "${DIR}:/data" \
-    "$IMAGE" >/dev/null
+    "$IMAGE" >/dev/null; then
+    die "容器没起来。多半是端口 ${PORT} 被占用：换一个端口重跑，例如 PORT=18282"
+fi
 
 say "等待面板响应"
 ready=0
 for _ in $(seq 1 40); do
-    if curl -fsS "http://127.0.0.1:${PORT}/api/health" >/dev/null 2>&1; then
+    # 走 --noproxy，免得宿主机设了 http_proxy 把本地探活也代理走
+    if curl -fsS --noproxy '*' "http://127.0.0.1:${PORT}/api/health" >/dev/null 2>&1; then
         ready=1
         break
     fi
@@ -235,7 +250,7 @@ for _ in $(seq 1 40); do
 done
 
 if [ "$ready" = 1 ]; then
-    say "装好了，版本 ${LATEST:-未知}"
+    say "装好了，构建 $(short "$LATEST")"
     show_url
     say "首次打开会引导设置管理员账号"
     say "重跑这条命令可以升级或卸载"

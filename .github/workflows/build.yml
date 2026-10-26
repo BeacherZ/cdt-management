@@ -45,8 +45,10 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # 一键脚本靠 cn.cdt-management.version 这个 label 判断要不要升级，
+          # main 分支上每次构建都得不一样，否则永远显示「已是最新」
           build-args: |
-            VERSION=${{ github.ref_name }}
+            VERSION=${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
             COMMIT=${{ github.sha }}
             BUILT_AT=${{ github.event.repository.updated_at }}
           cache-from: type=gha

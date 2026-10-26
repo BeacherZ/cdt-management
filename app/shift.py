@@ -229,15 +229,21 @@ class Engine:
             try:
                 _refresh(server)
             except Exception as exc:  # noqa: BLE001
-                repo.add_event(
-                    "error",
-                    f"{server.get('label')} 保活状态读取失败",
-                    str(exc),
-                    level="error",
-                    server_id=server_id,
-                )
+                # 同一台机器连续读取失败只记一次，恢复后自动解除，避免每分钟刷一条错误
+                flag = f"keepalive_err:{server_id}"
+                if not repo.get_flag(flag):
+                    repo.set_flag(flag)
+                    repo.add_event(
+                        "error",
+                        f"{server.get('label')} 保活状态读取失败",
+                        str(exc),
+                        level="error",
+                        server_id=server_id,
+                    )
                 results.append({"keepalive": server_id, "error": str(exc)})
                 continue
+            if repo.get_flag(f"keepalive_err:{server_id}"):
+                repo.clear_flag(f"keepalive_err:{server_id}")
 
             status = str(server.get("instance_status") or "")
             if status == "Stopped":
@@ -251,14 +257,20 @@ class Engine:
                         server_id=server_id,
                     )
                     repo.set_flag(f"keepalive_wait:{server_id}")
+                    if repo.get_flag(f"keepalive_fail:{server_id}"):
+                        repo.clear_flag(f"keepalive_fail:{server_id}")
                 except Exception as exc:  # noqa: BLE001
-                    repo.add_event(
-                        "error",
-                        f"{server.get('label')}：保活启动失败",
-                        str(exc),
-                        level="error",
-                        server_id=server_id,
-                    )
+                    # 同样只报一次：库存不足这类错误会连续出现，不必每分钟刷屏
+                    flag = f"keepalive_fail:{server_id}"
+                    if not repo.get_flag(flag):
+                        repo.set_flag(flag)
+                        repo.add_event(
+                            "error",
+                            f"{server.get('label')}：保活启动失败",
+                            str(exc),
+                            level="error",
+                            server_id=server_id,
+                        )
             elif status == "Running" and repo.get_flag(f"keepalive_wait:{server_id}"):
                 repo.clear_flag(f"keepalive_wait:{server_id}")
                 if config.get("notify_on_keepalive") == "1":
@@ -306,6 +318,15 @@ class Engine:
         slot_key = str(shift_start)
         run = repo.get_run(group_id, slot_key) or {}
 
+        # 本班次内已经故障转移过：沿用当时选中的替补，不再按时间重新推导当班。
+        # 否则每一轮都会重新判定「原当班超限」，事件刷屏、通知重复，且替补每分钟换一次。
+        failed_over = bool(run.get("failover"))
+        if failed_over and int(run.get("duty_server_id") or 0):
+            for member in active_members(group):
+                if int(member["server_id"]) == int(run["duty_server_id"]):
+                    duty_member = member
+                    break
+
         duty = repo.get_server(int(duty_member["server_id"]), decrypt_secret=True)
         if duty is None:
             return {"group_id": group_id, "skipped": "当班服务器已被删除"}
@@ -331,15 +352,21 @@ class Engine:
             try:
                 _refresh(server)
                 healthy_others.append(server)
+                if repo.get_flag(f"member_err:{server['id']}"):
+                    repo.clear_flag(f"member_err:{server['id']}")
             except Exception as exc:  # noqa: BLE001
-                repo.add_event(
-                    "warning",
-                    f"{server.get('label')} 状态读取失败",
-                    str(exc),
-                    level="warning",
-                    group_id=group_id,
-                    server_id=int(server["id"]),
-                )
+                # 同一台连续读失败只记一条，恢复后解除
+                flag = f"member_err:{server['id']}"
+                if not repo.get_flag(flag):
+                    repo.set_flag(flag)
+                    repo.add_event(
+                        "warning",
+                        f"{server.get('label')} 状态读取失败",
+                        str(exc),
+                        level="warning",
+                        group_id=group_id,
+                        server_id=int(server["id"]),
+                    )
 
         # 2) 当班超限 → 找一台没超的接班
         failover = False
@@ -363,13 +390,16 @@ class Engine:
                 duty = replacement
                 failover = True
             else:
-                repo.add_event(
-                    "warning",
-                    f"{name}：其他成员状态读取失败，保守维持当班",
-                    "本轮不做故障转移",
-                    level="warning",
-                    group_id=group_id,
-                )
+                flag = f"conservative:{group_id}:{slot_key}"
+                if not repo.get_flag(flag):
+                    repo.set_flag(flag)
+                    repo.add_event(
+                        "warning",
+                        f"{name}：其他成员状态读取失败，保守维持当班",
+                        "本轮不做故障转移",
+                        level="warning",
+                        group_id=group_id,
+                    )
 
         if breaker:
             return self._handle_breaker(group, config, now, slot_key, duty, others, notify_enabled)
@@ -392,16 +422,21 @@ class Engine:
                     group_id=group_id,
                     server_id=int(duty["id"]),
                 )
+                repo.clear_flag(f"start_err:{group_id}:{slot_key}")
                 duty_status = "Starting"
             except Exception as exc:  # noqa: BLE001
-                repo.add_event(
-                    "error",
-                    f"{name}：当班启动失败",
-                    str(exc),
-                    level="error",
-                    group_id=group_id,
-                    server_id=int(duty["id"]),
-                )
+                # 库存不足这类错误会每轮复现，只记一次，换班次后自然重来
+                flag = f"start_err:{group_id}:{slot_key}"
+                if not repo.get_flag(flag):
+                    repo.set_flag(flag)
+                    repo.add_event(
+                        "error",
+                        f"{name}：当班启动失败",
+                        str(exc),
+                        level="error",
+                        group_id=group_id,
+                        server_id=int(duty["id"]),
+                    )
                 repo.upsert_run(
                     group_id,
                     slot_key,
@@ -418,6 +453,10 @@ class Engine:
             for server in others:
                 if server.get("instance_status") == "Stopped":
                     continue
+                if server.get("instance_status") in TRANSIENT_STATUS:
+                    # 已经在停机过程中，等它落地即可；重复下发只会刷事件
+                    all_stopped = False
+                    continue
                 try:
                     aliyun.stop_instance(server, "StopCharging")
                     repo.add_event(
@@ -427,15 +466,19 @@ class Engine:
                         group_id=group_id,
                         server_id=int(server["id"]),
                     )
+                    repo.clear_flag(f"stop_err:{server['id']}")
                 except Exception as exc:  # noqa: BLE001
-                    repo.add_event(
-                        "error",
-                        f"{name}：非当班停机失败",
-                        f"{server.get('label')}：{exc}",
-                        level="error",
-                        group_id=group_id,
-                        server_id=int(server["id"]),
-                    )
+                    flag = f"stop_err:{server['id']}"
+                    if not repo.get_flag(flag):
+                        repo.set_flag(flag)
+                        repo.add_event(
+                            "error",
+                            f"{name}：非当班停机失败",
+                            f"{server.get('label')}：{exc}",
+                            level="error",
+                            group_id=group_id,
+                            server_id=int(server["id"]),
+                        )
                 all_stopped = False
         else:
             all_stopped = False
@@ -446,7 +489,10 @@ class Engine:
 
         previously_settled = run.get("phase") in (PHASE_SETTLED, PHASE_FAILOVER)
         first_settle = ready and not previously_settled
-        phase = (PHASE_FAILOVER if failover else PHASE_SETTLED) if ready else PHASE_SWITCHING
+        # 故障转移在本班次内保持一致（sticky），所以「已转移」标记不能因为本轮回落到
+        # normal 分支就被清零，否则下一轮又会重新判一遍换班
+        failover_flag = 1 if (failover or failed_over) else 0
+        phase = (PHASE_FAILOVER if failover_flag else PHASE_SETTLED) if ready else PHASE_SWITCHING
 
         repo.upsert_run(
             group_id,
@@ -454,7 +500,7 @@ class Engine:
             phase=phase,
             duty_server_id=int(duty["id"]),
             standby_server_ids=_encode_ids(others),
-            failover=1 if failover else 0,
+            failover=failover_flag,
             attempts=int(run.get("attempts") or 0) + 1,
         )
 
@@ -462,7 +508,7 @@ class Engine:
             "group_id": group_id,
             "slot": slot_key,
             "duty": duty.get("label"),
-            "mode": "failover" if failover else "normal",
+            "mode": "failover" if failover_flag else "normal",
             "ready": ready,
         }
 
@@ -479,7 +525,8 @@ class Engine:
         if not notify_enabled:
             return summary
 
-        if first_settle:
+        # 正常结算只在班次第一次就绪时推；临时换班是本轮真的发生了切换才推
+        if first_settle or failover:
             self._notify_settled(group, config, duty, others, ddns_status, failover, slot_key)
         elif (
             repo.get_flag(f"recovery:{group_id}:{slot_key}")
@@ -605,7 +652,7 @@ class Engine:
             flag = f"limit_stop:{group_id}:{slot_key}"
             if (
                 notify_enabled
-                and config.get("notify_on_breaker") == "1"
+                and config.get("notify_on_limit_stop") == "1"
                 and fresh.get("stopped_mode") == "StopCharging"
                 and not repo.get_flag(flag)
             ):
@@ -719,7 +766,9 @@ class Engine:
         group_id = int(group["id"])
         name = group.get("name") or ""
         kind = "shift_failover" if failover else "shift_done"
-        flag = f"notify:{group_id}:{slot_key}:settled"
+        # 换班完成与临时换班共用同一个 slot，但要去重键必须分开，
+        # 否则「已结算过又临时换班」时这条报告会被当成重复直接吞掉
+        flag = f"notify:{group_id}:{slot_key}:{'failover' if failover else 'settled'}"
         if repo.get_flag(flag):
             return
 
@@ -761,43 +810,49 @@ class Engine:
     # -- 手动操作 ---------------------------------------------------------
     def manual_switch(self, group_id: int) -> dict[str, Any]:
         """立即跳到下一台：把轮换起点平移到当前班的结束时刻。"""
-        group = repo.get_group(group_id)
-        if group is None:
-            raise ValueError("换班组不存在")
-        config = repo.get_settings()
-        now = dt.datetime.now(_timezone(config.get("timezone") or "Asia/Shanghai"))
-        now_ts = now.timestamp()
+        # 和后台调度抢同一把锁：否则两边会同时给同一批实例下指令
+        if not self._lock.acquire(timeout=30):
+            raise ValueError("后台正在对账，请稍后再试")
+        try:
+            group = repo.get_group(group_id)
+            if group is None:
+                raise ValueError("换班组不存在")
+            config = repo.get_settings()
+            now = dt.datetime.now(_timezone(config.get("timezone") or "Asia/Shanghai"))
+            now_ts = now.timestamp()
 
-        members = active_members(group)
-        if len(members) < 2:
-            raise ValueError("组内启用的成员不足两台")
+            members = active_members(group)
+            if len(members) < 2:
+                raise ValueError("组内启用的成员不足两台")
 
-        total = sum(float(m["hours"]) for m in members) * 3600
-        anchor = float(group.get("anchor_at") or group.get("created_at") or now_ts)
-        elapsed = max(0.0, now_ts - anchor)
-        cycle_index = int(elapsed // total)
-        offset = elapsed - cycle_index * total
+            total = sum(float(m["hours"]) for m in members) * 3600
+            anchor = float(group.get("anchor_at") or group.get("created_at") or now_ts)
+            elapsed = max(0.0, now_ts - anchor)
+            cycle_index = int(elapsed // total)
+            offset = elapsed - cycle_index * total
 
-        # 找到当前所在成员，再取「下一个成员」在一个周期里的累计起点。
-        # 把 anchor 挪到 now - 该起点，此刻就正好落在下一班的开头。
-        accumulated = 0.0
-        cum_before_next = 0.0
-        size = len(members)
-        for index, member in enumerate(members):
-            span = float(member["hours"]) * 3600
-            if offset < accumulated + span:
-                cum_before_next = accumulated + span if index + 1 < size else 0.0
-                break
-            accumulated += span
-        else:
+            # 找到当前所在成员，再取「下一个成员」在一个周期里的累计起点。
+            # 把 anchor 挪到 now - 该起点，此刻就正好落在下一班的开头。
+            accumulated = 0.0
             cum_before_next = 0.0
+            size = len(members)
+            for index, member in enumerate(members):
+                span = float(member["hours"]) * 3600
+                if offset < accumulated + span:
+                    cum_before_next = accumulated + span if index + 1 < size else 0.0
+                    break
+                accumulated += span
+            else:
+                cum_before_next = 0.0
 
-        new_anchor = int(now_ts - cum_before_next)
-        dbmod.execute(
-            "UPDATE shift_groups SET anchor_at=? WHERE id=?", (new_anchor, group_id)
-        )
-        repo.add_event("manual", f"{group.get('name')}：手动换班", "已跳到下一台", group_id=group_id)
-        return self.reconcile_group(repo.get_group(group_id) or group, config, now, now_ts)
+            new_anchor = int(now_ts - cum_before_next)
+            dbmod.execute(
+                "UPDATE shift_groups SET anchor_at=? WHERE id=?", (new_anchor, group_id)
+            )
+            repo.add_event("manual", f"{group.get('name')}：手动换班", "已跳到下一台", group_id=group_id)
+            return self.reconcile_group(repo.get_group(group_id) or group, config, now, now_ts)
+        finally:
+            self._lock.release()
 
     def manual_action(self, server_id: int, action: str) -> dict[str, Any]:
         server = repo.get_server(server_id, decrypt_secret=True)

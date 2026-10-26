@@ -95,9 +95,24 @@ def _server_row(row: Any, decrypt_secret: bool = False) -> dict[str, Any]:
     secret = item.pop("access_key_secret", "") or ""
     item["secret_configured"] = bool(secret)
     if decrypt_secret:
-        item["access_key_secret"] = secret
+        # 调用阿里云时必须拿明文，否则签出来的是密文
+        if not secret:
+            item["access_key_secret"] = ""
+        else:
+            try:
+                item["access_key_secret"] = security.decrypt(secret)
+            except Exception as exc:
+                raise ValueError(
+                    f"{item.get('label') or '该服务器'} 的 AccessKey Secret 解密失败，"
+                    "通常是 master.key 被替换或丢失，请重新填写一遍 Secret"
+                ) from exc
     else:
-        item["access_key_masked"] = security.mask(security.decrypt(secret))
+        # master.key 丢了 / 换了，解密会抛错：这里不能把整个列表接口带崩
+        try:
+            item["access_key_masked"] = security.mask(security.decrypt(secret))
+        except Exception:
+            item["access_key_masked"] = "⚠️ 解密失败"
+            item["secret_configured"] = False
     return item
 
 
@@ -473,8 +488,13 @@ def list_events(
 
 
 def prune_events(days: int) -> None:
-    cutoff = int(time.time()) - days * 86400
+    now = int(time.time())
+    cutoff = now - days * 86400
     db.execute("DELETE FROM events WHERE ts<?", (cutoff,))
-    db.execute("DELETE FROM flags WHERE created_at<?", (cutoff,))
-    db.execute("DELETE FROM shift_runs WHERE updated_at<?", (int(time.time()) - 3 * 86400,))
-    db.execute("DELETE FROM traffic_samples WHERE ts<?", (int(time.time()) - 7 * 86400,))
+    # flags 里既有 per-slot 的一次性去重键，也有「已让位」「已熔断」这类长期状态，
+    # 统一按 90 天兜底清理，别跟着事件保留期一起删
+    db.execute("DELETE FROM flags WHERE created_at<?", (now - max(days, 90) * 86400,))
+    # shift_runs 必须留得比「最长班次」久：抢占恢复要靠上一轮 phase 判断，
+    # 提前删掉会让重启后的当班被当成新班次，重复推一条换班完成
+    db.execute("DELETE FROM shift_runs WHERE updated_at<?", (now - 30 * 86400,))
+    db.execute("DELETE FROM traffic_samples WHERE ts<?", (now - 7 * 86400,))

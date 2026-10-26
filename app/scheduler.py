@@ -82,7 +82,9 @@ def _maybe_daily_report() -> None:
     today = now.date().isoformat()
     if _last_report_day == today:
         return
-    if now.hour != hour or now.minute < minute:
+    # 用「到点了没有」判断，而不是卡死在某一分钟：容器在 23:59 重启也能补发
+    target_at = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if now < target_at:
         return
     if engine.daily_report():
         _last_report_day = today

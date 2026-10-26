@@ -136,11 +136,19 @@ def sync(ip: str, config: dict[str, str], force: bool = False) -> DDNSResult:
         return DDNSResult(STATUS_UNCHANGED, "IP 未变化", ip=ip)
 
     _force_ipv4()
+    # 认证/Zone 这类配置问题重试也没用，先一次性判掉，别白等 6 秒
+    try:
+        headers = _headers(config)
+        zone_id = _resolve_zone_id(headers, config)
+    except ValueError as exc:
+        return DDNSResult(STATUS_ERROR, str(exc), ip=ip)
+    except Exception as exc:  # noqa: BLE001 - 网络异常
+        log.warning("DDNS 初始化失败: %s", exc)
+        return DDNSResult(STATUS_ERROR, f"无法连接 Cloudflare：{exc}", ip=ip)
+
     last_error = ""
     for attempt in range(1, 4):
         try:
-            headers = _headers(config)
-            zone_id = _resolve_zone_id(headers, config)
             record_id = _find_record_id(headers, zone_id, record)
             if not record_id:
                 last_error = "记录不存在或查询失败"

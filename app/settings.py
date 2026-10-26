@@ -46,5 +46,12 @@ SESSION_TTL_SECONDS = 14 * 24 * 3600
 
 
 def ensure_dirs() -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+    except PermissionError as exc:
+        raise RuntimeError(
+            f"数据目录 {DATA_DIR} 不可写。容器内以 uid 10001 运行，宿主机上的挂载目录必须让它可写：\n"
+            f"  sudo chown -R 10001:10001 {DATA_DIR}\n"
+            "（用一键脚本安装会自动处理这一步）"
+        ) from exc

@@ -94,14 +94,29 @@ O(n) 且无状态。`anchor_at` 是唯一需要持久化的东西 —— 手动�
 | 标记 | 作用 |
 | --- | --- |
 | `notify:{group}:{slot}:settled` | 同一个班次只推一次换班报告 |
+| `notify:{group}:{slot}:failover` | 同一个班次只推一次临时换班报告（与上面分开，否则「先结算后又转移」会被吞掉） |
 | `breaker:{group}:{slot}` | 熔断只报一次 |
 | `limit_stop:{group}:{slot}` | 超限停机只报一次 |
 | `timeout:{group}:{slot}` | 换班异常只报一次 |
 | `recovery:{group}:{slot}` | 待确认的抢占恢复 |
+| `start_err` / `stop_err` / `member_err` / `keepalive_err` | 同类失败只记一条事件，恢复后自动解除，避免每分钟刷屏 |
 
 标记落库而不是内存，容器重启后不会重复推送。
 
-开关机的去重靠状态判断而不是标记：`status != Running` 才 Start，`status != Stopped` 才 Stop。阿里云那边状态是真相，所以不需要额外记「已经发过启动指令」。
+开关机的去重靠状态判断而不是标记：`status != Running` 才 Start，`status != Stopped` 才 Stop。阿里云那边状态是真相，所以不需要额外记「已经发过启动指令」。处于 `Starting/Stopping` 这类过渡态时不下发新指令，只等它落地。
+
+### 故障转移是「粘住」的
+
+一个班次内一旦因流量超限切到替补，本班次剩下的时间就固定在替补上（`shift_runs.failover` + `duty_server_id`）。不这么做的话，每轮对账都会重新按时间推导出原当班、再判定一次超限，结果是每分钟换一次机器、事件刷屏、通知重复。界面上的「当班」高亮也跟着 `run.duty_server_id` 走。
+
+### 保留期
+
+| 表 | 保留 | 原因 |
+| --- | --- | --- |
+| `events` | 14 天（可配） | 只是给人看的流水 |
+| `flags` | 90 天起 | 里面混着「已让位」「已熔断」这类长期状态，不能跟事件一起删 |
+| `shift_runs` | 30 天 | 抢占恢复要靠上一轮 `phase` 判断，班次最长可到 7 天，删早了会重复推「换班完成」 |
+| `traffic_samples` | 7 天 | 画曲线用 |
 
 ## 单机保活与换班的互斥
 
@@ -115,7 +130,7 @@ O(n) 且无状态。`anchor_at` 是唯一需要持久化的东西 —— 手动�
 | --- | --- |
 | AccessKey Secret / Token / 密码 | AES-GCM，密钥是 `master.key`（32 字节随机，600 权限） |
 | 面板密码 | PBKDF2-SHA256，260k 轮，随机盐 |
-| 会话 | HMAC-SHA256 签名票据，含过期时间，无服务端状态 |
+| 会话 | HMAC-SHA256 签名票据，含过期时间与 `epoch`；改密码时 epoch 自增，旧票据立即失效 |
 | CSRF | 双提交 Cookie：`cdt_mgmt_csrf` 必须在 `X-CDT-CSRF` 头回传 |
 | 登录限速 | 内存计数，同 IP 5 分钟 8 次 |
 | 敏感字段回显 | 只返回 `*_configured: true` 和打码值，永不回传明文 |

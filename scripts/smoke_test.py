@@ -237,6 +237,86 @@ page = raw.get(BASE + "/", timeout=10)
 check("首页返回 HTML", page.status_code == 200 and "text/html" in page.headers.get("content-type", ""))
 check("首页含挂载点", 'id="root"' in page.text)
 
+print("\n== 13. 故障转移（同一班次内只能转移一次，且要粘住替补）==")
+# dry-run 里每台固定用掉 42% 配额，所以把阈值压到 10GB 就能稳定触发「当班超限」
+fail_servers = []
+for name, threshold in (("超限-甲", 10), ("接替-乙", 188)):
+    status, body = call(
+        "POST",
+        "/api/v1/servers",
+        {
+            "label": name,
+            "access_key_id": f"LTAI5tFailover{len(fail_servers)}",
+            "access_key_secret": f"fake-secret-failover-{len(fail_servers)}",
+            "region_id": "cn-hongkong",
+            "instance_id": f"i-failover0000000000{len(fail_servers)}",
+            "quota_gb": 200,
+            "threshold_gb": threshold,
+        },
+    )
+    if body.get("id"):
+        fail_servers.append(body["id"])
+check("建了两台用于转移的服务器", len(fail_servers) == 2)
+
+status, body = call(
+    "POST",
+    "/api/v1/groups",
+    {
+        "name": "转移测试",
+        "enabled": True,
+        "failover_enabled": True,
+        "ddns_record": "",
+        "members": [
+            {"server_id": fail_servers[0], "hours": 8, "enabled": True},
+            {"server_id": fail_servers[1], "hours": 8, "enabled": True},
+        ],
+    },
+)
+fail_group = body.get("id")
+check("建了转移测试组", bool(fail_group))
+
+for _ in range(3):
+    call("POST", "/api/v1/reconcile")
+
+status, groups_body = call("GET", "/api/v1/groups")
+target = next((g for g in groups_body.get("items", []) if g["id"] == fail_group), None)
+check("组存在", target is not None)
+if target:
+    check("当班已换成替补", target["duty_server_id"] == fail_servers[1], str(target["duty_server_id"]))
+    check("phase 保持临时换班", target["phase"] == "failover", target["phase"])
+    duty_member = next((m for m in target["members"] if m["is_duty"]), None)
+    check("界面高亮的当班就是替补", bool(duty_member) and duty_member["server_id"] == fail_servers[1])
+
+status, events_body = call("GET", "/api/v1/events?limit=200")
+failover_events = [e for e in events_body.get("items", []) if e["kind"] == "failover"]
+check("故障转移事件只记一次", len(failover_events) == 1, f"实际 {len(failover_events)} 条")
+
+print("\n== 14. 改密码后旧会话立即失效 ==")
+other = requests.Session()
+other.trust_env = False
+login = other.post(
+    BASE + "/api/v1/auth/login",
+    json={"username": "admin", "password": "test-password-12345"},
+    timeout=15,
+)
+check("第二个会话登录成功", login.status_code == 200, f"HTTP {login.status_code}")
+
+changed = session.post(
+    BASE + "/api/v1/settings",
+    json={"new_password": "test-password-67890"},
+    headers={"X-CDT-CSRF": session.cookies.get("cdt_mgmt_csrf", "")},
+    timeout=20,
+)
+check("改密码成功", changed.status_code == 200, f"HTTP {changed.status_code}")
+check(
+    "改密码的浏览器还留着会话",
+    session.get(BASE + "/api/v1/overview", timeout=10).status_code == 200,
+)
+check(
+    "另一个会话已被踢下线",
+    other.get(BASE + "/api/v1/overview", timeout=10).status_code == 401,
+)
+
 print("\n" + "=" * 46)
 if failures:
     print(f"❌ {len(failures)} 项未通过：")

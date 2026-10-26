@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import smtplib
 import ssl
 from dataclasses import dataclass, field
@@ -81,6 +82,30 @@ def send(config: dict[str, str], channel: str, message: Message) -> None:
 # Telegram
 # --------------------------------------------------------------------------
 
+# Telegram 单条消息上限 4096 字符，留点余量给结尾提示
+TG_LIMIT = 4000
+
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _strip_tags(text: str) -> str:
+    return _TAG_RE.sub("", text)
+
+
+def _clip(text: str, limit: int) -> str:
+    """按行截断：直接切字符串会把 <b> / <code> 切成两半，Telegram 就会 400。"""
+    if len(text) <= limit:
+        return text
+    kept: list[str] = []
+    size = 0
+    for line in text.split("\n"):
+        if size + len(line) + 1 > limit - 20:
+            break
+        kept.append(line)
+        size += len(line) + 1
+    return "\n".join(kept) + "\n…（内容过长已截断）"
+
+
 def _proxies(proxy: str) -> dict[str, str] | None:
     proxy = (proxy or "").strip()
     if not proxy:
@@ -97,7 +122,7 @@ def _send_telegram(config: dict[str, str], message: Message) -> None:
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {
         "chat_id": chat_id,
-        "text": message.html[:4096],
+        "text": _clip(message.html, TG_LIMIT),
         "parse_mode": "HTML",
         "disable_web_page_preview": True,
     }
@@ -113,7 +138,15 @@ def _send_telegram(config: dict[str, str], message: Message) -> None:
             if response.status_code == 200:
                 return
             last_error = RuntimeError(f"HTTP {response.status_code}: {response.text[:200]}")
-            # 400 一般是格式错误，重试无意义
+            # 400 一般是 HTML 解析或格式问题：去掉 parse_mode 用纯文本来一次，还失败就不再重试
+            if response.status_code == 400 and payload.get("parse_mode"):
+                payload = {
+                    **payload,
+                    "text": _strip_tags(payload["text"]),
+                    "parse_mode": "",
+                }
+                payload.pop("parse_mode", None)
+                continue
             if 400 <= response.status_code < 500:
                 break
         except Exception as exc:  # noqa: BLE001
@@ -139,7 +172,8 @@ def _send_email(config: dict[str, str], message: Message) -> None:
 
     mime = MIMEText(message.html, "html", "utf-8")
     mime["Subject"] = Header(f"{settings.BRAND} · {message.title}", "utf-8")
-    mime["From"] = formataddr((str(Header(settings.BRAND, "utf-8")), username))
+    # 没填用户名时用收件人兜底，否则 From 为空很多 SMTP 会直接拒信
+    mime["From"] = formataddr((str(Header(settings.BRAND, "utf-8")), username or recipient))
     mime["To"] = recipient
     mime["Date"] = formatdate(localtime=True)
 

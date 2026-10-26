@@ -58,6 +58,11 @@ def _load_master_key() -> bytes:
         raw = path.read_bytes()
         if len(raw) >= 32:
             return raw[:32]
+        # 文件在但内容不完整：绝不能悄悄重新生成，否则已存的 Secret 全部解不开
+        raise RuntimeError(
+            f"主密钥文件 {path} 内容不完整（{len(raw)} 字节，至少需要 32）。"
+            "请从备份恢复；如果确实要重来，删掉该文件后重新录入所有凭据。"
+        )
     key = os.urandom(32)
     path.write_bytes(key)
     try:
@@ -115,16 +120,21 @@ def _sign(payload: bytes) -> str:
     ).decode().rstrip("=")
 
 
-def issue_session(username: str) -> str:
+def issue_session(username: str, epoch: int = 0) -> str:
     payload = json.dumps(
-        {"u": username, "exp": int(time.time()) + settings.SESSION_TTL_SECONDS},
+        {
+            "u": username,
+            "exp": int(time.time()) + settings.SESSION_TTL_SECONDS,
+            # epoch 变了等于让所有旧票据失效（改密码时用）
+            "e": int(epoch),
+        },
         separators=(",", ":"),
     ).encode()
     body = base64.urlsafe_b64encode(payload).decode().rstrip("=")
     return f"{body}.{_sign(payload)}"
 
 
-def read_session(token: str) -> str | None:
+def read_session(token: str, epoch: int = 0) -> str | None:
     """校验通过返回用户名，否则 None。"""
     if not token or "." not in token:
         return None
@@ -141,6 +151,8 @@ def read_session(token: str) -> str | None:
     except Exception:
         return None
     if int(data.get("exp", 0)) < time.time():
+        return None
+    if int(data.get("e", 0)) != int(epoch):
         return None
     return str(data.get("u") or "") or None
 
