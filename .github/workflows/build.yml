@@ -4,6 +4,16 @@ on:
   push:
     branches: [main, dev]
     tags: ['v*']
+    # 只有会进镜像的文件（app/、web/、Dockerfile…）变了才值得重打一次多架构镜像。
+    # 规则是「本次推送的改动必须全部落在下面这些范围里」才会跳过，只要有一个文件
+    # 越界（比如改了 app/scheduler.py）就照常构建，不会漏掉真正的代码变更。
+    # 另：路径过滤对 tag 推送不生效，打 v* 标签永远会构建，发版流程不受影响。
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'scripts/**'
+      - '.gitignore'
+      - '.github/workflows/**'
   workflow_dispatch:
 
 env:

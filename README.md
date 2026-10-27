@@ -123,6 +123,16 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 
 ## 主要功能
 
+### 单机保活
+
+一台机器自己管自己：掉了就拉起来，不换班，也不碰别的机器。
+
+- 只认 `Stopped` 一种状态：查到已停机就自动开机；运行中、启动中、重启中一律不插手
+- 拉起是异步的：先记一条「保活拉起」，等实例真到 Running 才同步它身上的 DDNS 记录，再补发 🟢 抢占恢复 通知（正文写「实例疑被抢占，已自动恢复运行」）
+- 库存不足、AccessKey 失效这类错误，同一台连续失败只记一条，恢复后自动解除，不会每分钟刷一条
+- 同一台机器如果也在启用的换班组里，单机保活自动让位给换班组（只留一条提醒），避免两边互相拉扯
+- 保活页可以对单台单独暂停：暂停后不再拉它，DNS 绑定照旧保留
+
 ### 联合换班
 
 按成员顺序轮流当班，每人跑自己设定的时长，跑完切下一台，循环。
@@ -161,6 +171,23 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 | 📊 每日汇总 | 到设定时间推全部服务器的流量与额度 |
 
 支持 Telegram、邮件、Webhook 三类渠道同时开启。
+
+实际推出来的样子：
+
+<p align="center">
+  <img src="docs/screenshots/16-notify-daily.png" width="460" alt="CDT 每日流量报告">
+  <br><sub>CDT 每日流量报告</sub>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/17-notify-shift.png" width="460" alt="CDT（换班组）换班完成报告">
+  <br><sub>CDT（换班组）换班完成报告</sub>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/18-notify-recovery.png" width="460" alt="CDT 抢占恢复报告">
+  <br><sub>CDT 抢占恢复报告</sub>
+</p>
 
 ## 数据放在哪
 
