@@ -112,7 +112,8 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 
 ## 阿里云 RAM 权限
 
-完整使用本项目功能需要给当前用户添加以下三种 RAM 权限：
+完整使用本项目功能需要给当前用户添加以下三种 RAM 权限：  
+（RAM 访问控制 - 身份管理 - 用户 - 权限管理）
 
 | RAM 权限 | 用在哪 |
 | --- | --- |
