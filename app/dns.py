@@ -119,20 +119,21 @@ def _servers() -> dict[int, dict[str, Any]]:
 
 
 def _group_runner(group_id: int, now_ts: float, servers: dict[int, dict[str, Any]]) -> dict[str, Any] | None:
-    """换班组此刻真正在跑哪台。故障转移过的班次以运行记录为准，跟界面高亮保持一致。"""
+    """换班组此刻真正在跑哪台。
+
+    故障转移、人工换班都会让「实际当班」不同于时钟排出来的那台，统一交给
+    shift.actual_duty 判定 —— 以前这里只认 failover，手动换完班域名框还挂在
+    已经停机的那台机器卡片上（用户截图里的现象）。
+    """
     from . import shift  # 延迟导入：shift 反过来要用本模块，顶层导入会成环
 
     group = repo.get_group(group_id)
     if group is None:
         return None
-    picked = shift.duty_at(group, now_ts)
+    picked = shift.actual_duty(group, now_ts)
     if not picked:
         return None
-    server_id = int(picked[0]["server_id"])
-    run = repo.get_run(group_id, str(picked[1])) or {}
-    if run.get("failover") and int(run.get("duty_server_id") or 0):
-        server_id = int(run["duty_server_id"])
-    return servers.get(server_id)
+    return servers.get(int(picked[0]["server_id"]))
 
 
 def target_info(

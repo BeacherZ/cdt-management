@@ -964,6 +964,22 @@ def update_event(
     db.execute(f"UPDATE events SET {', '.join(sets)} WHERE id=?", params)
 
 
+def running_events(group_id: int, kinds: tuple[str, ...]) -> list[dict[str, Any]]:
+    """这个组里还挂着「进行中」的事件（按类型筛）。
+
+    用于防止流程被覆盖后留下一条永远转圈的旧事件。
+    """
+    if not kinds:
+        return []
+    placeholders = ",".join("?" * len(kinds))
+    rows = db.query(
+        f"SELECT * FROM events WHERE group_id=? AND status='running' "
+        f"AND kind IN ({placeholders}) ORDER BY id DESC",
+        (int(group_id), *kinds),
+    )
+    return [dict(row) for row in rows]
+
+
 def list_events(
     limit: int = 200, kind: str = "", level: str = "", group_id: int = 0
 ) -> list[dict[str, Any]]:

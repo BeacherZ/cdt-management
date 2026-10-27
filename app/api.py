@@ -24,8 +24,8 @@ from .shift import (
     _hhmm_to_minutes,
     _timezone,
     active_members,
+    actual_duty,
     current_member_index,
-    duty_at,
     engine,
     next_switch_at,
 )
@@ -418,15 +418,13 @@ def _group_payload(
     books: dict[str, dict[int, list[str]]] | None = None,
 ) -> dict[str, Any]:
     members = active_members(group)
-    picked = duty_at(group, now_ts)
+    # 「此刻谁是当班」只有一处判定：故障转移和人工换班都会覆盖时钟算出来的那台。
+    # 这里以前只认 failover，手动换完班界面还高亮着上一台（而且是已停机的那台）。
+    picked = actual_duty(group, now_ts)
     duty_id = int(picked[0]["server_id"]) if picked else 0
     shift_start = picked[1] if picked else 0
     slot_key = str(shift_start)
     run = repo.get_run(int(group["id"]), slot_key) or {} if picked else {}
-    # 本班次内发生过故障转移时，真正在跑的是替补，界面上的「当班」必须跟着它走，
-    # 否则会高亮一台已经停机的机器
-    if run.get("failover") and int(run.get("duty_server_id") or 0):
-        duty_id = int(run["duty_server_id"])
     nxt = next_switch_at(group, now_ts)
     servers = {int(s["id"]): s for s in repo.list_servers()}
 

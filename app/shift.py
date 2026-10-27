@@ -148,6 +148,33 @@ def duty_at(group: dict[str, Any], now_ts: float) -> tuple[dict[str, Any], int] 
     return last, int(anchor + cycle_index * total + accumulated - float(last["hours"]) * 3600)
 
 
+def actual_duty(group: dict[str, Any], now_ts: float) -> tuple[dict[str, Any], int] | None:
+    """此刻**真正**当班的是谁：返回 (当班成员, 该班次开始时间戳)。
+
+    时钟只是默认答案。本班次里如果发生过故障转移（run.failover）或者人工点过
+    立即换班（run.manual），实际当班是 run.duty_server_id 覆盖出来的那台。
+
+    这个判定以前散在四个地方各写一遍，其中界面、DNS 两处只认 failover、忘了
+    manual，于是手动换完班：引擎在跑 A，界面和域名却还认为当班是 B。
+    统一收到这里，谁要问「现在谁当班」都必须走这个函数。
+    """
+    picked = duty_at(group, now_ts)
+    if picked is None:
+        return None
+    member, shift_start = picked
+    run = repo.get_run(int(group["id"]), str(shift_start)) or {}
+    if not (run.get("failover") or run.get("manual")):
+        return member, shift_start
+    override = int(run.get("duty_server_id") or 0)
+    if not override:
+        return member, shift_start
+    for candidate in active_members(group):
+        if int(candidate["server_id"]) == override:
+            return candidate, shift_start
+    # 被指定的那台已经被移出组 / 删掉了：按时钟算，别拿一个不存在的当班
+    return member, shift_start
+
+
 def next_switch_at(group: dict[str, Any], now_ts: float) -> float | None:
     members = active_members(group)
     if len(members) < 2:
@@ -199,7 +226,7 @@ def _next_switch_timetable(group: dict[str, Any], now_ts: float) -> float:
 
 def current_member_index(group: dict[str, Any], now_ts: float) -> int:
     members = active_members(group)
-    picked = duty_at(group, now_ts)
+    picked = actual_duty(group, now_ts)
     if picked is None:
         return -1
     target = int(picked[0].get("server_id") or 0)
@@ -392,26 +419,18 @@ class Engine:
         # 时刻表模式需要知道时区
         group["_timezone"] = config.get("timezone") or "Asia/Shanghai"
 
-        picked = duty_at(group, now_ts)
+        picked = actual_duty(group, now_ts)
         if picked is None:
             return {"group_id": group_id, "skipped": "成员不足两台"}
         duty_member, shift_start = picked
         slot_key = str(shift_start)
         run = repo.get_run(group_id, slot_key) or {}
 
-        # 手动换班：本班次被用户手动切过，当班沿用 run.duty_server_id。
-        # 注意 manual 和 failover 是两个独立的含义：manual 是「人切的」，
-        # failover 是「流量超限自动转的」。以前手动切班借用 failover 字段做覆盖，
-        # 结果自己点的按钮被写成「故障转移」，现在各用各的。
+        # manual 和 failover 是两个独立的含义：manual 是「人切的」，failover 是
+        # 「流量超限自动转的」。当班覆盖已经由 actual_duty 统一处理，这里只读标志
+        # 决定后续怎么描述这次换班（事件标题 / 报告标题 / 阶段）。
         manual_switch = bool(run.get("manual"))
-
-        # 本班次内已经故障转移 / 被手动切过：沿用当时选中的那台，不再按时间推导当班。
         failed_over = bool(run.get("failover"))
-        if (failed_over or manual_switch) and int(run.get("duty_server_id") or 0):
-            for member in active_members(group):
-                if int(member["server_id"]) == int(run["duty_server_id"]):
-                    duty_member = member
-                    break
 
         duty = repo.get_server(int(duty_member["server_id"]), decrypt_secret=True)
         if duty is None:
@@ -705,10 +724,9 @@ class Engine:
         elif failover_flag:
             # 真·流量超限转移优先：手动切的班次后续又超限，那也是故障转移
             phase = PHASE_FAILOVER
-        elif manual_switch:
-            # 人工切的班次：当班是人为指定的，别显示成「故障转移」
-            phase = PHASE_MANUAL
         else:
+            # 手动切完也归「已完成」：徽章写「手动换班」会让人以为还在切，
+            # 这次是人切的这件事，事件标题和报告标题里已经说清楚了。
             phase = PHASE_SETTLED
         stage = "" if ready else "stopping_standby"
 
@@ -782,7 +800,7 @@ class Engine:
         if first_settle or failover:
             self._notify_settled(
                 group, config, duty, others, ddns_text, failover_flag, slot_key,
-                manual=manual_switch,
+                manual=manual_switch, shift_event_id=event_id,
             )
         elif recovered and config.get("notify_on_recovery") == "1":
             notify.send_all(config, messages.recovery(duty, ddns_text))
@@ -1076,6 +1094,7 @@ class Engine:
         failover: int,
         slot_key: str,
         manual: bool = False,
+        shift_event_id: int = 0,
     ) -> None:
         group_id = int(group["id"])
         name = group.get("name") or ""
@@ -1083,9 +1102,16 @@ class Engine:
         is_manual = bool(manual) and not is_failover
         kind = "shift_failover" if is_failover else "shift_done"
         # 换班完成 / 手动换班 / 临时换班共用同一个 slot，去重键必须分开，
-        # 否则「已结算过又临时换班」时这条报告会被当成重复直接吞掉
+        # 否则「已结算过又临时换班」时这条报告会被当成重复直接吞掉。
+        #
+        # 手动换班再细一层：同一个 slot 里可以连点好几次（切过去又切回来），
+        # 用 slot 做键会让第二次起全被当成重复静默吞掉 —— 用户点了三次只收到
+        # 一条报告。手动换班每次都会新建一条事件，就用事件 ID 做键。
         scope = "failover" if is_failover else ("manual" if is_manual else "settled")
-        flag = f"notify:{group_id}:{slot_key}:{scope}"
+        if is_manual and shift_event_id:
+            flag = f"notify:{group_id}:manual:{shift_event_id}"
+        else:
+            flag = f"notify:{group_id}:{slot_key}:{scope}"
         if repo.get_flag(flag):
             return
 
@@ -1127,10 +1153,10 @@ class Engine:
         # 换班过程的那条 running 事件已经在 reconcile 里改题、finish 过了；
         # 这里只补一份结算摘要，不再另开一条 0 秒完成的 done 事件。
         run = repo.get_run(group_id, slot_key) or {}
-        event_id = int(run.get("event_id") or 0)
-        if event_id:
+        run_event_id = int(run.get("event_id") or 0)
+        if run_event_id:
             repo.update_event(
-                event_id,
+                run_event_id,
                 detail=f"当班 {duty.get('label')} / 待机 {len(others)} 台 / {ddns_status}",
             )
         else:
@@ -1181,7 +1207,7 @@ class Engine:
                 )
                 return {"group_id": group_id, "skipped": "disabled"}
 
-            picked = duty_at(group, now_ts)
+            picked = actual_duty(group, now_ts)
             if picked is None:
                 repo.add_event(
                     "group_new",
@@ -1460,6 +1486,15 @@ class Engine:
         """
         from_label = current.get("label") or current.get("server_id")
         to_label = target.get("label") or target.get("server_id")
+        # 上一次手动换班还没走完就又被点了一次：那条事件马上会被新事件顶掉
+        # （run.event_id 被覆盖），界面上它就永远停在「进行中」转圈。
+        # 先把它收掉并写明原因，别留一条转不完的假进度。
+        for stale in repo.running_events(group_id, ("manual", "shift_done")):
+            repo.add_event_progress(
+                int(stale["id"]), f"已被新的手动换班取代（改为 {to_label}）"
+            )
+            repo.update_event(int(stale["id"]), title=f"{name}：手动换班已取消")
+            repo.finish_event(int(stale["id"]), "done")
         event_id = repo.add_event(
             "manual",
             f"{name}：手动换班进行中",
@@ -1483,22 +1518,14 @@ class Engine:
         借 reconcile_group 的 manual 分支完成切换（开下一台 → 停原当班 → DDNS → 发报告）。"""
         group_id = int(group["id"])
         members = active_members(group)
-        picked = duty_at(group, now_ts)
+        # 当前实际当班以运行记录为准（本班次可能已经被手动切过 / 故障转移过）。
+        # 只按时钟推「下一台」会永远算出同一台 —— 用户第二次点按钮时，时钟还是那个
+        # 成员，算出来的「下一台」还是同一台，于是怎么点都换不回来。
+        picked = actual_duty(group, now_ts)
         if picked is None:
             raise ValueError("组内启用的成员不足两台")
         current_member, shift_start = picked
         slot_key = str(shift_start)
-
-        # 本班次可能已经被手动切过 / 故障转移过：当前实际当班以 run.duty_server_id 为准。
-        # 只按时钟推「下一台」会永远算出同一台 —— 用户第二次点按钮时，时钟还是那个
-        # 成员，算出来的「下一台」还是同一台，于是怎么点都换不回来。
-        run = repo.get_run(group_id, slot_key) or {}
-        if (run.get("failover") or run.get("manual")) and int(run.get("duty_server_id") or 0):
-            actual_id = int(run["duty_server_id"])
-            for member in members:
-                if int(member["server_id"]) == actual_id:
-                    current_member = member
-                    break
 
         # 按 position 顺序取当前当班的下一台（循环到队首）
         current_index = next(
@@ -1506,6 +1533,10 @@ class Engine:
             -1,
         )
         next_member = members[(current_index + 1) % len(members)] if current_index >= 0 else members[0]
+
+        # 上一轮手动换班还没走完就又点了一次：旧事件不能就这么挂着。
+        # run.event_id 马上会被下面的 _manual_event 覆盖，界面上那条事件就永远
+        # 停在「进行中」转圈，看着像系统卡死。这件事统一在 _manual_event 里处理。
 
         repo.upsert_run(
             group_id,

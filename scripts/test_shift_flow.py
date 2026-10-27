@@ -541,7 +541,9 @@ class ManualSwitchTimetable(unittest.TestCase):
         group = repo.get_group(self.group_id) or {}
         picked = shift.duty_at(group, time.time())
         run = repo.get_run(self.group_id, str(picked[1])) or {}
-        self.assertEqual(run.get("phase"), shift.PHASE_MANUAL)
+        # 切完就归「已完成」：徽章还写「手动换班」会被当成还在切
+        self.assertEqual(run.get("phase"), shift.PHASE_SETTLED)
+        self.assertEqual(int(run.get("manual") or 0), 1, "手动换班的来源标记要留着")
         self.assertEqual(int(run.get("failover") or 0), 0, "手动换班不该打故障转移标记")
 
         events = repo.list_events(limit=20, group_id=self.group_id)
