@@ -474,27 +474,39 @@ class Engine:
         # 因为 run.failover 没写进去而重新判定超限、重复记「故障转移」事件。
         failover_flag = 1 if (failover or failed_over) else 0
 
-        # 3) 保证当班运行 —— 只做「启动当班」，不碰非当班
+        # 3) 保证当班运行 —— 只做「启动当班」，不碰非当班。
+        #    整个换班过程（启动当班 → 停非当班 → DDNS）都记在同一条事件里：
+        #    以前每一步都单开一条事件，界面上一轮换班会冒出三条互不相干的记录。
+        previously_settled = run.get("phase") in (PHASE_SETTLED, PHASE_FAILOVER)
         duty_status = str(duty.get("instance_status") or "")
         duty_not_running = duty_status not in ("Running",) and duty_status not in TRANSIENT_STATUS
+        # 抢占恢复跨多轮，用 flag 记住「这次是恢复而不是换班」（本地变量活不过一轮）
+        recovery_flag = f"recovery:{group_id}:{slot_key}"
+        event_id = int(run.get("event_id") or 0)
+
         if duty_not_running:
-            # 当班还没跑起来：下发启动，记进度，本轮到此为止（等下一轮确认 Running）
-            if run.get("phase") in (PHASE_SETTLED, PHASE_FAILOVER):
-                repo.set_flag(f"recovery:{group_id}:{slot_key}")
-            # 上一轮可能已经为这个班次开了 running 事件，启动失败时要用它打 error 标志
-            prior_event_id = int(run.get("event_id") or 0)
-            try:
-                aliyun.start_instance(duty)
-                repo.add_event(
-                    "start",
-                    f"{name}：当班未运行，已下发启动",
+            if previously_settled:
+                # 已结算的班次里当班又不跑了（被抢占 / 被手动停掉）→ 单独记一条恢复事件。
+                # 这不是「换班」，不计换班超时：started_at 从这次拉起重新计时。
+                repo.set_flag(recovery_flag)
+                event_id = repo.add_event(
+                    "recovery",
+                    f"{name}：当班未运行，已自动拉起",
                     f"{duty.get('label')} 原状态 {duty_status or '未知'}",
                     level="warning",
                     group_id=group_id,
                     server_id=int(duty["id"]),
+                    status="running",
                 )
-                repo.clear_flag(f"start_err:{group_id}:{slot_key}")
+                repo.upsert_run(
+                    group_id, slot_key, event_id=event_id, started_at=int(time.time())
+                )
+            else:
                 event_id = self._shift_event(group_id, slot_key, name, duty.get("label") or "")
+
+            try:
+                aliyun.start_instance(duty)
+                repo.clear_flag(f"start_err:{group_id}:{slot_key}")
                 repo.add_event_progress(event_id, f"已下发启动当班 {duty.get('label')}")
                 duty_status = "Starting"
             except Exception as exc:  # noqa: BLE001
@@ -509,11 +521,9 @@ class Engine:
                         group_id=group_id,
                         server_id=int(duty["id"]),
                     )
-                # 本班次若已有进行中的换班事件，启动失败要把它标记为 error，
-                # 否则前端「最近事件」里永远挂着一个转圈。
-                if prior_event_id:
-                    repo.add_event_progress(prior_event_id, f"当班启动失败：{exc}")
-                    repo.finish_event(prior_event_id, "error")
+                # 事件里挂着的转圈要打上失败标志，否则「最近事件」里永远在转
+                repo.add_event_progress(event_id, f"当班启动失败：{exc}")
+                repo.finish_event(event_id, "error")
                 repo.upsert_run(
                     group_id,
                     slot_key,
@@ -526,6 +536,9 @@ class Engine:
                     note=str(exc)[:200],
                 )
                 return {"group_id": group_id, "error": str(exc)}
+        elif not previously_settled:
+            # 当班本来就在跑：先把本班次的换班事件建好，后续进度往里追加
+            event_id = self._shift_event(group_id, slot_key, name, duty.get("label") or "")
 
         # 当班还在启动中（Starting/Pending），本轮不做任何停非当班的动作，等它 Running
         if duty_status in TRANSIENT_STATUS:
@@ -534,6 +547,7 @@ class Engine:
                 slot_key,
                 phase=PHASE_SWITCHING,
                 stage="starting_duty",
+                event_id=event_id,
                 duty_server_id=int(duty["id"]),
                 standby_server_ids=_encode_ids(others),
                 failover=failover_flag,
@@ -544,7 +558,7 @@ class Engine:
             )
             return {"group_id": group_id, "slot": slot_key, "ready": False, "stage": "starting_duty"}
 
-        # 4) 当班已 Running：先确认公网 IP 就绪（DDNS 启用时），再同步 DDNS、再停非当班。
+        # 4) 当班已 Running：先确认公网 IP 就绪（DDNS 启用时）。
         #    ECS 开机后 EIP 绑定有几秒延迟，IP 没就绪就等下一轮，避免把空 IP 写进解析。
         ddns_enabled = config.get("ddns_enabled") == "1"
         has_ip = bool(str(duty.get("public_ip") or "").strip())
@@ -554,6 +568,7 @@ class Engine:
                 slot_key,
                 phase=PHASE_SWITCHING,
                 stage="starting_duty",
+                event_id=event_id,
                 duty_server_id=int(duty["id"]),
                 standby_server_ids=_encode_ids(others),
                 failover=failover_flag,
@@ -564,24 +579,8 @@ class Engine:
             )
             return {"group_id": group_id, "slot": slot_key, "ready": False, "stage": "waiting_ip"}
 
-        # 当班 Running 且 IP 就绪 → 同步 DDNS（此时域名指向新当班机）
-        ddns_status = self._sync_ddns(duty, config, dns.TARGET_GROUP, group_id)
-
-        # 本班次是否已经结算过：结算过就不重复记进度、不重复停非当班、不重复 finish。
-        previously_settled = run.get("phase") in (PHASE_SETTLED, PHASE_FAILOVER)
-
-        # 换班事件进度：当班已开机 + DDNS 结果（只在首次进行时记，避免每轮 reconcile 刷屏）
-        event_id = self._shift_event(group_id, slot_key, name, duty.get("label") or "")
         if not previously_settled:
-            repo.add_event_progress(event_id, f"当班 {duty.get('label')} 已开机")
-            repo.add_event_progress(event_id, f"DDNS：{ddns_status}")
-
-        # DDNS 只有「已设置且已绑定」时才要求同步成功，否则不卡流程：
-        #   - 未启用 / 未绑定（⏸ 开头）→ 跳过确认，不阻塞
-        #   - 已绑定但同步失败（❌ / ⚠️ 开头）→ 本轮不算就绪，等下一轮重试
-        ddns_text = str(ddns_status)
-        ddns_bound = bool(repo.dns_record_of(dns.TARGET_GROUP, group_id))
-        ddns_ok = (not ddns_enabled) or (not ddns_bound) or ddns_text.startswith("✅")
+            repo.add_event_progress(event_id, f"当班 {duty.get('label')} 已开机", once=True)
 
         # 5) 停非当班（此时才停）。物理停机（StopCharging / KeepCharging / Stop /
         #    Not-applicable）就算停好，不再重发；普通停机照常收费但已到位，无需死循环。
@@ -595,13 +594,6 @@ class Engine:
                 continue
             try:
                 aliyun.stop_instance(server, "StopCharging")
-                repo.add_event(
-                    "stop",
-                    f"{name}：已为非当班实例下发节省停机",
-                    f"{server.get('label')} 原状态 {server.get('instance_status') or '未知'}",
-                    group_id=group_id,
-                    server_id=int(server["id"]),
-                )
                 repo.clear_flag(f"stop_err:{server['id']}")
                 repo.add_event_progress(event_id, f"已下发停机 {server.get('label')}")
             except Exception as exc:  # noqa: BLE001
@@ -618,6 +610,24 @@ class Engine:
                     )
             all_stopped = False
 
+        if all_stopped and not previously_settled:
+            repo.add_event_progress(event_id, "非当班均已节省停机", once=True)
+
+        # 6) 全部实例状态确认到位之后才动 DDNS。
+        #    以前是「当班一开机就同步」，非当班还在跑的时候域名已经指过去了；而且
+        #    停机那一轮还会再同步一次，进度里冒出「DDNS：✅ 无变化」这种没意义的一行。
+        ddns_text = ""
+        ddns_ok = True
+        if all_stopped:
+            ddns_text = str(self._sync_ddns(duty, config, dns.TARGET_GROUP, group_id))
+            # DDNS 只有「已设置且已绑定」时才要求同步成功，否则不卡流程：
+            #   - 未启用 / 未绑定（⏸ 开头）→ 跳过确认，不阻塞
+            #   - 已绑定但同步失败（❌ / ⚠️ 开头）→ 本轮不算就绪，等下一轮重试
+            ddns_bound = bool(repo.dns_record_of(dns.TARGET_GROUP, group_id))
+            ddns_ok = (not ddns_enabled) or (not ddns_bound) or ddns_text.startswith("✅")
+            if not previously_settled:
+                repo.add_event_progress(event_id, f"DDNS：{ddns_text}", once=True)
+
         ready = duty_status == "Running" and all_stopped and (has_ip or not ddns_enabled) and ddns_ok
 
         first_settle = ready and not previously_settled
@@ -629,6 +639,7 @@ class Engine:
             slot_key,
             phase=phase,
             stage=stage,
+            event_id=event_id,
             duty_server_id=int(duty["id"]),
             standby_server_ids=_encode_ids(others),
             failover=failover_flag,
@@ -641,7 +652,7 @@ class Engine:
             "duty": duty.get("label"),
             "mode": "failover" if failover_flag else "normal",
             "ready": ready,
-            "ddns": str(ddns_status),
+            "ddns": ddns_text,
         }
 
         if not ready:
@@ -650,18 +661,33 @@ class Engine:
             )
             return summary
 
-        # 换班完成：确认全部到位，把进行中的事件改写为最终标题并打上完成标志
+        # 换班完成：确认全部到位，把同一条事件改写为最终标题并打上完成标志
         # （只在首次 settle 时做，之后每轮 reconcile 维持 settled 状态，不再重复追加、重复 finish）。
         # 复用「换班进行中」这条 running 事件而不是另开一条，这样事件全程耗时才是真实的换班过程。
         if first_settle and event_id:
-            repo.add_event_progress(event_id, "非当班均已节省停机")
-            repo.add_event_progress(event_id, "全部状态确认完毕")
+            repo.add_event_progress(event_id, "全部状态确认完毕", once=True)
             repo.update_event(
                 event_id,
-                title=f"{name}：{'临时换班' if failover_flag else '换班完成'}",
+                title=f"{name}：{'故障转移' if failover_flag else '换班完成'}",
                 kind="shift_failover" if failover_flag else "shift_done",
             )
             repo.finish_event(event_id, "done")
+
+        # 抢占恢复：当班被拉起并重新就绪，收掉那条恢复事件。
+        # flag 跨轮持久化，所以「这轮才拉起、下一轮才就绪」也能收尾。
+
+        recovered = bool(repo.get_flag(recovery_flag)) and not first_settle
+        if recovered:
+            repo.clear_flag(recovery_flag)
+            if event_id:
+                repo.add_event_progress(event_id, "当班已恢复运行", once=True)
+                repo.update_event(
+                    event_id,
+                    title=f"{name}：当班已恢复运行",
+                    detail=f"当班 {duty.get('label')} 已恢复运行",
+                    kind="recovery",
+                )
+                repo.finish_event(event_id, "done")
 
         if not notify_enabled:
             return summary
@@ -672,24 +698,13 @@ class Engine:
         if manual_switch:
             return summary
 
-        # 6) 全部确认（当班 Running + 非当班节省停机 + DDNS 已同步）后才发通知
+        # 全部确认（当班 Running + 非当班节省停机 + DDNS 已同步）后才发通知
         if first_settle or failover:
             self._notify_settled(
-                group, config, duty, others, ddns_status, failover_flag, slot_key
+                group, config, duty, others, ddns_text, failover_flag, slot_key
             )
-        elif (
-            repo.get_flag(f"recovery:{group_id}:{slot_key}")
-            and config.get("notify_on_recovery") == "1"
-        ):
-            repo.clear_flag(f"recovery:{group_id}:{slot_key}")
-            notify.send_all(config, messages.recovery(duty, str(ddns_status), group_name=name))
-            repo.add_event(
-                "recovery",
-                f"{name}：抢占恢复",
-                f"{duty.get('label')} 已恢复运行",
-                group_id=group_id,
-                server_id=int(duty["id"]),
-            )
+        elif recovered and config.get("notify_on_recovery") == "1":
+            notify.send_all(config, messages.recovery(duty, ddns_text, group_name=name))
 
         return summary
 
@@ -915,7 +930,7 @@ class Engine:
         config: dict[str, str],
         duty: dict[str, Any],
         others: list[dict[str, Any]],
-        ddns_status: ddns.DDNSResult,
+        ddns_status: str,
         failover: int,
         slot_key: str,
     ) -> None:
@@ -971,7 +986,7 @@ class Engine:
             # 万一 run 里丢了 event_id，仍补一条结果事件，别让通知发了却无迹可寻
             repo.add_event(
                 kind,
-                f"{name}：{'临时换班' if is_failover else '换班完成'}",
+                f"{name}：{'故障转移' if is_failover else '换班完成'}",
                 f"当班 {duty.get('label')} / 待机 {len(others)} 台 / {ddns_status}",
                 group_id=group_id,
                 server_id=int(duty["id"]),

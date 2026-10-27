@@ -5,11 +5,15 @@
   · 换班完成：停止账号按成员数逐个列出（脚本只有两台，写死一块）
   · 当前班次：两台用 AM / PM（脚本原样）；三台以上一律写成「机名（起–止）」，
     因为三台轮班时每台都可能落在 AM 段，只写 AM / PM 根本看不出是谁
-  · 临时换班：三台以上在「超限账号」之后再补「停止账号」
-  · 全局熔断：两台说「双实例」，三台以上说「N 台实例」
+  · 故障转移：三台以上在「超限账号」之后再补「停止账号」
+  · 全局熔断：两台说「双实例」，三台以上说「N 台实例」；单台（超限无处可换）
+    沿用同一个标题，正文保留 ＩＰ 行
 
 停机状态一律读实例真实返回的 StoppedMode（StopCharging 节省停机 / KeepCharging 普通停机），
 不按脚本写死「Stopped (StopCharging)」——普通停机照常收规格费，写错会误导。
+
+唯一在脚本之外统一加的一行是「📍 地域」：跟着 ＩＰ 行的下一行，取 ECS DescribeInstances
+返回的真实 RegionId（如 cn-hongkong），和每日流量报告字段顺序一致。其余字段位置不动。
 
 本模块只做拼装，不查库、不调接口，方便和脚本对着看。
 """
@@ -133,6 +137,11 @@ def _message(kind: str, title_html: str, title: str, body: str) -> notify.Messag
 # 块
 # --------------------------------------------------------------------------
 
+def _region(server: dict[str, Any]) -> str:
+    """地域：ECS DescribeInstances 返回的真实 RegionId（如 cn-hongkong），没读到给「-」。"""
+    return str(server.get("region_id") or "-")
+
+
 def running_block(heading: str, server: dict[str, Any], ddns_status: str) -> str:
     """线上运行的那台。脚本里叫「运行账号 / 接替账号」。"""
     return "\n".join(
@@ -141,6 +150,7 @@ def running_block(heading: str, server: dict[str, Any], ddns_status: str) -> str
             f"┃ 🏷 别称：{_label(server)}",
             f"┃ 📦 实例：<code>{_instance(server)}</code>",
             f"┃ 🌐 ＩＰ：{_ip(server)}",
+            f"┃ 📍 地域：{_region(server)}",
             f"┃ ☁️ DDNS：{ddns_status}",
             "┃ 🟢 状态：Running",
         ]
@@ -156,6 +166,7 @@ def stopped_block(
         f"┃ 🏷 别称：{_label(server)}",
         f"┃ 📦 实例：<code>{_instance(server)}</code>",
         f"┃ 🌐 ＩＰ：{_ip(server)}",
+        f"┃ 📍 地域：{_region(server)}",
     ]
     if used is not None:
         lines.append(f"┃ 📈 已用：{used:.2f} GB")
@@ -211,15 +222,15 @@ def shift_failover(
     ddns_status: str,
     group_name: str = "",
 ) -> notify.Message:
-    """⚠️ 临时换班（故障转移）。两块是脚本原样，三台以上才补「停止账号」。"""
+    """⚠️ 故障转移（原「临时换班」）。两块是脚本原样，三台以上才补「停止账号」。"""
     prefix = f"{group_name} " if group_name else ""
     parts = [running_block("接替账号", duty, ddns_status)]
     parts += [stopped_block("超限账号", s, _status(s), used=_used(s)) for s in over]
     parts += [stopped_block("停止账号", s, _status(s)) for s in standby]
     return _message(
         "shift_failover",
-        f"⚠️ <b>CDT {prefix}临时换班报告</b>",
-        f"CDT {prefix}临时换班报告",
+        f"⚠️ <b>CDT {prefix}故障转移报告</b>",
+        f"CDT {prefix}故障转移报告",
         f"📢 <b>故障转移</b>：当班实例流量超限，已启用备用实例。\n{SEP}\n" + _join_blocks(parts),
     )
 
@@ -238,6 +249,7 @@ def breaker(servers: list[dict[str, Any]], group_name: str = "") -> notify.Messa
             [
                 f"🖥 {_label(s)}",
                 f"┃ 📦 实例：<code>{_instance(s)}</code>",
+                f"┃ 📍 地域：{_region(s)}",
                 f"┃ 📈 已用：{_used(s):.2f} GB",
                 f"┃ 🚧 状态：{_status(s)}",
             ]
@@ -253,12 +265,17 @@ def breaker(servers: list[dict[str, Any]], group_name: str = "") -> notify.Messa
 
 
 def limit_stop(server: dict[str, Any], group_name: str = "") -> notify.Message:
-    """🔴 超限停机。"""
+    """🚨 全局熔断（单台场景）：当班超限且无处可换，只停这一台。
+
+    和 breaker() 共用同一个标题「全局熔断报告」——两者都是「流量到阈值被迫停机」，
+    只是范围不同（单台 / 全组），分两个标题在推送里只会让人以为是两件事。
+    正文保留 ＩＰ 行，与其它通知的实例块字段顺序一致。
+    """
     prefix = f"{group_name} " if group_name else ""
     return _message(
         "limit_stop",
-        f"🔴 <b>CDT {prefix}超限停机报告</b>",
-        f"CDT {prefix}超限停机报告",
+        f"🚨 <b>CDT {prefix}全局熔断报告</b>",
+        f"CDT {prefix}全局熔断报告",
         "\n".join(
             [
                 "当班实例流量超限，已强制节省停机。",
@@ -266,6 +283,7 @@ def limit_stop(server: dict[str, Any], group_name: str = "") -> notify.Message:
                 f"🖥 {_label(server)}",
                 f"┃ 📦 实例：<code>{_instance(server)}</code>",
                 f"┃ 🌐 ＩＰ：{_ip(server)}",
+                f"┃ 📍 地域：{_region(server)}",
                 f"┃ 🔴 状态：{_status(server)}",
                 SEP,
             ]
@@ -280,7 +298,11 @@ def recovery(
     kind: str = "recovery",
     group_name: str = "",
 ) -> notify.Message:
-    """🟢 抢占恢复。单机保活拉起也用这套版式（脚本里没有单独的保活通知）。"""
+    """🟢 抢占恢复。单机保活拉起也用这套版式（脚本里没有单独的保活通知）。
+
+    换班组会带组名前缀（CDT 国际站 X2 抢占恢复报告），单机保活没有组名
+    （CDT 抢占恢复报告），用户从标题就能分辨，不再单独起「单机保活恢复报告」。
+    """
     prefix = f"{group_name} " if group_name else ""
     return _message(
         kind,
@@ -293,6 +315,7 @@ def recovery(
                 f"🖥 {_label(server)}",
                 f"┃ 📦 实例：<code>{_instance(server)}</code>",
                 f"┃ 🌐 ＩＰ：{_ip(server)}",
+                f"┃ 📍 地域：{_region(server)}",
                 f"┃ ☁️ DDNS：{ddns_status}",
                 "┃ 🟢 状态：Running",
                 SEP,
@@ -316,6 +339,7 @@ def shift_error(
                 f"┃ 🏷 别称：{_label(duty)}",
                 f"┃ 📦 实例：<code>{_instance(duty)}</code>",
                 f"┃ 🌐 ＩＰ：{_ip(duty)}",
+                f"┃ 📍 地域：{_region(duty)}",
                 f"┃ 🚧 状态：{_status(duty)}",
             ]
         )
@@ -328,6 +352,7 @@ def shift_error(
                     f"┃ 🏷 别称：{_label(server)}",
                     f"┃ 📦 实例：<code>{_instance(server)}</code>",
                     f"┃ 🌐 ＩＰ：{_ip(server)}",
+                    f"┃ 📍 地域：{_region(server)}",
                     f"┃ 🚧 状态：{_status(server)}",
                 ]
             )
@@ -353,7 +378,7 @@ def report_block(server: dict[str, Any]) -> str:
             f"🖥 {_label(server)}",
             f"┃ 📦 实例：<code>{_instance(server)}</code>",
             f"┃ 🌐 ＩＰ：{_ip(server)}",
-            f"┃ 📍 地域：{server.get('region_id') or '-'}",
+            f"┃ 📍 地域：{_region(server)}",
             f"┃ 📈 已用：{used:.2f} GB",
             f"┃ 💾 剩余：{remain:.2f} GB",
             f"┃ 🔥 使用率：{percent:.2f}%  {color}",

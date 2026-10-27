@@ -749,38 +749,38 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
                     onChange={(value) => patch((draft) => (draft.notify_on_shift = value))}
                   />
                   <Switch
-                    label="临时换班（故障转移）"
+                    label="故障转移"
+                    hint="当班实例流量超限，启用备用实例接替时提醒"
                     checked={form.notify_on_failover}
                     onChange={(value) => patch((draft) => (draft.notify_on_failover = value))}
                   />
                   <Switch
-                    label="抢占恢复"
-                    checked={form.notify_on_recovery}
-                    onChange={(value) => patch((draft) => (draft.notify_on_recovery = value))}
-                  />
-                  <Switch
-                    label="超限停机"
-                    hint="当班流量达到阈值且无处可换时，强制节省停机"
-                    checked={form.notify_on_limit_stop}
-                    onChange={(value) => patch((draft) => (draft.notify_on_limit_stop = value))}
+                    label="实例恢复运行"
+                    hint="抢占恢复与单机保活恢复共用：实例被停掉后自动拉起成功时提醒"
+                    checked={form.notify_on_recovery || form.notify_on_keepalive}
+                    onChange={(value) =>
+                      patch((draft) => {
+                        draft.notify_on_recovery = value
+                        draft.notify_on_keepalive = value
+                      })
+                    }
                   />
                   <Switch
                     label="全局熔断"
-                    hint="所有成员都超限时，全部节省停机"
-                    checked={form.notify_on_breaker}
-                    onChange={(value) => patch((draft) => (draft.notify_on_breaker = value))}
+                    hint="流量达到阈值被迫停机：当班无处可换只停一台，全部成员超限则全部停机"
+                    checked={form.notify_on_limit_stop || form.notify_on_breaker}
+                    onChange={(value) =>
+                      patch((draft) => {
+                        draft.notify_on_limit_stop = value
+                        draft.notify_on_breaker = value
+                      })
+                    }
                   />
                   <Switch
                     label="换班异常"
                     hint="准点换班超过 10 分钟仍未就绪时提醒"
                     checked={form.notify_on_error}
                     onChange={(value) => patch((draft) => (draft.notify_on_error = value))}
-                  />
-                  <Switch
-                    label="单机保活恢复"
-                    hint="单机保活的实例被拉起成功后提醒"
-                    checked={form.notify_on_keepalive}
-                    onChange={(value) => patch((draft) => (draft.notify_on_keepalive = value))}
                   />
                 </>
               )}

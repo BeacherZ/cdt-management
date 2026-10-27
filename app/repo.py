@@ -754,10 +754,12 @@ def list_pending_events() -> list[dict[str, Any]]:
 PROGRESS_MAX_STEPS = 50
 
 
-def add_event_progress(event_id: int, text: str) -> None:
+def add_event_progress(event_id: int, text: str, *, once: bool = False) -> None:
     """往事件的过程日志追加一条，并刷新 updated 时间戳（用 ts 近似当 updated_at）。
 
     相邻两条 text 相同就跳过，避免换班每轮 reconcile 反复追加同一条进度刷屏。
+    once=True 时整条事件内出现过就不再追加（换班跨多轮，中间插了别的步骤后
+    同一条进度还会再冒出来一次，用这个开关彻底去重）。
     单事件进度条数封顶 PROGRESS_MAX_STEPS，超出丢最旧的。
     """
     if not event_id:
@@ -771,6 +773,8 @@ def add_event_progress(event_id: int, text: str) -> None:
     except Exception:
         progress = []
     if progress and progress[-1].get("text") == text:
+        return
+    if once and any(step.get("text") == text for step in progress):
         return
     progress.append({"ts": now, "text": text})
     if len(progress) > PROGRESS_MAX_STEPS:

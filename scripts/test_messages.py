@@ -45,7 +45,7 @@ C = {
     "label": "第三台",
     "instance_id": "i-ccc333",
     "public_ip": "198.51.100.3",
-    "region": "cn-hongkong",
+    "region_id": "cn-hongkong",
     "quota_gb": 200,
     "traffic_used": 5.0,
     "instance_status": "Stopped",
@@ -64,6 +64,7 @@ class ShiftDone(unittest.TestCase):
             "┃ 🏷 别称：AliCloud-CDT-AM\n"
             "┃ 📦 实例：<code>i-aaa111</code>\n"
             "┃ 🌐 ＩＰ：198.51.100.1\n"
+            "┃ 📍 地域：cn-hongkong\n"
             "┃ ☁️ DDNS：✅ 已同步\n"
             "┃ 🟢 状态：Running\n"
             f"{SEP}\n"
@@ -71,6 +72,7 @@ class ShiftDone(unittest.TestCase):
             "┃ 🏷 别称：AliCloud-CDT-PM\n"
             "┃ 📦 实例：<code>i-bbb222</code>\n"
             "┃ 🌐 ＩＰ：198.51.100.2\n"
+            "┃ 📍 地域：cn-hongkong\n"
             "┃ ⚪ 状态：Stopped (StopCharging)\n"
             f"{SEP}"
         )
@@ -163,7 +165,7 @@ class DdnsStatus(unittest.TestCase):
 class ShiftFailover(unittest.TestCase):
     def test_two_members_exactly_like_script(self):
         expected = (
-            "⚠️ <b>CDT 临时换班报告</b>\n"
+            "⚠️ <b>CDT 故障转移报告</b>\n"
             "\n"
             f"📢 <b>故障转移</b>：当班实例流量超限，已启用备用实例。\n"
             f"{SEP}\n"
@@ -171,6 +173,7 @@ class ShiftFailover(unittest.TestCase):
             "┃ 🏷 别称：AliCloud-CDT-PM\n"
             "┃ 📦 实例：<code>i-bbb222</code>\n"
             "┃ 🌐 ＩＰ：198.51.100.2\n"
+            "┃ 📍 地域：cn-hongkong\n"
             "┃ ☁️ DDNS：✅ 已同步\n"
             "┃ 🟢 状态：Running\n"
             f"{SEP}\n"
@@ -178,6 +181,7 @@ class ShiftFailover(unittest.TestCase):
             "┃ 🏷 别称：AliCloud-CDT-AM\n"
             "┃ 📦 实例：<code>i-aaa111</code>\n"
             "┃ 🌐 ＩＰ：198.51.100.1\n"
+            "┃ 📍 地域：cn-hongkong\n"
             "┃ 📈 已用：190.00 GB\n"
             "┃ ⚪ 状态：Stopped (StopCharging)\n"
             f"{SEP}"
@@ -206,7 +210,10 @@ class Breaker(unittest.TestCase):
         message = messages.breaker([self.OFF_A, B])
         self.assertTrue(message.html.startswith("🚨 <b>CDT 全局熔断报告</b>\n\n"))
         self.assertIn("⚠ <b>警告：双实例流量均已到达到阈值，“全局熔断”，均已节省停机。</b>", message.html)
-        self.assertIn("🖥 AliCloud-CDT-AM\n┃ 📦 实例：<code>i-aaa111</code>\n┃ 📈 已用：12.00 GB\n", message.html)
+        self.assertIn(
+            "🖥 AliCloud-CDT-AM\n┃ 📦 实例：<code>i-aaa111</code>\n┃ 📍 地域：cn-hongkong\n┃ 📈 已用：12.00 GB\n",
+            message.html,
+        )
 
     def test_three_members_wording(self):
         message = messages.breaker([self.OFF_A, B, self.OFF_C])
@@ -217,13 +224,14 @@ class Breaker(unittest.TestCase):
 class OtherReports(unittest.TestCase):
     def test_limit_stop(self):
         expected = (
-            "🔴 <b>CDT 超限停机报告</b>\n"
+            "🚨 <b>CDT 全局熔断报告</b>\n"
             "\n"
             "当班实例流量超限，已强制节省停机。\n"
             "\n"
             "🖥 AliCloud-CDT-PM\n"
             "┃ 📦 实例：<code>i-bbb222</code>\n"
             "┃ 🌐 ＩＰ：198.51.100.2\n"
+            "┃ 📍 地域：cn-hongkong\n"
             "┃ 🔴 状态：Stopped (StopCharging)\n"
             f"{SEP}"
         )
@@ -238,6 +246,7 @@ class OtherReports(unittest.TestCase):
             "🖥 AliCloud-CDT-AM\n"
             "┃ 📦 实例：<code>i-aaa111</code>\n"
             "┃ 🌐 ＩＰ：198.51.100.1\n"
+            "┃ 📍 地域：cn-hongkong\n"
             "┃ ☁️ DDNS：✅ 已同步\n"
             "┃ 🟢 状态：Running\n"
             f"{SEP}"
@@ -248,7 +257,10 @@ class OtherReports(unittest.TestCase):
         message = messages.recovery(
             A, "⏸ DDNS 未启用", headline="实例疑被抢占，已自动恢复运行。", kind="keepalive"
         )
-        self.assertTrue(message.html.startswith("🟢 <b>CDT 抢占恢复报告</b>\n\n实例疑被抢占"))
+        # 单机保活没有组名，标题是「CDT 抢占恢复报告」，靠缺少组名与换班组区分
+        self.assertTrue(
+            message.html.startswith("🟢 <b>CDT 抢占恢复报告</b>\n\n实例疑被抢占")
+        )
         self.assertEqual(message.kind, "keepalive")
 
     def test_shift_error(self):
@@ -257,6 +269,24 @@ class OtherReports(unittest.TestCase):
         self.assertIn("⏳ <b>换班超时：换班指令已执行 10 分钟，但状态未就绪。</b>", message.html)
         self.assertIn("🚩 <b>应当运行账号 </b>", message.html)
         self.assertIn("🚩 <b>应当停止账号 </b>", message.html)
+
+    def test_every_notification_has_region_line(self):
+        # 所有通知的实例块都要跟每日报告一样带「地域」行（IP 下面一行；熔断块没有 IP 行，
+        # 就跟在实例行后面）
+        cases = {
+            "换班完成": messages.shift_done(A, [B], "AM", "✅ 已同步"),
+            "临时换班": messages.shift_failover(B, [A], [], "✅ 已同步"),
+            "全局熔断": messages.breaker([{**A, "instance_status": "Stopped"}, B]),
+            "超限停机": messages.limit_stop(B),
+            "抢占恢复": messages.recovery(A, "✅ 已同步"),
+            "换班异常": messages.shift_error(B, [A], 10),
+        }
+        for name, message in cases.items():
+            with self.subTest(kind=name):
+                self.assertIn("┃ 📍 地域：cn-hongkong", message.html)
+        # 地域缺失时给「-」，不能留空
+        bare = messages.recovery({k: v for k, v in A.items() if k != "region_id"}, "✅ 已同步")
+        self.assertIn("┃ 📍 地域：-", bare.html)
 
     def test_daily_report(self):
         message = messages.daily_report([A, B], "2026-10-26 23:58")
