@@ -7,7 +7,10 @@ RUN npm ci --ignore-scripts
 COPY web ./
 RUN npm run build
 
-FROM --platform=$BUILDPLATFORM python:3.13-slim AS runtime
+# runtime 阶段**不能**写 --platform=$BUILDPLATFORM：那是构建机（amd64）的平台，
+# 会在 arm64 构建里塞进 amd64 的 python 镜像，产物标着 arm64 一跑就是
+# 「exec failed: Exec format error」。让它跟随 TARGETPLATFORM，arm64 镜像才是真 arm64。
+FROM python:3.13-slim AS runtime
 ARG VERSION=dev
 ARG COMMIT=unknown
 ARG BUILT_AT=unknown

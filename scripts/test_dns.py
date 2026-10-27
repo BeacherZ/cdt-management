@@ -377,6 +377,17 @@ class SyncTarget(Base):
             [("a.example.com", "47.243.10.10"), ("b.example.com", "47.243.10.10")],
         )
 
+    def test_unchanged_uses_same_wording_as_synced(self):
+        # IP 没变时的状态对外统一叫「已同步」：通知和事件进度里冒出「无变化」，
+        # 用户会以为没查。内部靠 DDNSResult.changed 区分，不靠文案。
+        self.assertEqual(ddns.STATUS_UNCHANGED, "✅ 已同步")
+        self.assertEqual(ddns.STATUS_UNCHANGED, ddns.STATUS_SYNCED)
+        # 两条记录、一条改了 IP 一条没改：合成一句话也只能是「已同步（2 条）」
+        self.assertEqual(
+            dns.combine_status([ddns.STATUS_SYNCED, ddns.STATUS_UNCHANGED]),
+            "✅ 已同步（2 条）",
+        )
+
     def test_no_record_means_unbound(self):
         server_id = self.add_server("香港-主力")
         names, statuses = dns.sync_target(dns.TARGET_SERVER, server_id, self.config())

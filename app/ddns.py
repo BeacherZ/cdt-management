@@ -22,7 +22,9 @@ log = logging.getLogger("cdt-management.ddns")
 API = "https://api.cloudflare.com/client/v4"
 
 STATUS_SYNCED = "✅ 已同步"
-STATUS_UNCHANGED = "✅ 无变化"
+# IP 没变、不需要动记录：对外文案和「已同步」统一，通知和事件进度里出现「无变化」
+# 反而让用户以为没查。内部靠 DDNSResult.changed 区分，不靠文案。
+STATUS_UNCHANGED = "✅ 已同步"
 STATUS_INVALID_IP = "⚠️ IP 无效跳过"
 STATUS_NO_RECORD_ID = "❌ 获取 ID 失败"
 STATUS_UPDATE_FAILED = "❌ 更新失败"
