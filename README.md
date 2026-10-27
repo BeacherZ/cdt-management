@@ -146,6 +146,7 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 - 只支持 Cloudflare A 记录，Token 与 Global API Key 两种认证
 - 一条记录绑一个目标；反过来一个目标可以挂多条记录，`www` 和 `api` 各绑一条就行
 - 它一开机（换班轮到、保活拉起、手动开机），挂着的记录会一起指向新 IP
+- 绑在单台实例上的记录还能省一步：阿里云换了弹性 IP，不用去 Cloudflare 手改，下次开机 / 换班自动跟上
 - 删服务器、删换班组会松开落在它身上的记录；把机器移出单机保活**不会**动绑定
 
 ### 通知

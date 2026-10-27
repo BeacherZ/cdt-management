@@ -1678,7 +1678,7 @@ input[type='number']::-webkit-inner-spin-button {
   gap: 8px;
 }
 
-/* 窄屏（手机/半屏）再允许横向滚动，定宽布局会把 9 列压得没法看 */
+/* 半屏 / 平板：定宽布局会把 9 列压得没法看，退回自动列宽并允许横滑 */
 @media (max-width: 900px) {
   .server-table {
     table-layout: auto;
@@ -1689,6 +1689,144 @@ input[type='number']::-webkit-inner-spin-button {
     flex-direction: row;
     align-items: center;
     gap: 8px;
+  }
+}
+
+/* 手机：表格整体改成「一行一张卡」，每格前面带字段名，彻底不用左右拖 */
+@media (max-width: 700px) {
+  .server-table-card {
+    padding: 0;
+    overflow: visible;
+    background: none;
+    border: 0;
+    box-shadow: none;
+    backdrop-filter: none;
+  }
+
+  .server-table,
+  .server-table tbody,
+  .server-table tr,
+  .server-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .server-table colgroup,
+  .server-table thead {
+    display: none;
+  }
+
+  .server-table {
+    min-width: 0;
+    font-size: 12.5px;
+  }
+
+  .server-table tbody tr {
+    margin-bottom: 10px;
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+    background: var(--panel-solid);
+  }
+
+  .server-table tbody tr:last-child {
+    margin-bottom: 0;
+  }
+
+  .server-table tbody tr:hover {
+    background: var(--panel-solid);
+  }
+
+  .server-table td {
+    display: grid;
+    grid-template-columns: 68px minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+    padding: 4px 0;
+    border: 0;
+  }
+
+  .server-table td::before {
+    content: attr(data-label);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  /* grid 子项默认 stretch，徽标/标签会被拉成整行，这里让它们保持自身宽度 */
+  .server-table td > .badge,
+  .server-table td > .owner-tag {
+    justify-self: start;
+  }
+
+  /* 地域原本竖排（地域在上、站点标签在下），手机上横排更省一行高度 */
+  .server-table td > .server-table-region {
+    justify-self: start;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+
+  /* 第一格是标题，压满整行、下面一条虚线分隔 */
+  .server-table td:first-child {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 0 0 8px;
+    margin-bottom: 6px;
+    border-bottom: 1px dashed var(--line);
+  }
+
+  .server-table td:first-child::before {
+    display: none;
+  }
+
+  /* 操作按钮不需要字段名，横排贴在卡片底部 */
+  .server-table td[data-label='操作'] {
+    grid-template-columns: minmax(0, 1fr);
+    padding-top: 8px;
+    margin-top: 6px;
+    border-top: 1px dashed var(--line);
+  }
+
+  .server-table td[data-label='操作']::before {
+    display: none;
+  }
+
+  .server-table-actions {
+    justify-content: flex-start;
+    gap: 6px;
+  }
+
+  .server-table-actions .btn {
+    padding: 5px 7px;
+  }
+
+  /* 费用那格原来是「绝对定位刷新按钮 + 右内边距」，堆叠后恢复普通流 */
+  .server-table td.server-table-cost {
+    padding-right: 0;
+  }
+
+  .server-table-cost .cost-row.compact {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .server-table-cost .cost-refresh {
+    position: static;
+    transform: none;
+    margin-left: auto;
+  }
+
+  .server-table-title {
+    font-size: 13.5px;
+    max-width: 100%;
+  }
+
+  .server-table-sub {
+    max-width: 100%;
   }
 }
 
@@ -1737,6 +1875,38 @@ input[type='number']::-webkit-inner-spin-button {
   color: #fff;
   background: var(--accent-grad);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.26);
+}
+
+/* 槽位主体：左信息 / 右 IP+流量。列宽写在样式里而不是内联，
+   窄屏才能在不改 DOM 的前提下堆成一列 */
+.slot-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 150px;
+  gap: 14px;
+}
+
+.slot-main {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.slot-side {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  justify-content: center;
+  min-width: 0;
+}
+
+.slot-ip {
+  font-size: 11px;
+  color: var(--muted);
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .slot-name {
@@ -2662,6 +2832,139 @@ input[type='number']::-webkit-inner-spin-button {
   flex: none;
   font-size: 12px;
   color: var(--muted-soft);
+}
+
+/* -------------------------------------------------------------- 手机（≤700px） */
+
+/* 手机上一律不横向滚动：能堆就堆，能换行就换行 */
+@media (max-width: 700px) {
+  /* 换班组标题：组名和状态留第一行，操作按钮整行挪到下面右对齐，
+     这样组名不用被压成省略号 */
+  .group-head {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+
+  .group-head h3 {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+  }
+
+  .group-head .group-actions {
+    margin-left: 0;
+    flex-basis: 100%;
+    justify-content: flex-end;
+  }
+
+  .group-head .switch-btn {
+    margin-right: 0;
+  }
+
+  /* 槽位：左信息 / 右 IP+流量 改成上下两段 */
+  .slot-body {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 9px;
+  }
+
+  /* IP 单独一行、进度条占满下方整宽；并排会把进度条挤成半截 */
+  .slot-side {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+  }
+
+  .slot-ip {
+    text-align: left;
+    flex: none;
+  }
+
+  .slot-side .meter {
+    min-width: 0;
+  }
+
+  /* 槽位里那行「状态 + 实例 ID」在窄屏允许换行，别硬撑 */
+  .slot-line {
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+
+  .slot-line code {
+    max-width: 100%;
+  }
+
+  /* 轮换顺序是长句，窄屏允许折行 */
+  .rotate-order {
+    flex-wrap: wrap;
+    line-height: 1.6;
+  }
+
+  /* DNS 每条记录：图标 + 域名占第一行，状态和按钮掉到第二行 */
+  .dns-row-head {
+    flex-wrap: wrap;
+    row-gap: 7px;
+  }
+
+  .dns-row-head .dns-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: visible;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .dns-row-head .badge {
+    order: 3;
+  }
+
+  .dns-row-actions {
+    order: 4;
+    margin-left: auto;
+  }
+
+  /* 绑定下拉与「绑定到」标签在窄屏上下排 */
+  .dns-bind {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+
+  .dns-bind .select {
+    min-width: 0;
+    flex: 1 1 100%;
+  }
+}
+
+/* 手机上：卡片一列到底，列宽只跟屏幕走（1fr 的下限是内容最小宽度，
+   不改成 minmax(0,1fr) 的话一张卡内部挤一点就能把整页顶宽） */
+@media (max-width: 700px) {
+  .server-grid,
+  .group-grid,
+  .dns-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .server-card,
+  .group-card {
+    min-width: 0;
+  }
+
+  .server-card .head {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+
+  .server-card .head strong {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .card-foot,
+  .card-foot > * {
+    min-width: 0;
+  }
 }
 
 /* -------------------------------------------------------------- 小屏微调 */

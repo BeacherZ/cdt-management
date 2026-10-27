@@ -176,10 +176,9 @@ export default function ShiftView({
                     return (
                       <div
                         key={member.id}
-                        className={`slot${member.is_duty ? ' is-duty' : ''}`}
-                        style={{ display: 'grid', gridTemplateColumns: '1fr 150px', gap: 14 }}
+                        className={`slot slot-body${member.is_duty ? ' is-duty' : ''}`}
                       >
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 7, minWidth: 0 }}>
+                        <div className="slot-main">
                           <div className="slot-top">
                             <span>
                               第 {member.position + 1} 位
@@ -198,10 +197,8 @@ export default function ShiftView({
                             <code>{server.instance_id || '未填实例'}</code>
                           </div>
                         </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, justifyContent: 'center' }}>
-                          <div style={{ fontSize: 11, color: 'var(--muted)', textAlign: 'right' }}>
-                            {server.public_ip || '无公网 IP'}
-                          </div>
+                        <div className="slot-side">
+                          <div className="slot-ip">{server.public_ip || '无公网 IP'}</div>
                           <Meter
                             used={server.traffic_used}
                             quota={server.quota_gb}
@@ -215,6 +212,7 @@ export default function ShiftView({
 
                 {group.members.filter((member) => member.enabled).length > 1 && (
                   <div
+                    className="rotate-order"
                     style={{
                       marginTop: 10,
                       fontSize: 11,

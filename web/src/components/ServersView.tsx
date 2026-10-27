@@ -377,7 +377,7 @@ function ServerTable({
                   : '闲散 · 手动'
             return (
               <tr key={server.id}>
-                <td>
+                <td data-label="服务器">
                   <div className="server-table-title" title={server.label}>
                     {server.label}
                   </div>
@@ -385,12 +385,12 @@ function ServerTable({
                     {server.instance_id || '未填实例 ID'}
                   </code>
                 </td>
-                <td>
+                <td data-label="状态">
                   <Badge tone={statusTone(server.instance_status)} pulse={running}>
                     {statusLabel(server.instance_status, server.stopped_mode)}
                   </Badge>
                 </td>
-                <td>
+                <td data-label="地域">
                   <div className="server-table-region">
                     <span className="server-table-cell">
                       <MapPin size={11} />
@@ -401,10 +401,10 @@ function ServerTable({
                     </span>
                   </div>
                 </td>
-                <td>
+                <td data-label="公网 IP">
                   <span className="server-table-mono">{server.public_ip || '—'}</span>
                 </td>
-                <td>
+                <td data-label="流量 / 配额">
                   <div className="server-table-meter">
                     <span className="server-table-mono">
                       {(server.traffic_used ?? 0).toFixed(1)}
@@ -415,7 +415,7 @@ function ServerTable({
                     )}
                   </div>
                 </td>
-                <td className="server-table-cost">
+                <td className="server-table-cost" data-label="费用">
                   <CostRow
                     billing={server.billing}
                     busy={billingId === server.id}
@@ -423,7 +423,7 @@ function ServerTable({
                     compact
                   />
                 </td>
-                <td>
+                <td data-label="归属">
                   <span
                     className={`owner-tag${owner ? (locked ? ' locked' : ' paused') : ' free'}`}
                     title={ownerText}
@@ -438,7 +438,7 @@ function ServerTable({
                     )}
                   </span>
                 </td>
-                <td>
+                <td data-label="域名">
                   {/* 与卡片同一套数据：换班组绑定的域名只出现在当班那台 */}
                   <div className="server-table-dns">
                     {dnsRecords(server.dns_record).map((record) => (
@@ -450,7 +450,7 @@ function ServerTable({
                     {!server.dns_record && <span className="server-table-muted">—</span>}
                   </div>
                 </td>
-                <td>
+                <td data-label="操作">
                   <div className="server-table-actions">
                     <button
                       className="btn ghost icon sm"

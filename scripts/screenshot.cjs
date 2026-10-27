@@ -400,12 +400,46 @@ class Cdp {
     }
     console.log('  ✓ 取消后弹窗关闭，演示数据没被删')
 
-    // 7. 窄屏
+    // 7. 窄屏：手机上任何一页都不许横向滚动（原来是整页比屏幕宽，得左右拖）
     await cdp.viewport(MOBILE, true)
     await cdp.goto(BASE)
     await cdp.waitSelector('.app-shell')
     await sleep(1000)
     await cdp.shot('13-mobile.png')
+
+    const wide = []
+    for (const [label, nav] of [
+      ['概览', null],
+      ['单机保活', '单机保活'],
+      ['联合换班', '联合换班'],
+      ['服务器', '服务器'],
+      ['服务器列表', '服务器'],
+      ['DNS', 'DNS'],
+    ]) {
+      if (nav === 'DNS') await cdp.clickByText('.sidebar .nav-parent', 'DNS')
+      else if (nav) await cdp.clickByText('.sidebar .nav-item', nav)
+      if (label === '服务器列表') await cdp.clickByText('.view-toggle button', '列表')
+      await sleep(800)
+      const overflow = await cdp.evaluate(
+        `(() => {
+          const vw = document.documentElement.clientWidth
+          const doc = document.documentElement.scrollWidth
+          const card = document.querySelector('.server-table-card')
+          return { vw, doc, table: card ? card.scrollWidth - card.clientWidth : 0 }
+        })()`,
+      )
+      if (overflow.doc > overflow.vw + 1 || overflow.table > 1) {
+        wide.push(`${label}（页面 ${overflow.doc}/${overflow.vw}，表格 +${overflow.table}）`)
+      }
+      if (label === '服务器列表') {
+        await cdp.clickByText('.view-toggle button', '卡片')
+        await sleep(400)
+      }
+    }
+    if (wide.length) {
+      throw new Error('窄屏还需要横向滚动：' + wide.join('；'))
+    }
+    console.log('  ✓ 窄屏（' + MOBILE.width + 'px）六个视图都不需要横向滚动')
 
     console.log('\n截图已输出到 ' + OUT)
   } finally {

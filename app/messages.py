@@ -200,7 +200,7 @@ def running_block(heading: str, server: dict[str, Any], ddns_status: str) -> str
     return "\n".join(
         [
             f"🟢 <b>{heading} </b>",
-            f"┃ 🏷 别称：{_label(server)}",
+            f"┃ 🏷 别名：{_label(server)}",
             f"┃ 📦 实例：<code>{_instance(server)}</code>",
             f"┃ 🌐 ＩＰ：{_ip(server)}",
             f"┃ 📍 地域：{_region(server)}",
@@ -216,7 +216,7 @@ def stopped_block(
     """停机的那台。脚本里「停止账号」不带已用，「超限账号」带已用。"""
     lines = [
         f"⚪ <b>{heading} </b>",
-        f"┃ 🏷 别称：{_label(server)}",
+        f"┃ 🏷 别名：{_label(server)}",
         f"┃ 📦 实例：<code>{_instance(server)}</code>",
         f"┃ 🌐 ＩＰ：{_ip(server)}",
         f"┃ 📍 地域：{_region(server)}",
@@ -398,7 +398,7 @@ def shift_error(
         "\n".join(
             [
                 "🚩 <b>应当运行账号 </b>",
-                f"┃ 🏷 别称：{_label(duty)}",
+                f"┃ 🏷 别名：{_label(duty)}",
                 f"┃ 📦 实例：<code>{_instance(duty)}</code>",
                 f"┃ 🌐 ＩＰ：{_ip(duty)}",
                 f"┃ 📍 地域：{_region(duty)}",
@@ -411,7 +411,7 @@ def shift_error(
             "\n".join(
                 [
                     "🚩 <b>应当停止账号 </b>",
-                    f"┃ 🏷 别称：{_label(server)}",
+                    f"┃ 🏷 别名：{_label(server)}",
                     f"┃ 📦 实例：<code>{_instance(server)}</code>",
                     f"┃ 🌐 ＩＰ：{_ip(server)}",
                     f"┃ 📍 地域：{_region(server)}",

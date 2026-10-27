@@ -390,8 +390,9 @@ button.nav-parent:hover svg,
 /* -------------------------------------------------------------- 小屏：侧栏收成顶栏 */
 
 @media (max-width: 860px) {
+  /* minmax(0, 1fr) 而不是 1fr：1fr 的下限是内容最小宽度，顶栏一长就会把整页顶宽 */
   .app-shell {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .sidebar {
@@ -406,6 +407,8 @@ button.nav-parent:hover svg,
     padding: 10px 12px;
     border-right: 0;
     border-bottom: 1px solid var(--line);
+    min-width: 0;
+    max-width: 100vw;
   }
 
   .sidebar::after {
@@ -432,6 +435,8 @@ button.nav-parent:hover svg,
     order: 3;
     display: flex;
     width: 100%;
+    /* flex 子项的 min-width 默认是 auto，这里不压成 0 会按内容顶宽整页 */
+    min-width: 0;
     gap: 4px;
     overflow-x: auto;
     padding-top: 6px;
