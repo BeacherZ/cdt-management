@@ -18,7 +18,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import { regionLabel } from '../regions'
-import type { Billing, Server } from '../types'
+import type { Billing, Managed, Server } from '../types'
 import { Badge, Empty, Meter, statusLabel, statusTone, stoppedModeLabel } from './ui'
 
 type Props = {
@@ -43,6 +43,16 @@ function dnsRecords(value?: string): string[] {
     .split('、')
     .map((item) => item.trim())
     .filter(Boolean)
+}
+
+/** 「归属」的名字部分：卡片和列表共用，避免同一台机器两处措辞不一样 */
+function ownerBase(owner: Managed): string {
+  return owner.kind === 'group' ? `换班组「${owner.name}」` : '单机保活'
+}
+
+/** 「归属」完整文案：名字 + 托管状态，卡片和列表都走这里 */
+function ownerLabel(owner: Managed | null): string {
+  return owner ? `${ownerBase(owner)}${owner.active ? '托管' : '已暂停'}` : '闲散 · 手动'
 }
 
 export default function ServersView({
@@ -149,17 +159,13 @@ export default function ServersView({
             const owner = server.managed ?? null
             const busy = busyId === server.id
             const locked = Boolean(owner?.active)
-            const ownerText =
-              owner?.kind === 'group'
-                ? `换班组「${owner.name}」`
-                : owner?.kind === 'keepalive'
-                  ? '单机保活'
-                  : ''
-            const lockHint = locked
-              ? `${ownerText}托管中，先暂停或移出后再手动启停`
-              : running
-                ? '关机（优先节省停机，不支持时转普通停机）'
-                : '开机'
+            const ownerText = owner ? ownerLabel(owner) : ''
+            const lockHint =
+              owner && locked
+                ? `${ownerBase(owner)}托管中，先暂停或移出后再手动启停`
+                : running
+                  ? '关机（优先节省停机，不支持时转普通停机）'
+                  : '开机'
 
             return (
               <div
@@ -266,10 +272,7 @@ export default function ServersView({
                     {owner ? (
                       <>
                         {owner.kind === 'group' ? <Repeat size={10} /> : <HeartPulse size={10} />}
-                        <span className="owner-tag-text">
-                          {ownerText}
-                          {locked ? '托管' : '已暂停'}
-                        </span>
+                        <span className="owner-tag-text">{ownerText}</span>
                       </>
                     ) : (
                       <>闲散 · 手动</>
@@ -340,13 +343,14 @@ function ServerTable({
     <div className="card server-table-card">
       <table className="server-table">
         <colgroup>
-          <col style={{ width: '13%' }} />
+          <col style={{ width: '11%' }} />
           <col style={{ width: '10%' }} />
           <col style={{ width: '8%' }} />
           <col style={{ width: '9%' }} />
-          <col style={{ width: '9%' }} />
-          <col style={{ width: '12%' }} />
-          <col style={{ width: '13%' }} />
+          <col style={{ width: '8%' }} />
+          <col style={{ width: '10%' }} />
+          {/* 归属列要比别的列宽一点：卡片的文案是「换班组「组名」托管」，窄了会被省略号截掉 */}
+          <col style={{ width: '18%' }} />
           <col style={{ width: '15%' }} />
           <col style={{ width: '11%' }} />
         </colgroup>
@@ -369,12 +373,7 @@ function ServerTable({
             const owner = server.managed ?? null
             const busy = busyId === server.id
             const locked = Boolean(owner?.active)
-            const ownerText =
-              owner?.kind === 'group'
-                ? `换班「${owner.name}」${locked ? '托管' : '已暂停'}`
-                : owner?.kind === 'keepalive'
-                  ? `保活${locked ? '托管' : '已暂停'}`
-                  : '闲散 · 手动'
+            const ownerText = ownerLabel(owner)
             return (
               <tr key={server.id}>
                 <td data-label="服务器">

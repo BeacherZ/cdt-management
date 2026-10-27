@@ -252,6 +252,9 @@ class Cdp {
 
     await cdp.clickByText('.sidebar .nav-item', '服务器')
     await cdp.shot('05-servers.png')
+    const ownerCards = await cdp.evaluate(
+      `[...document.querySelectorAll('.server-grid .owner-tag')].map((node) => node.textContent.trim())`,
+    )
 
     // 3.1 列表视图：域名列的逻辑跟卡片一致（组域名只在当班那台），且不许被撑出横向滚动条
     await cdp.clickByText('.view-toggle button', '列表')
@@ -278,6 +281,17 @@ class Cdp {
       throw new Error('列表视图没显示域名框：' + JSON.stringify(tableCheck))
     }
     console.log(`  ✓ 列表视图无横向滚动（${tableCheck.rows} 行 / ${tableCheck.chips} 个域名框）`)
+
+    // 3.2 归属列的文字必须跟卡片一模一样（以前两处各写一套，措辞会飘）
+    const ownerRows = await cdp.evaluate(
+      `[...document.querySelectorAll('.server-table tbody .owner-tag')].map((node) => node.textContent.trim())`,
+    )
+    if (ownerCards.length !== ownerRows.length || ownerCards.some((text, index) => text !== ownerRows[index])) {
+      throw new Error(
+        '列表归属列和卡片不一致：卡片 ' + JSON.stringify(ownerCards) + ' / 列表 ' + JSON.stringify(ownerRows),
+      )
+    }
+    console.log(`  ✓ 列表归属列与卡片一致（${ownerRows.length} 台）`)
     await cdp.shot('05b-servers-list.png')
 
     // 3.5 DNS 页：一条域名只绑一个目标，没绑的不动
