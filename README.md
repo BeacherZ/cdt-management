@@ -112,9 +112,9 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 
 ## 阿里云 RAM 权限
 
-权限按下面三组挂上同名系统策略就行：
+完整使用本项目功能需要添加以下三种 RAM 权限：
 
-| 系统策略 | 用在哪 |
+| RAM 权限 | 用在哪 |
 | --- | --- |
 | `AliyunECSFullAccess` | 查实例、开机、节省停机 |
 | `AliyunCDTReadOnlyAccess` | 读当月 CDT 公网流量 |
