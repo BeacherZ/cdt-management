@@ -13,6 +13,8 @@ import {
   Repeat,
   Server as ServerIcon,
   ShieldAlert,
+  UserMinus,
+  UserPlus,
   XCircle,
   Zap,
 } from 'lucide-react'
@@ -24,6 +26,8 @@ const EVENT_ICON: Record<string, typeof Info> = {
   shift_done: Zap,
   shift_failover: AlertTriangle,
   manual: Repeat,
+  group_new: UserPlus,
+  group_dissolve: UserMinus,
   breaker: ShieldAlert,
   limit_stop: ShieldAlert,
   recovery: Activity,

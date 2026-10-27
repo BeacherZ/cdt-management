@@ -210,6 +210,28 @@ class ManualSwitch(unittest.TestCase):
         # 手动换班和故障转移无关
         self.assertFalse([e for e in events if e["title"].endswith("故障转移")], events)
 
+    def test_manual_switch_keeps_ddns_line_when_unbound(self):
+        """手动换班没绑域名也留一行「DDNS：⏸ 未绑定」；自动换班不记。"""
+        for _ in range(3):
+            self._reconcile()
+        sent_before = len(self.sent)
+        shift.engine.manual_switch(self.group_id)
+        for _ in range(5):
+            self._reconcile()
+
+        events = repo.list_events(limit=50, group_id=self.group_id)
+        manual = [e for e in events if e["kind"] == "manual"][0]
+        manual_texts = [step["text"] for step in manual["progress"]]
+        self.assertIn(f"DDNS：{dns.STATUS_UNBOUND}", manual_texts)
+
+        # 报告里同样保留这一行
+        self.assertEqual(len(self.sent), sent_before + 1, self.sent)
+
+        # 自动换班照旧不记：没绑域名的组每分钟刷一行「未绑定」是纯噪音
+        auto = [e for e in events if e["kind"] == "shift_done"][0]
+        auto_texts = [step["text"] for step in auto["progress"]]
+        self.assertFalse([t for t in auto_texts if t.startswith("DDNS：")], auto_texts)
+
 
 class PartialDdns(unittest.TestCase):
     """一台机器挂两条域名、其中一条同步失败时，换班不能判完成。

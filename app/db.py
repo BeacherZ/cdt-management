@@ -104,6 +104,9 @@ CREATE TABLE IF NOT EXISTS shift_runs (
     -- 手动换班标记：1 表示这次当班切换是用户手动触发的，不是流量超限故障转移。
     -- 手动换班界面已反馈，不应再发「流量超限临时换班」的误导通知。
     manual              INTEGER NOT NULL DEFAULT 0,
+    -- 本班次的由来：'' 按时刻表正常轮换 / 'new_group' 新建换班组后的首次对齐。
+    -- 新建组那一次的事件标题要固定成「组名：新建换班组」，结算时不能改叫「换班完成」。
+    origin              TEXT    NOT NULL DEFAULT '',
     attempts            INTEGER NOT NULL DEFAULT 0,
     started_at          INTEGER NOT NULL DEFAULT 0,
     updated_at          INTEGER NOT NULL DEFAULT 0,
@@ -273,6 +276,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
             "stage": "TEXT NOT NULL DEFAULT ''",
             "event_id": "INTEGER NOT NULL DEFAULT 0",
             "manual": "INTEGER NOT NULL DEFAULT 0",
+            "origin": "TEXT NOT NULL DEFAULT ''",
         },
     }
     for table, columns in additions.items():

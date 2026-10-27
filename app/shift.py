@@ -27,6 +27,11 @@ PHASE_MANUAL = "manual"
 PHASE_BREAKER = "breaker"
 PHASE_ERROR = "error"
 
+# shift_runs.origin：本班次是怎么来的。
+# 新建换班组后的第一次对齐单独标出来 —— 那次事件要一直叫「组名：新建换班组」，
+# 不能被结算逻辑改名成「换班完成」，否则用户点保存后看到的事件对不上自己刚做的事。
+ORIGIN_NEW_GROUP = "new_group"
+
 TRANSIENT_STATUS = {"Starting", "Pending", "Stopping"}
 
 # 同一台机器在同一个班次里重复下发停机指令的最小间隔（秒）。
@@ -513,6 +518,9 @@ class Engine:
                     server_id=int(duty["id"]),
                     status="running",
                 )
+                repo.add_event_progress(
+                    event_id, f"检测到当班 {duty.get('label')} 未运行（{duty_status or '未知'}）"
+                )
                 repo.upsert_run(
                     group_id, slot_key, event_id=event_id, started_at=int(time.time())
                 )
@@ -645,9 +653,13 @@ class Engine:
             # 一台机器可能挂着好几条域名，汇总文案「✅ 已同步 / ❌ 更新失败」开头也是 ✅，
             # 单看前缀会把「有一条没指过去」当成全部成功，于是事件打完成、通知照发。
             ddns_ok = (not ddns_enabled) or (not ddns_bound) or dns.is_success(ddns_text)
-            # 只有「开了 DDNS 且确实挂了域名」才在流程里记这一步：
-            # 没绑定域名时写一行「DDNS：⏸ 未绑定域名」是纯噪音。
-            if not previously_settled and ddns_enabled and ddns_bound:
+            # 自动换班只在「开了 DDNS 且确实挂了域名」时记这一步 —— 定时换班
+            # 每分钟都可能来一轮，没绑域名时写「DDNS：⏸ 未绑定」纯噪音。
+            # 手动换班例外：用户点了按钮，就想要一份完整的流程，
+            # 没绑域名也留一行「DDNS：⏸ 未绑定」，跟以前一样。
+            if not previously_settled and (
+                manual_switch or (ddns_enabled and ddns_bound)
+            ):
                 repo.add_event_progress(event_id, f"DDNS：{ddns_text}", once=True)
 
         ready = duty_status == "Running" and all_stopped and (has_ip or not ddns_enabled) and ddns_ok
@@ -697,13 +709,15 @@ class Engine:
         # 复用「换班进行中」这条 running 事件而不是另开一条，这样事件全程耗时才是真实的换班过程。
         if first_settle and event_id:
             repo.add_event_progress(event_id, "全部状态确认完毕", once=True)
-            # 标题按来源判：真故障转移 > 手动换班 > 普通换班。
+            # 标题按来源判：真故障转移 > 手动换班 > 新建换班组 > 普通换班。
             # 手动切班的事件从「手动换班进行中」一路走到「手动换班完成」，
-            # 全程同一条，点进去能看到完整流程。
+            # 新建组的事件从头到尾都叫「新建换班组」，点进去能看到完整过程。
             if failover_flag:
                 label, kind = "故障转移", "shift_failover"
             elif manual_switch:
                 label, kind = "手动换班完成", "manual"
+            elif str(run.get("origin") or "") == ORIGIN_NEW_GROUP:
+                label, kind = "新建换班组", "group_new"
             else:
                 label, kind = "换班完成", "shift_done"
             repo.update_event(event_id, title=f"{name}：{label}", kind=kind)
@@ -1073,6 +1087,226 @@ class Engine:
                 server_id=int(duty["id"]),
             )
 
+    # ==================================================================
+    # 换班组的建立与解散
+    # ==================================================================
+    def bootstrap_group(self, group_id: int) -> dict[str, Any]:
+        """新建换班组后，立刻按排班表把组员摆到该有的状态。
+
+        用户点「保存」时组员的真实状态往往和排班表对不上：该当班的停着，
+        该休班的还在跑。这里马上对一次，顺序和自动换班完全一致 ——
+        先开当班 → 等它 Running → 其余成员节省停机 → 状态全部到位后同步 DDNS。
+
+        开机要几十秒，跨轮的等待交给后面的例行对账继续推进（run.event_id 已指向
+        这条事件），所以一条「组名：新建换班组」事件能从「下发启动」一路追加到
+        「全部状态确认完毕」，点进去就是完整过程。
+
+        本班次不发结算通知：用户刚点完保存，不需要再收一份自己刚做过的事的报告。
+        """
+        if not self._lock.acquire(timeout=30):
+            raise ValueError("后台正在同步，请稍后再试")
+        try:
+            group = repo.get_group(group_id)
+            if group is None:
+                raise ValueError("换班组不存在")
+            name = group.get("name") or f"#{group_id}"
+            config = repo.get_settings()
+            group["_timezone"] = config.get("timezone") or "Asia/Shanghai"
+            now = dt.datetime.now(_timezone(group["_timezone"]))
+            now_ts = now.timestamp()
+
+            if not group.get("enabled"):
+                repo.add_event(
+                    "group_new",
+                    f"{name}：新建换班组",
+                    "换班组未启用，没有对组员下发任何启停指令",
+                    group_id=group_id,
+                )
+                return {"group_id": group_id, "skipped": "disabled"}
+
+            picked = duty_at(group, now_ts)
+            if picked is None:
+                repo.add_event(
+                    "group_new",
+                    f"{name}：新建换班组",
+                    "启用成员不足两台，排不出当班，未下发任何启停指令",
+                    group_id=group_id,
+                )
+                return {"group_id": group_id, "skipped": "成员不足两台"}
+
+            duty_member, shift_start = picked
+            slot_key = str(shift_start)
+            duty = repo.get_server(int(duty_member["server_id"]), decrypt_secret=True)
+            if duty is None:
+                repo.add_event(
+                    "group_new",
+                    f"{name}：新建换班组",
+                    "排班表指定的当班服务器已被删除，未下发任何启停指令",
+                    group_id=group_id,
+                )
+                return {"group_id": group_id, "skipped": "当班服务器已被删除"}
+
+            others: list[dict[str, Any]] = []
+            for member in active_members(group):
+                if int(member["server_id"]) == int(duty_member["server_id"]):
+                    continue
+                server = repo.get_server(int(member["server_id"]), decrypt_secret=True)
+                if server is not None:
+                    others.append(server)
+
+            slot_name = str(duty_member.get("slot_name") or "").strip()
+            when = slot_name or "当前时刻"
+            event_id = repo.add_event(
+                "group_new",
+                f"{name}：新建换班组",
+                f"排班表：{when}由 {duty.get('label')} 当班，其余 {len(others)} 台应节省停机",
+                group_id=group_id,
+                server_id=int(duty["id"]),
+                status="running",
+            )
+            repo.add_event_progress(
+                event_id, f"按排班表核对组员状态：{when} · 当班 {duty.get('label')}"
+            )
+            # 事件先挂进 run：这一轮之后的巡检沿用同一条事件追加进度，
+            # origin 让结算时把标题固定成「新建换班组」，不改叫「换班完成」
+            repo.upsert_run(
+                group_id,
+                slot_key,
+                event_id=event_id,
+                origin=ORIGIN_NEW_GROUP,
+                phase=PHASE_SWITCHING,
+                duty_server_id=int(duty["id"]),
+                standby_server_ids=_encode_ids(others),
+            )
+            # 占掉本班次的换班通知去重键：新建组只摆状态，不推报告
+            repo.set_flag(f"notify:{group_id}:{slot_key}:settled")
+
+            # 逐台核对现状，把「符不符合排班表」写进事件里，
+            # 用户不用等动作下发完就能看出哪几台要动
+            mismatched = 0
+            targets = [(duty, True)] + [(server, False) for server in others]
+            for server, should_run in targets:
+                label = server.get("label") or f"#{server.get('id')}"
+                try:
+                    _refresh(server)
+                except Exception as exc:  # noqa: BLE001
+                    mismatched += 1
+                    repo.add_event_progress(
+                        event_id, f"{label}：状态读取失败（{exc}），交给下一轮同步重试"
+                    )
+                    continue
+                status = str(server.get("instance_status") or "")
+                suffix = messages.status_suffix(status, server.get("stopped_mode"))
+                if should_run:
+                    if status == "Running":
+                        repo.add_event_progress(
+                            event_id, f"当班 {label}：{status}{suffix}，符合排班表", once=True
+                        )
+                    else:
+                        mismatched += 1
+                        repo.add_event_progress(
+                            event_id, f"当班 {label}：{status}{suffix}，需要开机", once=True
+                        )
+                elif _is_stopped_any_mode(server):
+                    repo.add_event_progress(
+                        event_id, f"{label}：{status}{suffix}，符合排班表", once=True
+                    )
+                else:
+                    mismatched += 1
+                    repo.add_event_progress(
+                        event_id, f"{label}：{status}{suffix}，需要节省停机", once=True
+                    )
+
+            if not mismatched:
+                repo.add_event_progress(
+                    event_id, "组员状态已符合排班表，无需下发启停指令", once=True
+                )
+
+            # 交给换班流程真正下发指令：启动当班 → 停非当班 → DDNS → 结算。
+            # 状态没到位（还在开机）时它只推进一轮就返回，事件保持 running，
+            # 后面的例行对账接着走，过程一直追加在同一条事件上。
+            result = self.reconcile_group(group, config, now, now_ts, notify_enabled=False)
+            if not result.get("ready"):
+                # 还没摆到位（多半在等开机）：申请一段加密对账窗口，
+                # 让调度线程把间隔临时压到 10 秒，别让用户对着「进行中」等满一分钟
+                from . import scheduler  # 延迟导入：scheduler 顶层 import 了本模块
+
+                scheduler.request_fast_reconcile()
+            return {"group_id": group_id, "event_id": event_id, **result}
+        finally:
+            self._lock.release()
+
+    def dissolve_group(self, group_id: int) -> dict[str, Any]:
+        """解散换班组：组员保持当前状态，回到闲散手动。
+
+        解散不是停机 —— 跑着的继续跑，停着的继续停着，全程不给实例下发任何
+        启停指令，之后怎么用由用户手动决定。
+
+        组员如果挂着单机保活，一并暂停：解散后它们不归任何流程管，被保活顺手
+        拉起来就不叫「保持当前状态」了，也就不是「闲散手动」了。记录本身留着，
+        需要的话在单机保活页一键开回来。
+        """
+        if not self._lock.acquire(timeout=30):
+            raise ValueError("后台正在同步，请稍后再试")
+        try:
+            group = repo.get_group(group_id)
+            if group is None:
+                raise ValueError("换班组不存在")
+            name = group.get("name") or f"#{group_id}"
+            member_ids = [int(m["server_id"]) for m in (group.get("members") or [])]
+            bound = repo.dns_records_of(dns.TARGET_GROUP, group_id)
+            keepalives = {int(item["server_id"]): item for item in repo.list_keepalives()}
+
+            event_id = repo.add_event(
+                "group_dissolve",
+                f"{name}：解散换班组",
+                f"组内 {len(member_ids)} 台服务器保持当前状态，未下发任何启停指令",
+                group_id=0,  # 组马上就没了，事件别再挂到不存在的组上
+                status="running",
+            )
+
+            for server_id in member_ids:
+                server = repo.get_server(server_id, decrypt_secret=True)
+                if server is None:
+                    repo.add_event_progress(event_id, f"#{server_id}：服务器已被删除，跳过")
+                    continue
+                label = server.get("label") or f"#{server_id}"
+                try:
+                    _refresh(server)
+                    status = str(server.get("instance_status") or "")
+                    suffix = messages.status_suffix(status, server.get("stopped_mode"))
+                    repo.add_event_progress(event_id, f"{label}：{status}{suffix}，保持不动")
+                except Exception as exc:  # noqa: BLE001
+                    repo.add_event_progress(
+                        event_id, f"{label}：状态读取失败（{exc}），保持不动"
+                    )
+
+                item = keepalives.get(server_id)
+                if item is not None and item.get("enabled"):
+                    repo.set_keepalive_enabled(int(item["id"]), False)
+                    repo.add_event_progress(
+                        event_id, f"{label}：单机保活已暂停，不会被自动拉起"
+                    )
+
+            # 该组可能正有换班事件在转圈：解散后没人再推进它，先把这类事件收掉，
+            # 否则「最近事件」里会永远挂着一条进行中
+            for row in dbmod.query(
+                "SELECT id FROM events WHERE group_id=? AND status='running'", (group_id,)
+            ):
+                repo.add_event_progress(
+                    int(row["id"]), "换班组已解散，本次换班流程中止"
+                )
+                repo.finish_event(int(row["id"]), "done", "换班组已解散，流程未走完")
+
+            repo.delete_group(group_id)
+            if bound:
+                repo.add_event_progress(event_id, f"DDNS 绑定已解除：{'、'.join(bound)}")
+            repo.add_event_progress(event_id, "组员均已回到闲散手动，可随时手动开关机")
+            repo.finish_event(event_id, "done")
+            return {"ok": True, "event_id": event_id, "servers": len(member_ids)}
+        finally:
+            self._lock.release()
+
     # -- 手动操作 ---------------------------------------------------------
     def manual_switch(self, group_id: int) -> dict[str, Any]:
         """立即跳到下一台当班。
@@ -1100,7 +1334,9 @@ class Engine:
                 raise ValueError("组内启用的成员不足两台")
 
             if _is_timetable_group(group):
-                return self._manual_switch_timetable(group, config, now, now_ts)
+                return self._finish_manual(
+                    self._manual_switch_timetable(group, config, now, now_ts)
+                )
 
             total = sum(float(m["hours"]) for m in members) * 3600
             anchor = float(group.get("anchor_at") or group.get("created_at") or now_ts)
@@ -1137,9 +1373,20 @@ class Engine:
                 self._manual_event(
                     group_id, slot_key, group.get("name") or "", current_member, picked[0]
                 )
-            return self.reconcile_group(fresh, config, now, now_ts)
+            return self._finish_manual(self.reconcile_group(fresh, config, now, now_ts))
         finally:
             self._lock.release()
+
+    def _finish_manual(self, result: dict[str, Any]) -> dict[str, Any]:
+        """手动换班还没走完（多在等开机 / 等原当班停稳）就申请加密对账窗口。
+
+        不这么做，用户点完「立即换班」只能盯着「进行中」等满一个对账间隔。
+        """
+        if isinstance(result, dict) and not result.get("ready"):
+            from . import scheduler  # 延迟导入：scheduler 顶层 import 了本模块
+
+            scheduler.request_fast_reconcile()
+        return result
 
     def _manual_event(
         self,

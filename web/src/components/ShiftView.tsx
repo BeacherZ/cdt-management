@@ -108,7 +108,11 @@ export default function ShiftView({
                     <button className="btn ghost icon sm" title="编辑" onClick={() => onEdit(group)}>
                       <Pencil size={14} />
                     </button>
-                    <button className="btn ghost icon sm" title="删除" onClick={() => onDelete(group)}>
+                    <button
+                      className="btn ghost icon sm"
+                      title="解散换班组"
+                      onClick={() => onDelete(group)}
+                    >
                       <Trash2 size={14} style={{ color: 'var(--red)' }} />
                     </button>
                   </div>

@@ -602,13 +602,24 @@ def register(app: FastAPI) -> None:
     def save_group(request: Request, payload: dict[str, Any], user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
         require_csrf(request)
         _validate_group_timetable(payload)
-        return {"id": repo.upsert_group(payload)}
+        is_new = not int(payload.get("id") or 0)
+        group_id = repo.upsert_group(payload)
+        if not is_new:
+            return {"id": group_id}
+        # 新建后立刻按排班表对一次组员状态：该当班的开机、该休班的节省停机，
+        # 全部到位再同步 DDNS。失败不影响组本身已经存好，只把原因带回去。
+        try:
+            result = engine.bootstrap_group(group_id)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("新建换班组后校正组员状态失败")
+            result = {"error": str(exc)}
+        return {"id": group_id, "bootstrap": result}
 
     @app.delete("/api/v1/groups/{group_id}")
     def remove_group(request: Request, group_id: int, user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
         require_csrf(request)
-        repo.delete_group(group_id)
-        return {"ok": True}
+        # 解散只删配置：组员保持当前状态回到闲散手动，不给实例下发任何启停指令
+        return engine.dissolve_group(group_id)
 
     @app.post("/api/v1/groups/{group_id}/switch")
     def switch_group(request: Request, group_id: int, user: str = Depends(require_admin)):  # noqa: ANN202, ARG001

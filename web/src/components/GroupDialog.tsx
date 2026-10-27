@@ -191,7 +191,7 @@ export default function GroupDialog({ group, servers, onClose, onSaved }: Props)
     }
     setBusy(true)
     try {
-      await post('/api/v1/groups', {
+      const result = await post<{ id: number; bootstrap?: { error?: string } }>('/api/v1/groups', {
         id: group?.id ?? 0,
         name,
         enabled,
@@ -206,7 +206,14 @@ export default function GroupDialog({ group, servers, onClose, onSaved }: Props)
           end_time: row.end_time,
         })),
       })
-      onSaved(editing ? '换班组已更新' : '换班组已创建')
+      if (editing) {
+        onSaved('换班组已更新')
+      } else if (result?.bootstrap?.error) {
+        // 组本身已经存好，只是首轮整队没跑通 —— 说清楚，别让人以为组没建成
+        onSaved('换班组已创建，但校正组员状态失败，详情见最近事件')
+      } else {
+        onSaved('换班组已创建，正在按排班表校正组员状态')
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存失败')
     } finally {

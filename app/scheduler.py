@@ -25,6 +25,15 @@ EVENT_POLL_INTERVAL = 5
 # 事件等待状态到位的超时（秒），超过则标记失败
 EVENT_CONFIRM_TIMEOUT = 120
 
+# 加密对账窗口：新建换班组后要尽快把组员摆到排班表该有的位置（开机 + 停待机
+# 要跨好几轮），这段时间把对账间隔临时压到 10 秒，最多持续 90 秒。
+# 场景结束就自动恢复成用户配置的间隔，不是长期提速。
+_FAST_INTERVAL = 10
+_FAST_WINDOW = 90
+_fast_until = 0.0
+# 「立刻跑一轮」的唤醒信号：让 _wait 不必睡满 interval
+_wake = threading.Event()
+
 
 def start() -> None:
     global _thread, _confirm_thread
@@ -43,6 +52,33 @@ def start() -> None:
 
 def stop() -> None:
     _stop.set()
+    _wake.set()
+
+
+def request_fast_reconcile(seconds: float = _FAST_WINDOW) -> None:
+    """申请一段加密对账窗口，并立刻唤醒调度线程跑一轮。
+
+    新建换班组保存后调这个：用户期望「点完保存就看到组员被摆到位」，
+    等满一个对账间隔（默认 60 秒）才推进下一步太久了。
+    """
+    global _fast_until
+    _fast_until = max(_fast_until, time.time() + seconds)
+    _wake.set()
+
+
+def _wait(interval: float) -> None:
+    """等一轮间隔；期间有「立刻对账」请求就提前返回。
+
+    用 1 秒切片等，既能被 _wake 及时叫醒，也不至于空转。
+    """
+    deadline = time.time() + interval
+    while not _stop.is_set():
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            return
+        if _wake.wait(min(remaining, 1.0)):
+            _wake.clear()
+            return
 
 
 def _loop() -> None:
@@ -79,7 +115,9 @@ def _loop() -> None:
                 log.exception("清理历史事件失败")
 
         interval = _interval()
-        _stop.wait(interval)
+        if time.time() < _fast_until:
+            interval = min(interval, _FAST_INTERVAL)
+        _wait(interval)
 
 
 def _interval() -> int:

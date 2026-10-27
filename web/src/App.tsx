@@ -286,15 +286,15 @@ export default function App() {
 
   function deleteGroup(group: ShiftGroup) {
     setConfirmBox({
-      title: '删除换班组',
-      message: `确定删除「${group.name}」？`,
-      hint: `组内 ${group.members.length} 台服务器只会变回闲散状态，不会被删除，也不会自动开机或停机。`,
-      confirmText: '删除换班组',
-      failText: '删除失败',
+      title: '解散换班组',
+      message: `确定解散「${group.name}」？`,
+      hint: `组内 ${group.members.length} 台服务器保持当前状态：跑着的继续跑，停着的继续停着。解散后它们回到闲散手动，不会被单机保活拉起；组绑定的域名会一并解除。`,
+      confirmText: '解散换班组',
+      failText: '解散失败',
       run: async () => {
         await del(`/api/v1/groups/${group.id}`)
         await loadAll()
-        toast('换班组已删除', 'success')
+        toast('换班组已解散，组员已回到闲散手动', 'success')
       },
     })
   }

@@ -748,9 +748,12 @@ def add_event(
     status 取值：done（一次成型，历史事件）/ running（进行中）/ error（失败）。
     pending_status：异步事件待确认的目标状态（如 Stopped/Running），空串表示无需轮询。
     pending_kind：异步事件类型（manual/keepalive），确认器据此决定到位后是否补发通知。
+
+    一次性事件（done / error）没有后续轮次往里追加进度，这里把 detail 按行拆成
+    过程条目补上，保证**任何**事件点开都能看到「它做了什么」，不只是标题加一句摘要。
     """
     now = int(time.time())
-    return db.insert(
+    event_id = db.insert(
         "INSERT INTO events(ts, level, kind, group_id, server_id, title, detail, "
         "status, finished_at, pending_status, pending_kind) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
         (
@@ -767,6 +770,12 @@ def add_event(
             pending_kind if status == "running" else "",
         ),
     )
+    if status != "running" and detail:
+        for line in detail.splitlines():
+            text = line.strip().lstrip("·-").strip()
+            if text:
+                add_event_progress(event_id, text)
+    return event_id
 
 
 def list_pending_events() -> list[dict[str, Any]]:
