@@ -260,8 +260,16 @@ class Engine:
             self._lock.release()
 
     def _grouped_server_ids(self) -> set[int]:
+        """被换班组接管的机器。
+
+        只算**启用的**组：组停用后成员就该回到闲散状态，单机保活要能接手。
+        以前漏了这个判断，停用组 + 组员挂保活 → 保活认为「已被换班组接管」直接
+        让位，结果两边都不管，机器就躺着没人开机。
+        """
         ids: set[int] = set()
         for group in repo.list_groups():
+            if not group.get("enabled"):
+                continue
             for member in group.get("members") or []:
                 if member.get("enabled"):
                     ids.add(int(member["server_id"]))
@@ -426,6 +434,7 @@ class Engine:
         except Exception as exc:  # noqa: BLE001
             duty_error = str(exc)
         healthy_others: list[dict[str, Any]] = []
+        unreadable: set[int] = set()
         for server in others:
             try:
                 _refresh(server)
@@ -433,6 +442,7 @@ class Engine:
                 if repo.get_flag(f"member_err:{server['id']}"):
                     repo.clear_flag(f"member_err:{server['id']}")
             except Exception as exc:  # noqa: BLE001
+                unreadable.add(int(server["id"]))
                 flag = f"member_err:{server['id']}"
                 if not repo.get_flag(flag):
                     repo.set_flag(flag)
@@ -444,6 +454,26 @@ class Engine:
                         group_id=group_id,
                         server_id=int(server["id"]),
                     )
+
+        # 当班状态读不到：本轮不许凭库里的旧快照发指令。
+        # 旧快照说「停着」而机器其实在跑，就会给运行中的实例发开机，阿里云回
+        # IncorrectInstanceStatus，事件里冒出一条「当班启动失败」，看着像系统坏了；
+        # 反过来旧快照说「跑着」而机器已经停了，就漏掉一次该有的拉起。
+        # 读不到就等下一轮 —— 拿不到状态时「什么都不做」比「猜着做」安全。
+        if duty_error:
+            flag = f"duty_err:{group_id}:{slot_key}"
+            if not repo.get_flag(flag):
+                repo.set_flag(flag)
+                repo.add_event(
+                    "warning",
+                    f"{name}：当班状态读取失败",
+                    f"{duty.get('label')}：{duty_error}",
+                    level="warning",
+                    group_id=group_id,
+                    server_id=int(duty["id"]),
+                )
+            return {"group_id": group_id, "state_unreadable": duty_error}
+        repo.clear_flag(f"duty_err:{group_id}:{slot_key}")
 
         # 2) 当班超限 → 找一台没超的接班；找不到就停机，绝不让超限的当班继续跑
         failover = False
@@ -609,6 +639,11 @@ class Engine:
         #    Not-applicable）就算停好，不再重发；普通停机照常收费但已到位，无需死循环。
         all_stopped = True
         for server in others:
+            if int(server["id"]) in unreadable:
+                # 状态读不到的成员：不下发停机（不知道它现在是什么状态，重发也没用），
+                # 但也不能算「已到位」—— 否则这一班会带着一台可能还在跑的机器结算。
+                all_stopped = False
+                continue
             if _is_stopped_any_mode(server):
                 continue
             if server.get("instance_status") in TRANSIENT_STATUS:
@@ -864,26 +899,48 @@ class Engine:
         # 只有物理停机（Stopped 且 mode 合法）才算到位；否则（运行中/中间态）下指令
         if not _is_stopped_any_mode(duty):
             if duty_status not in TRANSIENT_STATUS:
-                try:
-                    aliyun.stop_instance(duty, "StopCharging")
-                    repo.add_event(
-                        "limit_stop",
-                        f"{name}：当班流量超限，已强制节省停机",
-                        f"{duty.get('label')} 原状态 {duty_status or '未知'}",
-                        level="warning",
-                        group_id=group_id,
-                        server_id=int(duty["id"]),
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    repo.add_event(
-                        "error",
-                        f"{name}：超限停机失败",
-                        str(exc),
-                        level="error",
-                        group_id=group_id,
-                        server_id=int(duty["id"]),
-                    )
+                # 同一台机器 120 秒内只发一次指令、只记一条事件。
+                # 以前每轮都发、每轮都记：指令被拒（IncorrectInstanceStatus）时
+                # 「超限停机失败」一分钟一条，14 天保留期内能把「最近事件」刷满；
+                # 指令成功了但状态迟迟不变时也一样刷。
+                stamp = f"limit_stop_cmd:{group_id}:{slot_key}"
+                age = repo.flag_age(stamp)
+                if not (0 <= age < _BREAKER_STOP_COOLDOWN):
+                    try:
+                        aliyun.stop_instance(duty, "StopCharging")
+                        repo.clear_flag(f"limit_stop_err:{group_id}:{slot_key}")
+                        event_flag = f"limit_stop_evt:{group_id}:{slot_key}"
+                        if not repo.get_flag(event_flag):
+                            repo.set_flag(event_flag)
+                            repo.add_event(
+                                "limit_stop",
+                                f"{name}：当班流量超限，已强制节省停机",
+                                f"{duty.get('label')} 原状态 {duty_status or '未知'}",
+                                level="warning",
+                                group_id=group_id,
+                                server_id=int(duty["id"]),
+                            )
+                    except Exception as exc:  # noqa: BLE001
+                        err_flag = f"limit_stop_err:{group_id}:{slot_key}"
+                        if not repo.get_flag(err_flag):
+                            repo.set_flag(err_flag)
+                            repo.add_event(
+                                "error",
+                                f"{name}：超限停机失败",
+                                f"{duty.get('label')}：{exc}",
+                                level="error",
+                                group_id=group_id,
+                                server_id=int(duty["id"]),
+                            )
+                    finally:
+                        # 无论成败都重新计时，避免每轮都往阿里云打一次
+                        repo.clear_flag(stamp)
+                        repo.set_flag(stamp)
         else:
+            # 已经停机到位：把本轮次的「已下发 / 失败 / 节流」标记清掉，
+            # 这个班次之后再超限（重新开机后）还能正常记一条新事件。
+            for prefix in ("limit_stop_evt", "limit_stop_err", "limit_stop_cmd"):
+                repo.clear_flag(f"{prefix}:{group_id}:{slot_key}")
             flag = f"limit_stop:{group_id}:{slot_key}"
             if (
                 notify_enabled

@@ -159,3 +159,16 @@ def read_session(token: str, epoch: int = 0) -> str | None:
 
 def new_csrf_token() -> str:
     return secrets.token_urlsafe(24)
+
+
+def session_id(token: str) -> str:
+    """票据的稳定短标识，用于注销黑名单。
+
+    只对签名做 SHA-256 再截断，库里落的是标识而不是票据原文 —— 黑名单表被
+    读走也换不回一个能用的会话。同一秒内登录两次会得到同一张票据，标识相同，
+    注销时一起失效，这正是我们想要的。
+    """
+    if not token or "." not in token:
+        return ""
+    _, signature = token.rsplit(".", 1)
+    return hashlib.sha256(signature.encode()).hexdigest()[:32]

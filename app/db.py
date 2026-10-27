@@ -162,6 +162,14 @@ CREATE TABLE IF NOT EXISTS flags (
     created_at INTEGER NOT NULL DEFAULT 0
 );
 
+-- 已注销的会话票据（只存票据签名的 SHA-256 前 16 字节，不存票据本身）。
+-- 会话是无状态的，光删 cookie 并不吊销票据：票据 14 天内仍然能用。
+CREATE TABLE IF NOT EXISTS revoked_sessions (
+    token_id   TEXT PRIMARY KEY,
+    expires_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_revoked_exp ON revoked_sessions(expires_at);
+
 CREATE TABLE IF NOT EXISTS traffic_samples (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     server_id  INTEGER NOT NULL,

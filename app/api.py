@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import ipaddress
 import json
 import logging
 import threading
@@ -20,6 +21,7 @@ from .shift import (
     PHASE_MANUAL,
     PHASE_SETTLED,
     PHASE_SWITCHING,
+    _hhmm_to_minutes,
     _timezone,
     active_members,
     current_member_index,
@@ -199,9 +201,19 @@ def _session_epoch() -> int:
 
 
 def _current_user(request: Request) -> str | None:
-    return security.read_session(
-        request.cookies.get(settings.SESSION_COOKIE, ""), _session_epoch()
-    )
+    token = request.cookies.get(settings.SESSION_COOKIE, "")
+    user = security.read_session(token, _session_epoch())
+    if not user:
+        return None
+    # 退出登录过的那张票据即使被翻出来也不认：会话本身无状态，光删 cookie
+    # 吊销不了，票据在 14 天有效期内仍然能用。
+    try:
+        if repo.is_session_revoked(security.session_id(token)):
+            return None
+    except Exception:  # noqa: BLE001
+        # 黑名单查不到（库锁住之类）不该把整个请求打成 500：签名本身已经验过了
+        log.warning("会话黑名单查询失败，按未吊销处理", exc_info=True)
+    return user
 
 
 def require_admin(request: Request) -> str:
@@ -228,13 +240,100 @@ def _error(status: int, code: str, message: str) -> JSONResponse:
 # 序列化
 # --------------------------------------------------------------------------
 
+def _as_int(value: Any, label: str) -> int:
+    """把前端传来的值转整数，转不动就报一句人话。
+
+    直接 int() 时用户看到的是 `invalid literal for int() with base 10: 'abc'`，
+    这种 Python 原文不该出现在界面提示里。
+    """
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{label}应为整数") from None
+
+
+def _fmt_minute(minute: int) -> str:
+    return "24:00" if minute >= 1440 else f"{minute // 60:02d}:{minute % 60:02d}"
+
+
+def _member_labels(members: list[dict[str, Any]]) -> dict[int, str]:
+    labels: dict[int, str] = {}
+    for member in members:
+        server_id = int(member.get("server_id") or 0)
+        if not server_id or server_id in labels:
+            continue
+        server = repo.get_server(server_id)
+        labels[server_id] = str((server or {}).get("label") or f"#{server_id}")
+    return labels
+
+
+def _validate_timetable_coverage(members: list[dict[str, Any]]) -> None:
+    """时刻表必须把一天盖满，且任何一分钟只归一台。
+
+    引擎是「按成员登记顺序取第一个命中」：重叠时后写的那段被静默吃掉，空档时
+    兜底给第一台 —— 界面上画的表和引擎实际跑的表不是一回事，还一声不吭。这类
+    配置错误只能靠保存时拦住，宁可不保存，也不让它悄悄跑一台不相干的机器。
+    """
+    spans: list[tuple[int, int]] = []
+    for member in members:
+        start = _hhmm_to_minutes(member.get("start_time"))
+        end = _hhmm_to_minutes(member.get("end_time"))
+        if start < 0 or end < 0:
+            return  # 格式非法，交给 repo.upsert_group 统一报「格式应为 HH:MM」
+        spans.append((start, end))
+
+    labels = _member_labels(members)
+    texts = [
+        (labels.get(int(m.get("server_id") or 0), ""), str(m.get("start_time") or ""), str(m.get("end_time") or ""))
+        for m in members
+    ]
+
+    owner = [-1] * 1440
+    for index, (start, end) in enumerate(spans):
+        if start == end:
+            raise ValueError(
+                f"「{texts[index][0]}」的起止时刻不能相同；"
+                "跨天班次让结束时刻小于开始时刻即可，比如 18:00–06:00"
+            )
+        ranges = [(start, 1440), (0, end)] if end < start else [(start, end)]
+        for lo, hi in ranges:
+            for minute in range(lo, hi):
+                if owner[minute] >= 0:
+                    other = owner[minute]
+                    raise ValueError(
+                        f"「{texts[index][0]}」{texts[index][1]}–{texts[index][2]} 与"
+                        f"「{texts[other][0]}」{texts[other][1]}–{texts[other][2]}"
+                        f" 在 {_fmt_minute(minute)} 重叠，同一时刻只能有一台当班"
+                    )
+                owner[minute] = index
+
+    minute = 0
+    while minute < 1440:
+        if owner[minute] >= 0:
+            minute += 1
+            continue
+        begin = minute
+        while minute < 1440 and owner[minute] < 0:
+            minute += 1
+        raise ValueError(
+            f"排班表在 {_fmt_minute(begin)}–{_fmt_minute(minute)} 没有安排当班，"
+            "一天 24 小时要刚好分完"
+        )
+
+
 def _validate_group_timetable(payload: dict[str, Any]) -> None:
-    """时刻表只有「全组都填」和「全组都不填」两种合法状态。
+    """时刻表只有「全组都填」和「全组都不填」两种合法状态，填了就必须能盖满一天。
 
     只填一部分时引擎的 _is_timetable_group 会判定「没用时刻表」，静默退回
     按小时轮换，界面上却还显示着时刻 —— 宁可拒绝保存，也不让它悄悄降级。
     """
-    members = [m for m in (payload.get("members") or []) if m.get("enabled", True)]
+    all_members = [m for m in (payload.get("members") or []) if isinstance(m, dict)]
+    # 24:00 是「到午夜」的自然写法，等价于 00:00（跨天区间的终点）。
+    # 在建校验之前就归一化掉，引擎和仓储那边只认 00:00 一种写法。
+    for member in all_members:
+        if str(member.get("end_time") or "").strip() == "24:00":
+            member["end_time"] = "00:00"
+    members = [m for m in all_members if m.get("enabled", True)]
     filled = [
         m
         for m in members
@@ -242,6 +341,8 @@ def _validate_group_timetable(payload: dict[str, Any]) -> None:
     ]
     if filled and len(filled) != len(members):
         raise ValueError("要么每台成员都填起止时刻，要么全部留空（按班次时长轮换）")
+    if filled:
+        _validate_timetable_coverage(members)
 
 
 def _managed_map() -> dict[int, dict[str, Any]]:
@@ -423,7 +524,7 @@ def register(app: FastAPI) -> None:
     # -- 登录 -----------------------------------------------------------
     @app.post("/api/v1/auth/login")
     def login(request: Request, payload: dict[str, Any]):  # noqa: ANN202
-        client = (request.client.host if request.client else "unknown") or "unknown"
+        client = _client_ip(request)
         if _rate_limited(client):
             raise HTTPException(status_code=429, detail="尝试过于频繁，请 5 分钟后再试")
 
@@ -444,6 +545,13 @@ def register(app: FastAPI) -> None:
     @app.post("/api/v1/auth/logout")
     def logout(request: Request, user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
         require_csrf(request)
+        # 把这张票据拉黑到它自己过期为止：只删 cookie 的话，票据在有效期内
+        # 依然能用（复制出来的副本照样放行）。只吊销当前这张，别把手机/平板
+        # 上的登录一起踢掉 —— 那是改密码才该发生的事。
+        token = request.cookies.get(settings.SESSION_COOKIE, "")
+        repo.revoke_session(
+            security.session_id(token), int(time.time()) + settings.SESSION_TTL_SECONDS
+        )
         response = JSONResponse({"ok": True})
         response.delete_cookie(settings.SESSION_COOKIE, path="/")
         response.delete_cookie(settings.CSRF_COOKIE, path="/")
@@ -619,6 +727,8 @@ def register(app: FastAPI) -> None:
     def remove_group(request: Request, group_id: int, user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
         require_csrf(request)
         # 解散只删配置：组员保持当前状态回到闲散手动，不给实例下发任何启停指令
+        if repo.get_group(group_id) is None:
+            raise HTTPException(status_code=404, detail="换班组不存在")
         return engine.dissolve_group(group_id)
 
     @app.post("/api/v1/groups/{group_id}/switch")
@@ -769,19 +879,19 @@ def register(app: FastAPI) -> None:
 
         put_str("timezone", payload.get("timezone"))
         if payload.get("traffic_threshold_pct") is not None:
-            percent = int(payload["traffic_threshold_pct"])
+            percent = _as_int(payload["traffic_threshold_pct"], "流量阈值百分比")
             if not 50 <= percent <= 100:
                 raise ValueError("流量阈值百分比应在 50–100 之间")
             updates["traffic_threshold_pct"] = str(percent)
         if payload.get("reconcile_interval") is not None:
-            interval = int(payload["reconcile_interval"])
+            interval = _as_int(payload["reconcile_interval"], "同步间隔")
             if not 30 <= interval <= 3600:
                 raise ValueError("同步间隔应在 30–3600 秒之间")
             updates["reconcile_interval"] = str(interval)
 
         put_bool("billing_enabled", payload.get("billing_enabled"))
         if payload.get("billing_interval") is not None:
-            interval = int(payload["billing_interval"])
+            interval = _as_int(payload["billing_interval"], "费用查询间隔")
             if not 60 <= interval <= 86400:
                 raise ValueError("费用查询间隔应在 60–86400 秒之间")
             updates["billing_interval"] = str(interval)
@@ -966,11 +1076,48 @@ def _attach_session(response: JSONResponse, username: str, epoch: int | None = N
 # 登录限速
 # --------------------------------------------------------------------------
 
+def _is_private_peer(host: str) -> bool:
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return addr.is_private or addr.is_loopback or addr.is_link_local
+
+
+def _client_ip(request: Request) -> str:
+    """登录限速用的客户端标识。
+
+    直接暴露时直连对端就是真实来源，X-Forwarded-For 一概不信 —— 否则攻击者
+    每次随便填一个 IP 就绕过了限速。只有当直连对端是内网/回环地址（说明前面
+    有反向代理，Docker 默认桥接也一样）时才取 XFF 的第一段，否则所有人共用
+    网关那一个 IP，别人连错 8 次，管理员跟着被锁 5 分钟。
+    """
+    peer = (request.client.host if request.client else "") or "unknown"
+    if _is_private_peer(peer):
+        forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+        try:
+            ipaddress.ip_address(forwarded)
+        except ValueError:
+            pass
+        else:
+            return forwarded
+    return peer
+
+
 def _rate_limited(client: str) -> bool:
     now = time.time()
     with _login_lock:
+        # 顺手清掉过期条目：只清理当前 key 的话，字典会跟着来访 IP 一直长
+        if len(_login_failures) > 256:
+            for key in [
+                k for k, v in _login_failures.items() if not v or now - v[-1] >= LOGIN_WINDOW
+            ]:
+                _login_failures.pop(key, None)
         attempts = [t for t in _login_failures.get(client, []) if now - t < LOGIN_WINDOW]
-        _login_failures[client] = attempts
+        if attempts:
+            _login_failures[client] = attempts
+        else:
+            _login_failures.pop(client, None)
         return len(attempts) >= LOGIN_MAX_FAILURES
 
 

@@ -111,6 +111,39 @@ def clear_flags_like(prefix: str) -> None:
 
 
 # --------------------------------------------------------------------------
+# 会话注销黑名单
+# --------------------------------------------------------------------------
+
+def revoke_session(token_id: str, expires_at: int) -> None:
+    """把一张票据拉黑到它自己过期为止。
+
+    顺带清掉已过期条目：这张表只增不减会跟着时间越滚越大，而清理时机
+    「正好有人注销」比定时任务简单得多。
+    """
+    if not token_id:
+        return
+    now = int(time.time())
+    db.execute("DELETE FROM revoked_sessions WHERE expires_at <= ?", (now,))
+    if int(expires_at) <= now:
+        return  # 已经过期的票据不用记，它自己也进不来
+    db.execute(
+        "INSERT INTO revoked_sessions(token_id, expires_at) VALUES(?, ?) "
+        "ON CONFLICT(token_id) DO UPDATE SET expires_at=excluded.expires_at",
+        (token_id, int(expires_at)),
+    )
+
+
+def is_session_revoked(token_id: str) -> bool:
+    if not token_id:
+        return False
+    row = db.query_one(
+        "SELECT 1 FROM revoked_sessions WHERE token_id=? AND expires_at > ?",
+        (token_id, int(time.time())),
+    )
+    return row is not None
+
+
+# --------------------------------------------------------------------------
 # servers
 # --------------------------------------------------------------------------
 
@@ -582,6 +615,34 @@ def list_members(group_id: int) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def _group_conflict(members: list[dict[str, Any]], group_id: int) -> str:
+    """同一台服务器不能同时编进两个**启用**的换班组。
+
+    两个启用组会把对方成员当成「非当班 → 该停机」，每轮对账互相启停，谁也静不
+    下来，卡片状态来回跳。停用的组不参与，那是「先配好、暂不启用」的正常状态。
+    """
+    ids = {int(m["server_id"]) for m in members if m.get("enabled")}
+    if not ids:
+        return ""
+    rows = db.query(
+        "SELECT g.name, m.server_id FROM shift_groups g "
+        "JOIN shift_members m ON m.group_id = g.id "
+        "WHERE g.enabled=1 AND g.id<>? AND m.enabled=1",
+        (group_id,),
+    )
+    for row in rows:
+        server_id = int(row["server_id"])
+        if server_id not in ids:
+            continue
+        server = get_server(server_id)
+        label = str((server or {}).get("label") or f"#{server_id}")
+        return (
+            f"「{label}」已在换班组「{row['name']}」里，"
+            "同一台服务器不能同时编进两个启用的换班组"
+        )
+    return ""
+
+
 def upsert_group(payload: dict[str, Any]) -> int:
     group_id = int(payload.get("id") or 0)
     name = str(payload.get("name") or "").strip() or "换班组"
@@ -633,6 +694,10 @@ def upsert_group(payload: dict[str, Any]) -> int:
         raise ValueError("换班组至少需要两台服务器")
     if sum(m["hours"] for m in members if m["enabled"]) <= 0:
         raise ValueError("至少需要一台启用的成员，且时长大于 0")
+    if enabled:
+        conflict = _group_conflict(members, group_id)
+        if conflict:
+            raise ValueError(conflict)
 
     conn = db.connect()
     conn.execute("BEGIN")
