@@ -631,6 +631,18 @@ def register(app: FastAPI) -> None:
     def get_dns(user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
         return dns.snapshot(repo.get_settings())
 
+    @app.post("/api/v1/dns/reorder")
+    def reorder_dns(request: Request, payload: dict[str, Any], user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
+        """手动排序：前端拖拽后把完整的有序记录名列表传回来持久化。"""
+        require_csrf(request)
+        records = payload.get("records")
+        if not isinstance(records, list) or not records:
+            raise HTTPException(status_code=400, detail="records 必须是非空的有序数组")
+        if not all(isinstance(item, str) for item in records):
+            raise HTTPException(status_code=400, detail="records 里的元素必须是记录名")
+        repo.reorder_dns_records(records)
+        return {"ok": True}
+
     @app.post("/api/v1/dns/records")
     def add_dns_record(request: Request, payload: dict[str, Any], user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
         require_csrf(request)

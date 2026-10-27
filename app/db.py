@@ -125,7 +125,9 @@ CREATE TABLE IF NOT EXISTS dns_records (
     last_ip     TEXT    NOT NULL DEFAULT '',
     last_status TEXT    NOT NULL DEFAULT '',
     last_at     INTEGER NOT NULL DEFAULT 0,
-    updated_at  INTEGER NOT NULL DEFAULT 0
+    updated_at  INTEGER NOT NULL DEFAULT 0,
+    -- 手动排序：0 表示没拖过，按登记顺序排在后面；拖动后从 1 开始递增
+    sort_order  INTEGER NOT NULL DEFAULT 0
 );
 -- 一个目标可以挂多条记录（一台机器挂 www、api 多个域名），所以这里只是查询索引，
 -- 不能带 UNIQUE。老库里那个 idx_dns_target 是唯一索引，由 _migrate() 删掉。
@@ -277,6 +279,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
             "event_id": "INTEGER NOT NULL DEFAULT 0",
             "manual": "INTEGER NOT NULL DEFAULT 0",
             "origin": "TEXT NOT NULL DEFAULT ''",
+        },
+        "dns_records": {
+            "sort_order": "INTEGER NOT NULL DEFAULT 0",
         },
     }
     for table, columns in additions.items():

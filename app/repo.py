@@ -450,7 +450,44 @@ def delete_keepalive(keepalive_id: int) -> None:
 # --------------------------------------------------------------------------
 
 def list_dns_records() -> list[dict[str, Any]]:
-    return [dict(row) for row in db.query("SELECT * FROM dns_records ORDER BY rowid")]
+    # 手动排序优先：拖过的按 sort_order 升序，没拖过的（0）按登记顺序跟在后面。
+    return [
+        dict(row)
+        for row in db.query(
+            "SELECT * FROM dns_records "
+            "ORDER BY CASE WHEN sort_order=0 THEN rowid + 1000000 ELSE sort_order END, rowid"
+        )
+    ]
+
+
+def reorder_dns_records(ordered: list[str]) -> None:
+    """按给定顺序持久化记录排序：sort_order 从 1 开始递增。
+
+    ordered 必须是「完整的有序记录名列表」；没列出来的记录 sort_order 清零，
+    回退到登记顺序排在后面。不存在的记录名直接忽略，不会写脏数据。
+    """
+    if not ordered:
+        return
+    known = {str(row["record"]) for row in db.query("SELECT record FROM dns_records")}
+    # 一个都不认识就直接返回：别把整张表的排序清零了当副作用
+    if not any(str(record) in known for record in ordered):
+        return
+    conn = db.connect()
+    conn.execute("BEGIN")
+    try:
+        conn.execute("UPDATE dns_records SET sort_order=0")
+        for index, record in enumerate(ordered, start=1):
+            name = str(record)
+            if name not in known:
+                continue
+            conn.execute(
+                "UPDATE dns_records SET sort_order=? WHERE record=?",
+                (index, name),
+            )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
 
 
 def get_dns_record(record: str) -> dict[str, Any] | None:
@@ -485,11 +522,12 @@ def bind_dns_record(record: str, kind: str, target: int) -> None:
 
 
 def dns_records_of(kind: str, target: int) -> list[str]:
-    """这个目标当前占着哪些记录（按登记顺序）；没绑返回空列表。"""
+    """这个目标当前占着哪些记录（按界面上的显示顺序）；没绑返回空列表。"""
     if not kind or not target:
         return []
     rows = db.query(
-        "SELECT record FROM dns_records WHERE target_kind=? AND target_id=? ORDER BY rowid",
+        "SELECT record FROM dns_records WHERE target_kind=? AND target_id=? "
+        "ORDER BY CASE WHEN sort_order=0 THEN rowid + 1000000 ELSE sort_order END, rowid",
         (kind, target),
     )
     return [str(row["record"]) for row in rows]

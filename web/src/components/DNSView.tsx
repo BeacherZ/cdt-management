@@ -3,6 +3,7 @@ import {
   ArrowRight,
   CircleSlash,
   Globe2,
+  GripVertical,
   HeartPulse,
   LoaderCircle,
   Plus,
@@ -26,6 +27,7 @@ type Props = {
   onSyncAll: () => void
   onAddRecord: (name: string) => Promise<boolean>
   onRemoveRecord: (record: string) => void
+  onReorder: (ordered: string[]) => void
   onOpenSettings: () => void
 }
 
@@ -70,11 +72,36 @@ export default function DNSView({
   onSyncAll,
   onAddRecord,
   onRemoveRecord,
+  onReorder,
   onOpenSettings,
 }: Props) {
   const [adding, setAdding] = useState(false)
   const [draft, setDraft] = useState('')
   const [saving, setSaving] = useState(false)
+  // 拖拽排序：记录当前被拖的记录名与悬停目标，用于视觉反馈与松手换位
+  const [dragRecord, setDragRecord] = useState<string | null>(null)
+  const [overRecord, setOverRecord] = useState<string | null>(null)
+
+  function handleDrop(target: string) {
+    if (!dragRecord || dragRecord === target) {
+      setDragRecord(null)
+      setOverRecord(null)
+      return
+    }
+    const next = dns.records.map((item) => item.record)
+    const from = next.indexOf(dragRecord)
+    const to = next.indexOf(target)
+    if (from < 0 || to < 0) {
+      setDragRecord(null)
+      setOverRecord(null)
+      return
+    }
+    const [moved] = next.splice(from, 1)
+    next.splice(to, 0, moved)
+    setDragRecord(null)
+    setOverRecord(null)
+    onReorder(next)
+  }
 
   const keepaliveIds = new Set(keepalives.map((item) => item.server_id))
   // 第一项是「所有服务器」全量清单，下面两个大项只是同一批机器的不同视角（快捷入口）：
@@ -189,8 +216,37 @@ export default function DNSView({
             const working = busy === record.record
             const target = record.target
             return (
-              <div className="card dns-row" key={record.record}>
+              <div
+                className={`card dns-row${dragRecord === record.record ? ' dragging' : ''}${
+                  overRecord === record.record ? ' drag-over' : ''
+                }`}
+                key={record.record}
+                draggable
+                onDragStart={(event) => {
+                  setDragRecord(record.record)
+                  event.dataTransfer.effectAllowed = 'move'
+                  // Firefox 需要设置 data 才会真正启动拖拽
+                  event.dataTransfer.setData('text/plain', record.record)
+                }}
+                onDragOver={(event) => {
+                  event.preventDefault()
+                  event.dataTransfer.dropEffect = 'move'
+                  if (overRecord !== record.record) setOverRecord(record.record)
+                }}
+                onDragLeave={() => {
+                  if (overRecord === record.record) setOverRecord(null)
+                }}
+                onDrop={(event) => {
+                  event.preventDefault()
+                  handleDrop(record.record)
+                }}
+                onDragEnd={() => {
+                  setDragRecord(null)
+                  setOverRecord(null)
+                }}
+              >
                 <div className="dns-row-head">
+                  <GripVertical size={13} className="drag-handle" aria-hidden />
                   <Globe2 size={15} style={{ color: 'var(--accent)', flex: 'none' }} />
                   <code className="dns-name">{record.record}</code>
                   <Badge tone={meta.tone} dot>

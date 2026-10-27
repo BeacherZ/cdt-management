@@ -335,6 +335,16 @@ export default function App() {
   }
 
   // -- DNS -----------------------------------------------------------
+  /** DNS 记录手动排序：拖拽结束后把完整有序记录名列表持久化 */
+  async function reorderDns(ordered: string[]) {
+    try {
+      await post('/api/v1/dns/reorder', { records: ordered })
+      await loadAll()
+    } catch (error) {
+      toast(error instanceof Error ? error.message : '排序保存失败', 'error')
+    }
+  }
+
   async function bindDns(record: string, kind: string, id: number) {
     setBusyDns(record)
     try {
@@ -656,6 +666,7 @@ export default function App() {
             onSyncAll={syncAllDns}
             onAddRecord={addDnsRecord}
             onRemoveRecord={removeDnsRecord}
+            onReorder={reorderDns}
             onOpenSettings={() => setSettingsOpen(true)}
           />
         )}

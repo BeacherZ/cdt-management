@@ -521,6 +521,18 @@ label {
   display: flex;
   flex-direction: column;
   gap: 9px;
+  /* 拖拽排序：整行可拖动，卡片尺寸与内容不变 */
+  cursor: grab;
+}
+
+.dns-row.dragging {
+  opacity: 0.45;
+  cursor: grabbing;
+}
+
+.dns-row.drag-over {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 .dns-row:hover {

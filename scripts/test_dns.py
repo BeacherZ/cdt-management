@@ -528,6 +528,48 @@ class Cards(Base):
         self.assertNotIn(a, cards)
 
 
+class Order(Base):
+    """手动拖动排序：拖过的排在前面，新加的接在末尾。"""
+
+    def names(self) -> list[str]:
+        return [str(row["record"]) for row in repo.list_dns_records()]
+
+    def test_reorder_keeps_given_order_and_new_record_goes_last(self):
+        for name in ("a.example.com", "b.example.com", "c.example.com"):
+            repo.ensure_dns_record(name)
+        self.assertEqual(self.names(), ["a.example.com", "b.example.com", "c.example.com"])
+
+        repo.reorder_dns_records(["c.example.com", "a.example.com", "b.example.com"])
+        self.assertEqual(self.names(), ["c.example.com", "a.example.com", "b.example.com"])
+
+        # 排序是持久化的，重读一遍还在
+        self.assertEqual(self.names()[0], "c.example.com")
+
+        # 后加的记录没排过序，接在最后，不会插到手动排序中间
+        repo.ensure_dns_record("d.example.com")
+        self.assertEqual(
+            self.names(), ["c.example.com", "a.example.com", "b.example.com", "d.example.com"]
+        )
+
+    def test_reorder_ignores_unknown_and_missing_falls_back(self):
+        for name in ("a.example.com", "b.example.com", "c.example.com"):
+            repo.ensure_dns_record(name)
+
+        # 不存在的记录名不该报错，也不该写进库
+        repo.reorder_dns_records(["b.example.com", "nope.example.com"])
+        # 没列出来的记录回退到登记顺序，排在被拖过的后面
+        self.assertEqual(self.names(), ["b.example.com", "a.example.com", "c.example.com"])
+        self.assertEqual(len(self.names()), 3)
+
+        # 整份列表一个都不认识时直接忽略，不能顺手把已有排序清零
+        repo.reorder_dns_records(["zzz.example.com"])
+        self.assertEqual(self.names(), ["b.example.com", "a.example.com", "c.example.com"])
+
+        # 绑定关系不受排序影响
+        repo.bind_dns_record("a.example.com", "server", 7)
+        self.assertEqual(repo.dns_records_of("server", 7), ["a.example.com"])
+
+
 def tearDownModule() -> None:
     shutil.rmtree(_TMP, ignore_errors=True)
 
