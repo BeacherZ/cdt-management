@@ -123,7 +123,7 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 - 少了 CDT 这组，整轮对账都会失败，不是流量空着 —— 必须给
 - 少了 BSS 这组，费用和余额显示不出来，启停照常
 - 国内站和国际站的 AK 不通用，一台服务器一套凭据
-- 控制台：[国内站](https://ram.console.aliyun.com/users) · [国际站](https://ram.console.alibabacloud.com/users)
+- RAM 控制台：[国内站](https://ram.console.aliyun.com/users) · [国际站](https://ram.console.alibabacloud.com/users)
 
 ## 配一遍的流程
 
