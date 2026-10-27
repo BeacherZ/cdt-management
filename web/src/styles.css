@@ -2628,11 +2628,28 @@ input[type='number']::-webkit-inner-spin-button {
   display: grid;
   place-items: center;
   padding: 24px;
+  position: relative;
+}
+
+/* 卡片背后一团很淡的品牌色光晕，让登录页和概览页的环境光一个气质 */
+.auth::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 640px;
+  height: 640px;
+  transform: translate(-50%, -52%);
+  border-radius: 50%;
+  background: radial-gradient(closest-side, var(--accent-soft), transparent 72%);
+  pointer-events: none;
 }
 
 .auth-card {
-  width: min(430px, 100%);
-  padding: 30px 30px 26px;
+  position: relative;
+  z-index: 1;
+  width: min(420px, 100%);
+  padding: 30px 32px 24px;
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -2640,36 +2657,44 @@ input[type='number']::-webkit-inner-spin-button {
   background: var(--panel-solid);
 }
 
-/* 登录卡片顶部一条主色渐变的点缀线，比纯色卡片更有品牌感 */
-.auth-card::after {
-  content: '';
-  position: absolute;
-  inset: 0 0 auto 0;
-  height: 3px;
-  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-  background: var(--accent-grad);
-  opacity: 0.9;
-  pointer-events: none;
-}
-
 .auth-brand {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 13px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--line);
 }
 
 .auth-brand .brand-mark {
-  width: 40px;
-  height: 40px;
-  border-radius: 12px;
+  width: 44px;
+  height: 44px;
+  border-radius: 13px;
+}
+
+.auth-brand .brand-text strong {
+  display: block;
+  font-size: 15px;
+  font-weight: 680;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+.auth-brand .brand-text span {
+  display: block;
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--muted);
 }
 
 .auth-card h1 {
-  font-size: 21px;
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
   letter-spacing: -0.03em;
 }
 
 .auth-card .lede {
+  margin: 7px 0 0;
   font-size: 12.5px;
   color: var(--muted);
   line-height: 1.7;
@@ -2681,7 +2706,7 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 .auth-form .field {
-  margin-bottom: 16px;
+  margin-bottom: 15px;
 }
 
 /* 登录页输入框加高一点，手感更从容 */
@@ -2690,6 +2715,7 @@ input[type='number']::-webkit-inner-spin-button {
   font-size: 13.5px;
   padding: 0 13px;
   border-radius: var(--radius-md);
+  background: var(--panel-solid);
 }
 
 .auth-error {
@@ -2710,7 +2736,7 @@ input[type='number']::-webkit-inner-spin-button {
   color: var(--muted-soft);
   text-align: center;
   line-height: 1.7;
-  padding-top: 4px;
+  padding-top: 14px;
   border-top: 1px solid var(--line);
 }
 

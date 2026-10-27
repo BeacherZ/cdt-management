@@ -53,14 +53,14 @@ export default function Auth({ mode, brand, onDone }: Props) {
             {isSetup ? <ShieldCheck size={21} /> : <LockKeyhole size={20} />}
           </div>
           <div className="brand-text">
-            <strong style={{ fontSize: 15 }}>{brand}</strong>
+            <strong>{brand}</strong>
             <span>阿里云 CDT 抢占实例 · 换班保活</span>
           </div>
         </div>
 
         <div>
           <h1>{isSetup ? '设置管理员账号' : '登录面板'}</h1>
-          <p className="lede" style={{ marginTop: 8 }}>
+          <p className="lede">
             {isSetup
               ? '首次使用，先创建管理员。密码用于登录面板，不会发送到任何第三方；AccessKey 等凭据会另外用本机主密钥加密存储。'
               : '输入管理员账号进入控制台。连续失败 8 次会锁定 5 分钟。'}
