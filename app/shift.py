@@ -715,7 +715,7 @@ class Engine:
                 group, config, duty, others, ddns_text, failover_flag, slot_key
             )
         elif recovered and config.get("notify_on_recovery") == "1":
-            notify.send_all(config, messages.recovery(duty, ddns_text, group_name=name))
+            notify.send_all(config, messages.recovery(duty, ddns_text))
 
         return summary
 

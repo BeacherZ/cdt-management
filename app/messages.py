@@ -358,32 +358,27 @@ def recovery(
     ddns_status: str,
     headline: str = "当班实例疑被抢占，已自动恢复运行。",
     kind: str = "recovery",
-    group_name: str = "",
 ) -> notify.Message:
     """🟢 抢占恢复。单机保活拉起也用这套版式（脚本里没有单独的保活通知）。
 
-    换班组会带组名前缀（CDT 国际站 X2 抢占恢复报告），单机保活没有组名
-    （CDT 抢占恢复报告），用户从标题就能分辨，不再单独起「单机保活恢复报告」。
+    标题靠后缀区分来源，正文一致：单机保活「CDT 抢占恢复报告(单机保活)」、
+    联合换班「CDT 抢占恢复报告(联合换班)」。之前联合换班把组名塞在标题里、
+    单机保活没有前缀，两个标题长得太像，不好认。
     """
-    prefix = f"{group_name} " if group_name else ""
-    return _message(
-        kind,
-        f"🟢 <b>CDT {prefix}抢占恢复报告</b>",
-        f"CDT {prefix}抢占恢复报告",
-        "\n".join(
-            [
-                headline,
-                "",
-                f"🖥 {_label(server)}",
-                f"┃ 📦 实例：<code>{_instance(server)}</code>",
-                f"┃ 🌐 ＩＰ：{_ip(server)}",
-                f"┃ 📍 地域：{_region(server)}",
-                f"┃ ☁️ DDNS：{ddns_status}",
-                "┃ 🟢 状态：Running",
-                SEP,
-            ]
-        ),
-    )
+    scope = "单机保活" if kind == "keepalive" else "联合换班"
+    title = f"CDT 抢占恢复报告({scope})"
+    lines = [
+        headline,
+        "",
+        f"🖥 {_label(server)}",
+        f"┃ 📦 实例：<code>{_instance(server)}</code>",
+        f"┃ 🌐 ＩＰ：{_ip(server)}",
+        f"┃ 📍 地域：{_region(server)}",
+        f"┃ ☁️ DDNS：{ddns_status}",
+        "┃ 🟢 状态：Running",
+        SEP,
+    ]
+    return _message(kind, f"🟢 <b>{title}</b>", title, "\n".join(lines))
 
 
 def shift_error(

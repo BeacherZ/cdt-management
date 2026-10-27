@@ -239,7 +239,7 @@ class OtherReports(unittest.TestCase):
 
     def test_recovery(self):
         expected = (
-            "🟢 <b>CDT 抢占恢复报告</b>\n"
+            "🟢 <b>CDT 抢占恢复报告(联合换班)</b>\n"
             "\n"
             "当班实例疑被抢占，已自动恢复运行。\n"
             "\n"
@@ -257,11 +257,16 @@ class OtherReports(unittest.TestCase):
         message = messages.recovery(
             A, "⏸ DDNS 未启用", headline="实例疑被抢占，已自动恢复运行。", kind="keepalive"
         )
-        # 单机保活没有组名，标题是「CDT 抢占恢复报告」，靠缺少组名与换班组区分
+        # 单机保活标题后面挂「(单机保活)」，换班组是「(联合换班)」，
+        # 正文只有第一句不同，其余版式完全一样
         self.assertTrue(
-            message.html.startswith("🟢 <b>CDT 抢占恢复报告</b>\n\n实例疑被抢占")
+            message.html.startswith(
+                "🟢 <b>CDT 抢占恢复报告(单机保活)</b>\n\n实例疑被抢占"
+            )
         )
         self.assertEqual(message.kind, "keepalive")
+        self.assertEqual(message.title, "CDT 抢占恢复报告(单机保活)")
+        self.assertNotIn("当班实例", message.html)
 
     def test_shift_error(self):
         message = messages.shift_error(B, [A], 10)
