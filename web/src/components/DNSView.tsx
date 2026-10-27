@@ -77,15 +77,13 @@ export default function DNSView({
   const [saving, setSaving] = useState(false)
 
   const keepaliveIds = new Set(keepalives.map((item) => item.server_id))
+  // 第一项是「所有服务器」全量清单，下面两个大项只是同一批机器的不同视角（快捷入口）：
+  // 换班组会接管机器，所以这些机器不再重复出现在「单机保活」里。
   const groupedIds = new Set(
     groups.flatMap((group) => group.members.map((member) => member.server_id)),
   )
-  // 换班组会接管机器，这些机器只从「换班组」那一项走，不重复出现在实例列表里
   const keepaliveServers = servers.filter(
     (server) => keepaliveIds.has(server.id) && !groupedIds.has(server.id),
-  )
-  const idleServers = servers.filter(
-    (server) => !keepaliveIds.has(server.id) && !groupedIds.has(server.id),
   )
 
   async function submit() {
@@ -106,8 +104,9 @@ export default function DNSView({
         <div>
           <h1>DNS</h1>
           <p>
-            一条域名只绑一台机器（或一个换班组）。没绑的记录一律不动，换班/保活跑完只写自己绑的那条 ——
-            不会再出现几台机器抢同一个域名。
+            一条域名只绑一台机器（或一个换班组），但一台机器、一个换班组都可以挂多条域名。
+            没绑的记录一律不动；机器一开机，指向它的所有记录一起更新 —— 不会再出现几台机器抢同一个域名。
+            绑到单台机器就固定指它，不跟随换班组的轮换走。
           </p>
         </div>
         <div className="page-actions">
@@ -229,19 +228,21 @@ export default function DNSView({
                     }}
                   >
                     <option value="">不绑定（这条记录不会被动）</option>
-                    {keepaliveServers.length > 0 && (
-                      <optgroup label="单机保活">
-                        {keepaliveServers.map((server) => (
-                          <option key={server.id} value={`server:${server.id}`}>
+                    {/* 第一项：所有服务器，全量铺开（顺序沿用「服务器」页里的手动排序）。
+                        记录名不稀缺，随便哪台机器都能挂一条域名，不必先编进保活或换班组。 */}
+                    {servers.length > 0 && (
+                      <optgroup label="所有服务器">
+                        {servers.map((server) => (
+                          <option key={`all-${server.id}`} value={`server:${server.id}`}>
                             {server.label}
                           </option>
                         ))}
                       </optgroup>
                     )}
-                    {idleServers.length > 0 && (
-                      <optgroup label="非保活实例">
-                        {idleServers.map((server) => (
-                          <option key={server.id} value={`server:${server.id}`}>
+                    {keepaliveServers.length > 0 && (
+                      <optgroup label="单机保活">
+                        {keepaliveServers.map((server) => (
+                          <option key={`ka-${server.id}`} value={`server:${server.id}`}>
                             {server.label}
                           </option>
                         ))}
@@ -250,7 +251,7 @@ export default function DNSView({
                     {groups.length > 0 && (
                       <optgroup label="换班组">
                         {groups.map((group) => (
-                          <option key={group.id} value={`group:${group.id}`}>
+                          <option key={`g-${group.id}`} value={`group:${group.id}`}>
                             {group.name}
                           </option>
                         ))}

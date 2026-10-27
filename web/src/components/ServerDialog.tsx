@@ -205,7 +205,7 @@ export default function ServerDialog({
             value={form.threshold_gb}
             onChange={(event) => update('threshold_gb', Number(event.target.value))}
           />
-          <div className="hint">达到该值即触发换班；全部成员都达标则全局熔断。</div>
+          <div className="hint">达到该值即触发换班；找不到没超的成员（含状态读不到）则全局熔断停机。</div>
         </div>
       </div>
 

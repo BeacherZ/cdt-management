@@ -7,6 +7,10 @@ import type { SiteType } from './types'
  * 国际站（alibabacloud.com 注册的账号）选不到。这是两个站点最实际的差别之一。
  *
  * 卡片、列表都从这里取中文名——不要再把 ap-northeast-1 这种 API 代码直接摆给用户看。
+ *
+ * 这里是「能买到的地域」，用于新建服务器下拉；后端通知的翻译全表见
+ * app/messages.py 的 REGION_LABELS，那张表还包含已关停 / 本地地域（只用于翻译老机器）。
+ * 新增能买的地域时两处都要加，否则通知和卡片会一个中文一个代码。
  */
 export type RegionOption = {
   value: string
@@ -22,7 +26,9 @@ export const REGIONS: RegionOption[] = [
   { value: 'cn-zhangjiakou', label: '华北 3（张家口）', group: '中国大陆', sites: ['china'] },
   { value: 'cn-qingdao', label: '华北 1（青岛）', group: '中国大陆', sites: ['china'] },
   { value: 'cn-huhehaote', label: '华北 5（呼和浩特）', group: '中国大陆', sites: ['china'] },
+  { value: 'cn-wulanchabu', label: '华北 6（乌兰察布）', group: '中国大陆', sites: ['china'] },
   { value: 'cn-shenzhen', label: '华南 1（深圳）', group: '中国大陆', sites: ['china'] },
+  { value: 'cn-heyuan', label: '华南 2（河源）', group: '中国大陆', sites: ['china'] },
   { value: 'cn-guangzhou', label: '华南 3（广州）', group: '中国大陆', sites: ['china'] },
   { value: 'cn-chengdu', label: '西南 1（成都）', group: '中国大陆', sites: ['china'] },
   { value: 'cn-hongkong', label: '中国香港', group: '港澳与海外', sites: ['china', 'international'] },
@@ -32,17 +38,21 @@ export const REGIONS: RegionOption[] = [
   { value: 'ap-southeast-5', label: '印度尼西亚（雅加达）', group: '亚太', sites: ['china', 'international'] },
   { value: 'ap-southeast-6', label: '菲律宾（马尼拉）', group: '亚太', sites: ['china', 'international'] },
   { value: 'ap-southeast-7', label: '泰国（曼谷）', group: '亚太', sites: ['china', 'international'] },
+  { value: 'ap-southeast-8', label: '马来西亚（柔佛）', group: '亚太', sites: ['international'] },
   { value: 'ap-northeast-1', label: '日本（东京）', group: '亚太', sites: ['china', 'international'] },
   { value: 'ap-northeast-2', label: '韩国（首尔）', group: '亚太', sites: ['china', 'international'] },
   { value: 'ap-south-1', label: '印度（孟买）', group: '亚太', sites: ['china', 'international'] },
   { value: 'us-west-1', label: '美国（硅谷）', group: '北美', sites: ['china', 'international'] },
   { value: 'us-east-1', label: '美国（弗吉尼亚）', group: '北美', sites: ['china', 'international'] },
+  { value: 'na-south-1', label: '墨西哥', group: '北美', sites: ['international'] },
+  { value: 'sa-east-1', label: '巴西（圣保罗）', group: '南美', sites: ['international'] },
   { value: 'eu-west-1', label: '英国（伦敦）', group: '欧洲', sites: ['china', 'international'] },
   { value: 'eu-central-1', label: '德国（法兰克福）', group: '欧洲', sites: ['china', 'international'] },
   { value: 'me-east-1', label: '阿联酋（迪拜）', group: '中东', sites: ['china', 'international'] },
+  { value: 'me-central-1', label: '沙特阿拉伯（利雅得）', group: '中东', sites: ['international'] },
 ]
 
-export const GROUP_ORDER = ['中国大陆', '港澳与海外', '亚太', '北美', '欧洲', '中东']
+export const GROUP_ORDER = ['中国大陆', '港澳与海外', '亚太', '北美', '南美', '欧洲', '中东']
 
 export const DEFAULT_REGION = 'cn-hongkong'
 

@@ -124,8 +124,9 @@ CREATE TABLE IF NOT EXISTS dns_records (
     last_at     INTEGER NOT NULL DEFAULT 0,
     updated_at  INTEGER NOT NULL DEFAULT 0
 );
--- 一个目标只允许占一条记录，否则通知里到底报哪条、界面上到底指向谁都会含糊
-CREATE UNIQUE INDEX IF NOT EXISTS idx_dns_target
+-- 一个目标可以挂多条记录（一台机器挂 www、api 多个域名），所以这里只是查询索引，
+-- 不能带 UNIQUE。老库里那个 idx_dns_target 是唯一索引，由 _migrate() 删掉。
+CREATE INDEX IF NOT EXISTS idx_dns_target_lookup
     ON dns_records(target_kind, target_id) WHERE target_kind <> '';
 
 CREATE TABLE IF NOT EXISTS events (
@@ -279,6 +280,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
         for name, ddl in columns.items():
             if name not in existing:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+
+    # 老库上 idx_dns_target 是「一个目标只能占一条记录」的 UNIQUE 索引，
+    # 现在一个目标可以挂多条域名，必须把它拆掉，否则第二条绑不上。
+    conn.execute("DROP INDEX IF EXISTS idx_dns_target")
 
 
 def init_db() -> None:

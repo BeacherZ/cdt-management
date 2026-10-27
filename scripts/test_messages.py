@@ -64,7 +64,7 @@ class ShiftDone(unittest.TestCase):
             "┃ 🏷 别称：AliCloud-CDT-AM\n"
             "┃ 📦 实例：<code>i-aaa111</code>\n"
             "┃ 🌐 ＩＰ：198.51.100.1\n"
-            "┃ 📍 地域：cn-hongkong\n"
+            "┃ 📍 地域：中国香港\n"
             "┃ ☁️ DDNS：✅ 已同步\n"
             "┃ 🟢 状态：Running\n"
             f"{SEP}\n"
@@ -72,7 +72,7 @@ class ShiftDone(unittest.TestCase):
             "┃ 🏷 别称：AliCloud-CDT-PM\n"
             "┃ 📦 实例：<code>i-bbb222</code>\n"
             "┃ 🌐 ＩＰ：198.51.100.2\n"
-            "┃ 📍 地域：cn-hongkong\n"
+            "┃ 📍 地域：中国香港\n"
             "┃ ⚪ 状态：Stopped (StopCharging)\n"
             f"{SEP}"
         )
@@ -173,7 +173,7 @@ class ShiftFailover(unittest.TestCase):
             "┃ 🏷 别称：AliCloud-CDT-PM\n"
             "┃ 📦 实例：<code>i-bbb222</code>\n"
             "┃ 🌐 ＩＰ：198.51.100.2\n"
-            "┃ 📍 地域：cn-hongkong\n"
+            "┃ 📍 地域：中国香港\n"
             "┃ ☁️ DDNS：✅ 已同步\n"
             "┃ 🟢 状态：Running\n"
             f"{SEP}\n"
@@ -181,7 +181,7 @@ class ShiftFailover(unittest.TestCase):
             "┃ 🏷 别称：AliCloud-CDT-AM\n"
             "┃ 📦 实例：<code>i-aaa111</code>\n"
             "┃ 🌐 ＩＰ：198.51.100.1\n"
-            "┃ 📍 地域：cn-hongkong\n"
+            "┃ 📍 地域：中国香港\n"
             "┃ 📈 已用：190.00 GB\n"
             "┃ ⚪ 状态：Stopped (StopCharging)\n"
             f"{SEP}"
@@ -211,7 +211,7 @@ class Breaker(unittest.TestCase):
         self.assertTrue(message.html.startswith("🚨 <b>CDT 全局熔断报告</b>\n\n"))
         self.assertIn("⚠ <b>警告：双实例流量均已到达到阈值，“全局熔断”，均已节省停机。</b>", message.html)
         self.assertIn(
-            "🖥 AliCloud-CDT-AM\n┃ 📦 实例：<code>i-aaa111</code>\n┃ 📍 地域：cn-hongkong\n┃ 📈 已用：12.00 GB\n",
+            "🖥 AliCloud-CDT-AM\n┃ 📦 实例：<code>i-aaa111</code>\n┃ 📍 地域：中国香港\n┃ 📈 已用：12.00 GB\n",
             message.html,
         )
 
@@ -231,7 +231,7 @@ class OtherReports(unittest.TestCase):
             "🖥 AliCloud-CDT-PM\n"
             "┃ 📦 实例：<code>i-bbb222</code>\n"
             "┃ 🌐 ＩＰ：198.51.100.2\n"
-            "┃ 📍 地域：cn-hongkong\n"
+            "┃ 📍 地域：中国香港\n"
             "┃ 🔴 状态：Stopped (StopCharging)\n"
             f"{SEP}"
         )
@@ -246,7 +246,7 @@ class OtherReports(unittest.TestCase):
             "🖥 AliCloud-CDT-AM\n"
             "┃ 📦 实例：<code>i-aaa111</code>\n"
             "┃ 🌐 ＩＰ：198.51.100.1\n"
-            "┃ 📍 地域：cn-hongkong\n"
+            "┃ 📍 地域：中国香港\n"
             "┃ ☁️ DDNS：✅ 已同步\n"
             "┃ 🟢 状态：Running\n"
             f"{SEP}"
@@ -275,18 +275,41 @@ class OtherReports(unittest.TestCase):
         # 就跟在实例行后面）
         cases = {
             "换班完成": messages.shift_done(A, [B], "AM", "✅ 已同步"),
-            "临时换班": messages.shift_failover(B, [A], [], "✅ 已同步"),
+            "故障转移": messages.shift_failover(B, [A], [], "✅ 已同步"),
             "全局熔断": messages.breaker([{**A, "instance_status": "Stopped"}, B]),
-            "超限停机": messages.limit_stop(B),
+            "全局熔断（单台）": messages.limit_stop(B),
             "抢占恢复": messages.recovery(A, "✅ 已同步"),
             "换班异常": messages.shift_error(B, [A], 10),
         }
         for name, message in cases.items():
             with self.subTest(kind=name):
-                self.assertIn("┃ 📍 地域：cn-hongkong", message.html)
+                self.assertIn("┃ 📍 地域：中国香港", message.html)
         # 地域缺失时给「-」，不能留空
         bare = messages.recovery({k: v for k, v in A.items() if k != "region_id"}, "✅ 已同步")
         self.assertIn("┃ 📍 地域：-", bare.html)
+
+    def test_region_code_is_translated(self):
+        # 阿里云国际站的 RegionId 是 ap-northeast-1 这类代码，通知里要翻成人话，
+        # 不能把代码直接摆给用户看（前端卡片用的是同一张映射表）
+        cases = {
+            "ap-northeast-1": "日本（东京）",
+            "cn-hongkong": "中国香港",
+            "cn-wulanchabu": "华北 6（乌兰察布）",
+            "cn-heyuan": "华南 2（河源）",
+            "ap-southeast-8": "马来西亚（柔佛）",
+            "na-south-1": "墨西哥",
+            "sa-east-1": "巴西（圣保罗）",
+            "me-central-1": "沙特阿拉伯（利雅得）",
+        }
+        for code, label in cases.items():
+            with self.subTest(region=code):
+                message = messages.recovery({**A, "region_id": code}, "✅ 已同步")
+                self.assertIn(f"┃ 📍 地域：{label}", message.html)
+        # 映射表里没有的代码原样显示，不猜测
+        unknown = {**A, "region_id": "xx-made-up-1"}
+        self.assertIn(
+            "┃ 📍 地域：xx-made-up-1", messages.recovery(unknown, "✅ 已同步").html
+        )
 
     def test_daily_report(self):
         message = messages.daily_report([A, B], "2026-10-26 23:58")
@@ -296,7 +319,7 @@ class OtherReports(unittest.TestCase):
             "🖥 AliCloud-CDT-AM\n"
             "┃ 📦 实例：<code>i-aaa111</code>\n"
             "┃ 🌐 ＩＰ：198.51.100.1\n"
-            "┃ 📍 地域：cn-hongkong\n"
+            "┃ 📍 地域：中国香港\n"
             "┃ 📈 已用：12.00 GB\n"
             "┃ 💾 剩余：188.00 GB\n"
             "┃ 🔥 使用率：6.00%  🟢 正常\n"
@@ -304,7 +327,7 @@ class OtherReports(unittest.TestCase):
             "🖥 AliCloud-CDT-PM\n"
             "┃ 📦 实例：<code>i-bbb222</code>\n"
             "┃ 🌐 ＩＰ：198.51.100.2\n"
-            "┃ 📍 地域：cn-hongkong\n"
+            "┃ 📍 地域：中国香港\n"
             "┃ 📈 已用：190.00 GB\n"
             "┃ 💾 剩余：10.00 GB\n"
             "┃ 🔥 使用率：95.00%  🔴 危险\n"

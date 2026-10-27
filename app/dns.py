@@ -186,6 +186,22 @@ def desired_ip(target: dict[str, Any] | None) -> str:
     return ip if ddns.is_public_ipv4(ip) else ""
 
 
+def is_failure(status: str) -> bool:
+    """这条状态算不算失败（❌ / ⚠️ 开头）。⏸ 是「没做事」，不算失败。"""
+    text = str(status or "")
+    return text.startswith("❌") or text.startswith("⚠️")
+
+
+def is_success(text: str) -> bool:
+    """汇总文案是否整体成功：只要混进一条 ❌ / ⚠️ 就不算。
+
+    combine_status 拼出来的「✅ 已同步 / ❌ 更新失败」开头也是 ✅，
+    单看前缀会把它当成功，这里把整串都扫一遍。
+    """
+    text = str(text or "")
+    return text.startswith("✅") and "❌" not in text and "⚠️" not in text
+
+
 def state_of(row: dict[str, Any], target: dict[str, Any] | None) -> str:
     if target is None:
         return STATE_UNBOUND
@@ -194,10 +210,12 @@ def state_of(row: dict[str, Any], target: dict[str, Any] | None) -> str:
         return STATE_IDLE
     last = str(row.get("last_ip") or "")
     status = str(row.get("last_status") or "")
+    # 失败优先判：失败路径故意保留上次成功的 IP（界面上要能看出「现在指向旧地址」），
+    # 于是 last 永远不等于 live —— 先比 IP 就会把失败降级成「待同步」，错误详情看不见。
+    if is_failure(status):
+        return STATE_ERROR
     if last == live and status.startswith("✅"):
         return STATE_SYNCED
-    if status and not status.startswith("✅") and last == live:
-        return STATE_ERROR
     return STATE_PENDING
 
 
@@ -242,10 +260,44 @@ def sync_record(
     result = ddns.sync(ip, scoped, force=force, record=record)
     if result.status in (ddns.STATUS_SYNCED, ddns.STATUS_UNCHANGED):
         repo.set_dns_state(record, ip, result.status)
+        # 成功后清掉失败去重标记（含手动「立即同步」这条路径），
+        # 否则下一次真失败时会被历史标记压住，界面不再提醒
+        repo.clear_flags_like(f"dns_fail:{record}:")
     else:
         # 失败时保留上次成功的 IP：界面上「现在解析到哪」要能看出来是旧的
         repo.set_dns_state(record, row.get("last_ip") or "", result.status)
     return result
+
+
+def combine_status(statuses: list[str]) -> str:
+    """多条记录的结果压成一句话，塞进事件进度和通知里的「DDNS：…」。"""
+    if not statuses:
+        return STATUS_UNBOUND
+    unique = list(dict.fromkeys(statuses))
+    if len(unique) == 1:
+        return unique[0] if len(statuses) == 1 else f"{unique[0]}（{len(statuses)} 条）"
+    # 结果不一致时逐条列出来，别用一个「已同步」盖掉某条的失败
+    return " / ".join(unique)
+
+
+def sync_target(
+    kind: str,
+    target_id: int,
+    config: dict[str, str],
+    ip: str | None = None,
+    force: bool = False,
+) -> tuple[list[str], list[str]]:
+    """把这个目标绑定的**全部**记录同步一遍，返回 (记录名列表, 每条的状态列表)。
+
+    一台机器可以挂好几个域名，开机时它们都得跟着指向这台机器；
+    换班组同理，轮到谁当班就把它绑的每一条都指过去。
+    文案用 combine_status() 汇总，多个目标合并同步时也能把状态拼在一起。
+    """
+    names = repo.dns_records_of(kind, int(target_id or 0))
+    if not names:
+        return [], []
+    statuses = [sync_record(name, config, ip=ip, force=force).status for name in names]
+    return names, statuses
 
 
 def reconcile(config: dict[str, str], force: bool = False) -> list[dict[str, Any]]:
@@ -280,13 +332,19 @@ def reconcile(config: dict[str, str], force: bool = False) -> list[dict[str, Any
         results.append(
             {"record": record, "target": target.get("label"), "ip": live, "status": result.status}
         )
-        if result.status in (ddns.STATUS_SYNCED, ddns.STATUS_UNCHANGED) and previous != live:
-            repo.add_event(
-                "dns",
-                f"{record}：解析已更新",
-                f"{previous or '—'} → {live}（{target.get('label')}）",
-            )
-        elif result.status not in (ddns.STATUS_SYNCED, ddns.STATUS_UNCHANGED):
+        if result.status in (ddns.STATUS_SYNCED, ddns.STATUS_UNCHANGED):
+            # 这次成功了就把这条记录历史上所有失败标记清掉。
+            # 以前只清「当前这种失败」的标记，换一种失败方式时旧的告警标记永远留着，
+            # 同一类失败第二次出现就不再提醒了。注意要在「IP 变了」分支之前清，
+            # 否则恢复后的第一次成功走的正是那条路，标记留在原地。
+            repo.clear_flags_like(f"dns_fail:{record}:")
+            if previous != live:
+                repo.add_event(
+                    "dns",
+                    f"{record}：解析已更新",
+                    f"{previous or '—'} → {live}（{target.get('label')}）",
+                )
+        else:
             # 同一类失败不要每分钟刷一条
             flag = f"dns_fail:{record}:{result.status}"
             if not repo.get_flag(flag):
@@ -297,8 +355,6 @@ def reconcile(config: dict[str, str], force: bool = False) -> list[dict[str, Any
                     result.detail or target.get("label") or "",
                     level="warning",
                 )
-        else:
-            repo.clear_flag(f"dns_fail:{record}:{result.status}")
     return results
 
 
@@ -325,16 +381,17 @@ def bind(record: str, kind: str, target_id: int) -> dict[str, Any]:
     if kind == TARGET_GROUP and repo.get_group(int(target_id)) is None:
         raise ValueError("换班组不存在")
 
-    # 这个目标原来占的那条会被松掉，避免一个目标挂两个域名
-    previous = repo.dns_record_of(kind, int(target_id))
+    # 一条记录只属于一个目标；但一个目标可以挂多条记录 —— 换机器只是把这一条挪走，
+    # 目标身上其它域名原样留着（以前这里会把同目标的另一条松掉）。
     repo.bind_dns_record(record, kind, int(target_id))
     target = target_info(kind, int(target_id))
     label = (target or {}).get("label") or f"#{target_id}"
+    records = repo.dns_records_of(kind, int(target_id))
     detail = f"{record} → {label}"
-    if previous and previous != record:
-        detail += f"（原 {previous} 已解绑）"
+    if len(records) > 1:
+        detail += f"（该目标现有 {len(records)} 条记录）"
     repo.add_event("dns", "DNS 绑定已更新", detail)
-    return {"record": record, "target": target, "released": previous if previous != record else ""}
+    return {"record": record, "target": target, "records": records}
 
 
 # --------------------------------------------------------------------------
@@ -342,7 +399,8 @@ def bind(record: str, kind: str, target_id: int) -> dict[str, Any]:
 # --------------------------------------------------------------------------
 
 def snapshot(config: dict[str, str], now_ts: float | None = None) -> dict[str, Any]:
-    sync_registry(config)
+    # 只读：记录名与表的同步在启动（main）和保存设置时做，
+    # 否则每次打开 DNS 页（GET）都会写一次库。
     servers = _servers()
     now_ts = time.time() if now_ts is None else now_ts
 
@@ -373,16 +431,16 @@ def snapshot(config: dict[str, str], now_ts: float | None = None) -> dict[str, A
     }
 
 
-def record_books() -> dict[str, dict[str, Any]]:
-    """每台服务器 / 每个换班组当前占着哪条记录，界面用来显示「已绑定 xxx」。"""
-    server_map: dict[int, str] = {}
-    group_map: dict[int, str] = {}
+def record_books() -> dict[str, dict[int, list[str]]]:
+    """每台服务器 / 每个换班组当前占着哪些记录，界面用来显示「已绑定 xxx」。"""
+    server_map: dict[int, list[str]] = {}
+    group_map: dict[int, list[str]] = {}
     for row in repo.list_dns_records():
         kind = row.get("target_kind") or ""
         if not kind:
             continue
         if kind == TARGET_SERVER:
-            server_map[int(row["target_id"])] = str(row["record"])
+            server_map.setdefault(int(row["target_id"]), []).append(str(row["record"]))
         elif kind == TARGET_GROUP:
-            group_map[int(row["target_id"])] = str(row["record"])
+            group_map.setdefault(int(row["target_id"]), []).append(str(row["record"]))
     return {"servers": server_map, "groups": group_map}

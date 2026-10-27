@@ -226,6 +226,22 @@ def _error(status: int, code: str, message: str) -> JSONResponse:
 # 序列化
 # --------------------------------------------------------------------------
 
+def _validate_group_timetable(payload: dict[str, Any]) -> None:
+    """时刻表只有「全组都填」和「全组都不填」两种合法状态。
+
+    只填一部分时引擎的 _is_timetable_group 会判定「没用时刻表」，静默退回
+    按小时轮换，界面上却还显示着时刻 —— 宁可拒绝保存，也不让它悄悄降级。
+    """
+    members = [m for m in (payload.get("members") or []) if m.get("enabled", True)]
+    filled = [
+        m
+        for m in members
+        if str(m.get("start_time") or "").strip() and str(m.get("end_time") or "").strip()
+    ]
+    if filled and len(filled) != len(members):
+        raise ValueError("要么每台成员都填起止时刻，要么全部留空（按班次时长轮换）")
+
+
 def _managed_map() -> dict[int, dict[str, Any]]:
     """哪台服务器被哪个自动化流程接管。
 
@@ -259,7 +275,7 @@ def _managed_map() -> dict[int, dict[str, Any]]:
 def server_summary(
     server: dict[str, Any],
     managed: dict[int, dict[str, Any]] | None = None,
-    dns_map: dict[int, str] | None = None,
+    dns_map: dict[int, list[str]] | None = None,
 ) -> dict[str, Any]:
     used = server.get("traffic_used")
     quota = float(server.get("quota_gb") or 0) or 1
@@ -286,8 +302,8 @@ def server_summary(
         "managed": owner,
         # 本月账单 + 账户余额快照（慢数据，后台定时刷新，读库不出网）
         "billing": billing.summary_of(server),
-        # 绑定的 DNS 域名；空串表示这条机器没占任何记录
-        "dns_record": (dns_map or {}).get(int(server.get("id") or 0), ""),
+        # 绑定的 DNS 域名（可能有多条，用顿号连起来）；空串表示这台机器没占任何记录
+        "dns_record": "、".join((dns_map or {}).get(int(server.get("id") or 0), [])),
     }
 
 
@@ -296,7 +312,7 @@ def _group_payload(
     config: dict[str, str],
     now_ts: float,
     managed: dict[int, dict[str, Any]] | None = None,
-    books: dict[str, dict[int, str]] | None = None,
+    books: dict[str, dict[int, list[str]]] | None = None,
 ) -> dict[str, Any]:
     members = active_members(group)
     picked = duty_at(group, now_ts)
@@ -336,8 +352,8 @@ def _group_payload(
         "name": group.get("name") or "",
         "enabled": bool(group.get("enabled")),
         "failover_enabled": bool(group.get("failover_enabled")),
-        # 绑定关系在 DNS 页维护，这里只是读出来显示
-        "ddns_record": (books or {}).get("groups", {}).get(int(group["id"]), ""),
+        # 绑定关系在 DNS 页维护，这里只是读出来显示（可能有多条，顿号连接）
+        "ddns_record": "、".join((books or {}).get("groups", {}).get(int(group["id"]), [])),
         "anchor_at": group.get("anchor_at") or 0,
         "cycle_hours": round(sum(float(m["hours"]) for m in members), 2),
         "members": member_payload,
@@ -457,7 +473,10 @@ def register(app: FastAPI) -> None:
                 server_summary(s, managed, books.get("servers")) for s in repo.list_servers()
             ],
             "keepalives": [
-                {**item, "dns_record": books.get("servers", {}).get(int(item["server_id"]), "")}
+                {
+                    **item,
+                    "dns_record": "、".join(books.get("servers", {}).get(int(item["server_id"]), [])),
+                }
                 for item in keepalives
             ],
             "groups": [
@@ -581,6 +600,7 @@ def register(app: FastAPI) -> None:
     @app.post("/api/v1/groups")
     def save_group(request: Request, payload: dict[str, Any], user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
         require_csrf(request)
+        _validate_group_timetable(payload)
         return {"id": repo.upsert_group(payload)}
 
     @app.delete("/api/v1/groups/{group_id}")
@@ -849,6 +869,9 @@ def register(app: FastAPI) -> None:
                 if str(before.get(key, "")) != str(value) and key not in SETTING_LABELS_SKIP
             ]
             repo.set_settings(updates)
+            if "ddns_records" in updates:
+                # 记录名列表变了，把表里的行同步一遍（增的补上、删的连绑定一起清掉）
+                dns.sync_registry(repo.get_settings())
             if changed:
                 repo.add_event("system", "配置已更新", _setting_labels(changed))
 

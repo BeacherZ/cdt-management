@@ -26,6 +26,10 @@ PHASE_ERROR = "error"
 
 TRANSIENT_STATUS = {"Starting", "Pending", "Stopping"}
 
+# 同一台机器在同一个班次里重复下发停机指令的最小间隔（秒）。
+# 只有在「状态读不到、库里看着还在跑」时才会重复触发，给它一个节流。
+_BREAKER_STOP_COOLDOWN = 120
+
 
 # --------------------------------------------------------------------------
 # 轮换计算
@@ -65,7 +69,7 @@ def _duty_at_timetable(group: dict[str, Any], now_ts: float) -> tuple[dict[str, 
     返回 (当班成员, 该班次开始时间戳)。开始时间戳用于 slot_key 去重与通知时间段显示。
     """
     members = active_members(group)
-    tz_name = str(group.get("_timezone") or "Asia/Shanghai")
+    tz_name = _group_timezone(group)
     now = dt.datetime.fromtimestamp(now_ts, _timezone(tz_name))
     minute_of_day = now.hour * 60 + now.minute
 
@@ -160,7 +164,7 @@ def next_switch_at(group: dict[str, Any], now_ts: float) -> float | None:
 def _next_switch_timetable(group: dict[str, Any], now_ts: float) -> float:
     """固定时刻表模式：下一班开始时刻 = 当前班次的结束时刻。"""
     members = active_members(group)
-    tz_name = str(group.get("_timezone") or "Asia/Shanghai")
+    tz_name = _group_timezone(group)
     now = dt.datetime.fromtimestamp(now_ts, _timezone(tz_name))
     minute_of_day = now.hour * 60 + now.minute
 
@@ -431,14 +435,13 @@ class Engine:
                         server_id=int(server["id"]),
                     )
 
-        # 2) 当班超限 → 找一台没超的接班
+        # 2) 当班超限 → 找一台没超的接班；找不到就停机，绝不让超限的当班继续跑
         failover = False
         breaker = False
+        breaker_reason = ""
         if _over_threshold(duty) and group.get("failover_enabled") and not duty_error:
             candidates = [s for s in healthy_others if not _over_threshold(s)]
-            if healthy_others and not candidates:
-                breaker = True
-            elif candidates:
+            if candidates:
                 replacement = min(candidates, key=lambda s: float(s.get("traffic_used") or 0))
                 repo.add_event(
                     "failover",
@@ -453,19 +456,22 @@ class Engine:
                 duty = replacement
                 failover = True
             else:
-                flag = f"conservative:{group_id}:{slot_key}"
-                if not repo.get_flag(flag):
-                    repo.set_flag(flag)
-                    repo.add_event(
-                        "warning",
-                        f"{name}：其他成员状态读取失败，保守维持当班",
-                        "本轮不做故障转移",
-                        level="warning",
-                        group_id=group_id,
-                    )
+                # 找不到替班的两种情形：其他成员都超了，或者其他成员状态读不到。
+                # 两种都不该让已经超限的当班继续跑 —— 早先「读不到就保守维持当班」，
+                # 等于让一台已经到阈值的机器接着烧流量，与「限流阈值」本身就矛盾了。
+                # 一律按全局熔断处理：全部节省停机。
+                breaker = True
+                if not healthy_others:
+                    breaker_reason = "其他成员状态读取失败，无法确认可接班的成员"
+                elif len(healthy_others) < len(others):
+                    breaker_reason = "可读取的成员流量均已超限，其余成员状态读取失败"
+                else:
+                    breaker_reason = "全部成员流量超限"
 
         if breaker:
-            return self._handle_breaker(group, config, now, slot_key, duty, others, notify_enabled)
+            return self._handle_breaker(
+                group, config, now, slot_key, duty, others, notify_enabled, breaker_reason
+            )
 
         if _over_threshold(duty) and not failover:
             return self._handle_limit_stop(group, config, now, slot_key, duty, others, notify_enabled)
@@ -623,8 +629,13 @@ class Engine:
             # DDNS 只有「已设置且已绑定」时才要求同步成功，否则不卡流程：
             #   - 未启用 / 未绑定（⏸ 开头）→ 跳过确认，不阻塞
             #   - 已绑定但同步失败（❌ / ⚠️ 开头）→ 本轮不算就绪，等下一轮重试
-            ddns_bound = bool(repo.dns_record_of(dns.TARGET_GROUP, group_id))
-            ddns_ok = (not ddns_enabled) or (not ddns_bound) or ddns_text.startswith("✅")
+            # 换班组绑的域名和当班机器自己绑的域名都算：任何一条失败都要重试
+            ddns_bound = bool(repo.dns_records_of(dns.TARGET_GROUP, group_id)) or bool(
+                repo.dns_records_of(dns.TARGET_SERVER, int(duty["id"]))
+            )
+            # 一台机器可能挂着好几条域名，汇总文案「✅ 已同步 / ❌ 更新失败」开头也是 ✅，
+            # 单看前缀会把「有一条没指过去」当成全部成功，于是事件打完成、通知照发。
+            ddns_ok = (not ddns_enabled) or (not ddns_bound) or dns.is_success(ddns_text)
             if not previously_settled:
                 repo.add_event_progress(event_id, f"DDNS：{ddns_text}", once=True)
 
@@ -718,31 +729,52 @@ class Engine:
         duty: dict[str, Any],
         others: list[dict[str, Any]],
         notify_enabled: bool,
+        reason: str = "",
     ) -> dict[str, Any]:
         group_id = int(group["id"])
         name = group.get("name")
         everyone = [duty, *others]
+        # 为什么判熔断：其他成员都超了，或者根本读不到别人的状态。
+        # 两者都必须停机，只是给用户看的说法不能一样 —— 读不到时我们并不知道
+        # 别人用了多少流量，写成「N 台流量均已达到阈值」就是编造。
+        why = reason or "全部成员流量超限"
 
         # 本班次若已有进行中的换班事件，熔断要把它关掉，否则前端永远转圈
         run = repo.get_run(group_id, slot_key) or {}
         if int(run.get("event_id") or 0):
-            repo.add_event_progress(int(run["event_id"]), "全部成员流量超限，触发全局熔断")
+            repo.add_event_progress(int(run["event_id"]), f"{why}，触发全局熔断")
             repo.finish_event(int(run["event_id"]), "error")
 
         for server in everyone:
             # 已经物理停机就不再下指令（含 Not-applicable，避免死循环）
-            if not _is_stopped_any_mode(server):
-                try:
-                    aliyun.stop_instance(server, "StopCharging")
-                except Exception as exc:  # noqa: BLE001
+            if _is_stopped_any_mode(server):
+                continue
+            server_id = int(server["id"])
+            # 状态读不到的成员会一直「看起来在跑」：不加节流，每轮巡检都要重发一次
+            # 停机指令、再刷一条失败事件。同一台 120 秒内只发一次。
+            stamp = f"breaker_stop:{group_id}:{slot_key}:{server_id}"
+            age = repo.flag_age(stamp)
+            if 0 <= age < _BREAKER_STOP_COOLDOWN:
+                continue
+            try:
+                aliyun.stop_instance(server, "StopCharging")
+                repo.clear_flag(f"breaker_stop_err:{group_id}:{slot_key}:{server_id}")
+            except Exception as exc:  # noqa: BLE001
+                flag = f"breaker_stop_err:{group_id}:{slot_key}:{server_id}"
+                if not repo.get_flag(flag):
+                    repo.set_flag(flag)
                     repo.add_event(
                         "error",
                         f"{name}：熔断停机失败",
                         f"{server.get('label')}：{exc}",
                         level="error",
                         group_id=group_id,
-                        server_id=int(server["id"]),
+                        server_id=server_id,
                     )
+            finally:
+                # 无论成败都重新计时，避免每轮都往阿里云打一次
+                repo.clear_flag(stamp)
+                repo.set_flag(stamp)
 
         repo.upsert_run(
             group_id,
@@ -751,7 +783,7 @@ class Engine:
             event_id=0,
             duty_server_id=int(duty["id"]),
             standby_server_ids=_encode_ids(others),
-            note="全部成员流量均超限",
+            note=why,
         )
 
         flag = f"breaker:{group_id}:{slot_key}"
@@ -761,12 +793,12 @@ class Engine:
             # _all_stopped_any_mode 判定为 False，本轮不发，等下一轮 _refresh
             # 经 API 确认全部 Stopped 后再发，避免「指令下发≠状态到位」就误报。
             if _all_stopped_any_mode(everyone):
-                notify.send_all(config, messages.breaker(everyone, group_name=name))
+                notify.send_all(config, messages.breaker(everyone, group_name=name, note=reason))
                 repo.set_flag(flag)
                 repo.add_event(
                     "breaker",
                     f"{name}：全局熔断",
-                    f"{len(everyone)} 台成员全部超限，{messages.stop_tail(everyone)}",
+                    f"{why}，{messages.stop_tail(everyone)}",
                     level="error",
                     group_id=group_id,
                 )
@@ -888,17 +920,35 @@ class Engine:
 
     # -- DDNS -------------------------------------------------------------
     def _sync_ddns(
-        self, server: dict[str, Any], config: dict[str, str], kind: str, target_id: int
-    ) -> ddns.DDNSResult:
-        """把「这台机器正在跑」写进它绑定的那条记录。
+        self,
+        server: dict[str, Any],
+        config: dict[str, str],
+        kind: str,
+        target_id: int,
+        ip: str | None = None,
+    ) -> str:
+        """把「这台机器正在跑」写进它该占的记录，返回一句汇总状态。
 
-        没绑就没有记录可写，返回「未绑定」而不是偷偷用第一条 —— 以前就是那样，
-        两台机器抢同一个域名，谁最后跑完谁说了算。
+        同步的不止一条：
+          - 目标自己绑的（换班组 → 该组绑的域名；单机 → 这台机器绑的域名）
+          - 换班组当班时，还要把**这台机器自己**绑的域名一起指过来 ——
+            一台机器可能既在换班组里、又单独挂了别的域名，开机了就该都指向它
+        没绑任何记录时返回「⏸ 未绑定」。
+
+        ip 由调用方从刚查到的实时状态传进来：`server` 往往是轮询开始前的数据库
+        快照，实例停机时快照里的 public_ip 是空的，拿它去同步只会得到「IP 无效跳过」。
         """
-        record = repo.dns_record_of(kind, target_id)
-        if not record:
-            return ddns.DDNSResult(dns.STATUS_UNBOUND, "未在 DNS 页绑定记录")
-        return dns.sync_record(record, config, ip=str(server.get("public_ip") or ""))
+        ip = str(ip or server.get("public_ip") or "")
+        names, statuses = dns.sync_target(kind, target_id, config, ip=ip)
+        if kind == dns.TARGET_GROUP:
+            own_names, own_statuses = dns.sync_target(
+                dns.TARGET_SERVER, int(server.get("id") or 0), config, ip=ip
+            )
+            names = names + own_names
+            statuses = statuses + own_statuses
+        if not names:
+            return dns.STATUS_UNBOUND
+        return dns.combine_status(statuses)
 
     # -- 换班进行中的事件（动态化）----------------------------------------
     def _shift_event(self, group_id: int, slot_key: str, name: str, duty_label: str) -> int:
@@ -1043,8 +1093,14 @@ class Engine:
             dbmod.execute(
                 "UPDATE shift_groups SET anchor_at=? WHERE id=?", (new_anchor, group_id)
             )
+            fresh = repo.get_group(group_id) or group
+            # 平移后这一班也要打 manual 标记：和时刻表模式统一「手动切换不发通知」。
+            # 否则同样是点按钮，一种模式静默、另一种会推一条「换班完成」。
+            picked = duty_at(fresh, now_ts)
+            if picked is not None:
+                repo.upsert_run(group_id, str(picked[1]), manual=1)
             repo.add_event("manual", f"{group.get('name')}：手动换班", "已跳到下一台", group_id=group_id)
-            return self.reconcile_group(repo.get_group(group_id) or group, config, now, now_ts)
+            return self.reconcile_group(fresh, config, now, now_ts)
         finally:
             self._lock.release()
 
@@ -1205,13 +1261,51 @@ class Engine:
 # 工具
 # --------------------------------------------------------------------------
 
+_TZ_WARNED = False
+
+
 def _timezone(name: str) -> dt.tzinfo:
+    """时区名 → tzinfo。取不到就回落 +08:00，并大声警告一次。
+
+    回落静默是最坑的：容器里没装 tzdata 时 ZoneInfo 会抛 ZoneInfoNotFoundError，
+    看着一切正常，实际所有时刻都按北京时间算。
+    """
+    global _TZ_WARNED
     try:
         from zoneinfo import ZoneInfo
 
         return ZoneInfo(name)
     except Exception:
+        if not _TZ_WARNED:
+            _TZ_WARNED = True
+            log.warning("时区 %s 不可用（缺 tzdata？），临时按 UTC+08:00 计算", name)
         return dt.timezone(dt.timedelta(hours=8))
+
+
+_TZ_CACHE: dict[str, Any] = {"at": 0.0, "name": ""}
+
+
+def timezone_name() -> str:
+    """系统设置里的时区。duty_at 被界面 / DNS / 手动换班频繁调用，这里做 5 秒缓存。"""
+    now = time.time()
+    if _TZ_CACHE["name"] and now - float(_TZ_CACHE["at"]) < 5:
+        return str(_TZ_CACHE["name"])
+    try:
+        name = str(repo.get_setting("timezone") or "").strip() or "Asia/Shanghai"
+    except Exception:  # noqa: BLE001 - 读设置失败不该让轮换计算崩掉
+        name = "Asia/Shanghai"
+    _TZ_CACHE["at"] = now
+    _TZ_CACHE["name"] = name
+    return name
+
+
+def _group_timezone(group: dict[str, Any]) -> str:
+    """组上显式带的时区优先（引擎 reconcile 时塞的），否则读系统设置。
+
+    以前只有引擎塞了 `_timezone`，界面当班高亮、DNS 指向判定、手动换班拿到的
+    都是裸字典，一律回落到硬编码的 +08:00 —— 时区配成别的就和引擎错位。
+    """
+    return str(group.get("_timezone") or "").strip() or timezone_name()
 
 
 def _encode_ids(servers: list[dict[str, Any]]) -> str:

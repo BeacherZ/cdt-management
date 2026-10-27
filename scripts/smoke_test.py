@@ -556,14 +556,23 @@ row = {item["record"]: item for item in body["records"]}["cdt.example.com"]
 check("列表回显绑定目标", (row.get("target") or {}).get("kind") == "server", str(row)[:200])
 check("绑完之后 state 不再是 unbound", row["state"] in ("idle", "pending", "synced"), row["state"])
 
-# 一个目标只能占一条记录：改绑另一条，旧的那条必须自动松开
+# 一个目标可以挂多条记录：再绑一条，前面那条必须还在（一台机器多个域名）
 status, body = call(
     "POST", "/api/v1/dns/records/cdn.example.com/bind", {"kind": "server", "id": target}
 )
-check("同一目标改绑会释放上一条", body.get("released") == "cdt.example.com", str(body)[:200])
+check(
+    "同一目标可以再挂一条记录",
+    body.get("records") == ["cdt.example.com", "cdn.example.com"],
+    str(body)[:200],
+)
 status, body = call("GET", "/api/v1/dns")
 rows = {item["record"]: item for item in body["records"]}
-check("旧记录回到未绑定", rows["cdt.example.com"]["target"] is None, str(rows["cdt.example.com"])[:200])
+check(
+    "原来那条仍然绑着",
+    (rows["cdt.example.com"]["target"] or {}).get("id") == target
+    and (rows["cdn.example.com"]["target"] or {}).get("id") == target,
+    str(rows["cdt.example.com"])[:200],
+)
 
 # 绑到换班组
 status, body = call(

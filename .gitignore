@@ -17,3 +17,7 @@ web/dist/
 .vscode/
 test-data/
 test-smoke/
+
+# 截图回归跑出来的图不进货：仓库里只留 README 用的首页
+docs/screenshots/*
+!docs/screenshots/02-dashboard.png

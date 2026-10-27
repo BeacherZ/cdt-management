@@ -91,6 +91,25 @@ def clear_flag(key: str) -> None:
     db.execute("DELETE FROM flags WHERE key=?", (key,))
 
 
+def flag_age(key: str) -> float:
+    """这个标记是多久以前设的（秒）；不存在返回 -1，表示「可以立刻执行」。"""
+    row = db.query_one("SELECT created_at FROM flags WHERE key=?", (key,))
+    if row is None:
+        return -1.0
+    return time.time() - float(row["created_at"])
+
+
+def clear_flags_like(prefix: str) -> None:
+    """按前缀清一批标记（如 `dns_fail:a.example.com:` 的所有失败类型）。
+
+    用 substr 比较而不是 LIKE：记录名里允许多种字符，`_` 在 LIKE 里是通配符，
+    会把不该清的标记一起删掉。
+    """
+    db.execute(
+        "DELETE FROM flags WHERE substr(key, 1, ?) = ?", (len(prefix), prefix)
+    )
+
+
 # --------------------------------------------------------------------------
 # servers
 # --------------------------------------------------------------------------
@@ -324,11 +343,28 @@ def update_server_runtime(
             (traffic, now, server_id),
         )
     if status is not None:
-        db.execute(
-            "UPDATE servers SET instance_status=?, stopped_mode=?, public_ip=?, "
-            "status_checked_at=? WHERE id=?",
-            (status, stopped_mode or "", public_ip or "", now, server_id),
-        )
+        if public_ip:
+            db.execute(
+                "UPDATE servers SET instance_status=?, stopped_mode=?, public_ip=?, "
+                "status_checked_at=? WHERE id=?",
+                (status, stopped_mode or "", public_ip, now, server_id),
+            )
+        elif status.startswith("Stop") or "Releas" in status:
+            # 停机/释放后公网 IP 确实没了，清掉才对
+            db.execute(
+                "UPDATE servers SET instance_status=?, stopped_mode=?, public_ip='', "
+                "status_checked_at=? WHERE id=?",
+                (status, stopped_mode or "", now, server_id),
+            )
+        else:
+            # 运行中/启动中却拿不到公网 IP：多半是 DescribeInstances 瞬时缺字段。
+            # 这时候把库里已经存着的 IP 抹成空，会让 DNS 目标判定、通知里的 IP 行
+            # 集体变成空值，宁可先留着上一轮的读数。
+            db.execute(
+                "UPDATE servers SET instance_status=?, stopped_mode=?, "
+                "status_checked_at=? WHERE id=?",
+                (status, stopped_mode or "", now, server_id),
+            )
     if region_id:
         # 从 ECS DescribeInstances 返回值动态回填真实地域，避免手工填错/漏填
         db.execute(
@@ -404,16 +440,9 @@ def set_keepalive_enabled(keepalive_id: int, enabled: bool) -> None:
 
 
 def delete_keepalive(keepalive_id: int) -> None:
-    row = db.query_one("SELECT server_id FROM keepalives WHERE id=?", (keepalive_id,))
+    # 只删保活任务本身。DNS 绑定是用户在 DNS 页显式建立的，不跟着一起清 ——
+    # 一台机器可能同时挂着别的用途的域名，删个保活就把人家的解析抹了太粗暴。
     db.execute("DELETE FROM keepalives WHERE id=?", (keepalive_id,))
-    if row is not None:
-        # 移出保活后这台机器回到闲散状态，DNS 绑定跟着作废，避免域名指向没人管的机器
-        db.execute(
-            "UPDATE dns_records SET target_kind='', target_id=0, last_ip='', "
-            "last_status='', last_at=0, updated_at=? "
-            "WHERE target_kind='server' AND target_id=?",
-            (int(time.time()), int(row["server_id"])),
-        )
 
 
 # --------------------------------------------------------------------------
@@ -446,38 +475,33 @@ def delete_dns_record(record: str) -> None:
 def bind_dns_record(record: str, kind: str, target: int) -> None:
     """把记录绑到某个目标上。
 
-    一个目标只能占一条记录：先把它原来占的那条松开，再绑这条。
-    这样「哪台机器用哪个域名」永远只有一个答案。
+    一条记录同时只能属于一个目标；反过来一个目标可以挂多条记录 ——
+    一台机器用几个域名（www、api…）就绑几条，彼此互不影响。
     """
-    now = int(time.time())
-    conn = db.connect()
-    conn.execute("BEGIN")
-    try:
-        if kind:
-            conn.execute(
-                "UPDATE dns_records SET target_kind='', target_id=0, last_ip='', "
-                "last_status='', last_at=0, updated_at=? "
-                "WHERE target_kind=? AND target_id=? AND record<>?",
-                (now, kind, target, record),
-            )
-        conn.execute(
-            "UPDATE dns_records SET target_kind=?, target_id=?, updated_at=? WHERE record=?",
-            (kind, target if kind else 0, now, record),
-        )
-        conn.execute("COMMIT")
-    except Exception:
-        conn.execute("ROLLBACK")
-        raise
+    db.execute(
+        "UPDATE dns_records SET target_kind=?, target_id=?, updated_at=? WHERE record=?",
+        (kind, target if kind else 0, int(time.time()), record),
+    )
+
+
+def dns_records_of(kind: str, target: int) -> list[str]:
+    """这个目标当前占着哪些记录（按登记顺序）；没绑返回空列表。"""
+    if not kind or not target:
+        return []
+    rows = db.query(
+        "SELECT record FROM dns_records WHERE target_kind=? AND target_id=? ORDER BY rowid",
+        (kind, target),
+    )
+    return [str(row["record"]) for row in rows]
 
 
 def dns_record_of(kind: str, target: int) -> str:
-    """这个目标当前占着哪条记录；没绑返回空串。"""
-    if not kind or not target:
-        return ""
-    row = db.query_one(
-        "SELECT record FROM dns_records WHERE target_kind=? AND target_id=?", (kind, target)
-    )
-    return str(row["record"]) if row else ""
+    """这个目标当前占着的第一条记录；没绑返回空串。
+
+    只用于「有没有绑」这种是非判断和界面展示，同步走 dns_records_of() 拿全量。
+    """
+    names = dns_records_of(kind, target)
+    return names[0] if names else ""
 
 
 def set_dns_state(record: str, ip: str, status: str, at: int | None = None) -> None:
@@ -663,6 +687,11 @@ def get_run(group_id: int, slot: str) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+# 换班「正常」阶段：note 是异常原因（熔断 / 超限停机），回到这些阶段就该清掉，
+# 否则界面上会一直挂着「全部成员流量超限」，而同一张卡片写着「已就绪、当班运行中」。
+_HEALTHY_PHASES = ("pending", "switching", "settled", "failover")
+
+
 def upsert_run(group_id: int, slot: str, **fields: Any) -> dict[str, Any]:
     now = int(time.time())
     existing = get_run(group_id, slot)
@@ -671,6 +700,8 @@ def upsert_run(group_id: int, slot: str, **fields: Any) -> dict[str, Any]:
             "INSERT INTO shift_runs(group_id, slot, started_at, updated_at) VALUES(?,?,?,?)",
             (group_id, slot, now, now),
         )
+    if str(fields.get("phase") or "") in _HEALTHY_PHASES and "note" not in fields:
+        fields["note"] = ""
     if fields:
         assignments = ", ".join(f"{key}=?" for key in fields)
         db.execute(

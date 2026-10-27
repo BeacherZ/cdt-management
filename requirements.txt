@@ -5,3 +5,6 @@ requests>=2.32
 PySocks>=1.7.1
 aliyun-python-sdk-core>=2.16.0
 aliyun-python-sdk-ecs>=2.24.0
+# zoneinfo 的时区库：python:slim / 精简版 Windows 自带没有 tzdata，
+# 缺了会静默回落 UTC+8，轮换时刻全错且不报错
+tzdata>=2024.1

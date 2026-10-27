@@ -149,18 +149,41 @@ def _confirm_pending_events() -> None:
         if _status_reached(info, pending):
             suffix = messages.status_suffix(info.status, info.stopped_mode)
 
+            # server 是轮询开始前取的快照：实例刚停机时它的 public_ip 还是空的。
+            # 通知里的「IP / 地域 / 状态」行要用刚查到的实时值，否则报告会带着空 IP 发出去。
+            server = {
+                **server,
+                "public_ip": info.public_ip or server.get("public_ip") or "",
+                "instance_status": info.status,
+                "stopped_mode": info.stopped_mode,
+                "region_id": info.region_id or server.get("region_id") or "",
+            }
+
+            # 先落「已确认」：事件进度里状态确认一定在最前面，之后的 DDNS、
+            # 解析、通知都是确认到位后的收尾动作，通知永远排在最后一步。
+            repo.add_event_progress(event_id, f"已确认 {info.status}{suffix}")
+
             # 到位后的收尾动作按事件类型区分
             if pending_kind == "keepalive":
-                # 保活拉起（抢占恢复）：同步 DDNS 后补发「抢占恢复」通知
+                # 保活拉起（抢占恢复）：同步这台机器绑的所有域名后补发通知。
+                # IP 必须用刚查到的实时值：server 是轮询前取的快照，实例停机期间
+                # 库里存的是空 IP，拿快照去同步只会得到「⚠️ IP 无效跳过」。
                 try:
-                    ddns_result = engine._sync_ddns(server, config, dns.TARGET_SERVER, server_id)
-                    ddns_status = str(ddns_result)
+                    ddns_status = str(
+                        engine._sync_ddns(
+                            server,
+                            config,
+                            dns.TARGET_SERVER,
+                            server_id,
+                            ip=info.public_ip,
+                        )
+                    )
                 except Exception as exc:  # noqa: BLE001
                     ddns_status = f"❌ DDNS 异常：{exc}"
                 repo.add_event_progress(event_id, f"DDNS：{ddns_status}")
                 if config.get("notify_on_keepalive") == "1":
                     try:
-                        notify.send_all(
+                        results = notify.send_all(
                             config,
                             messages.recovery(
                                 server,
@@ -169,20 +192,31 @@ def _confirm_pending_events() -> None:
                                 kind="keepalive",
                             ),
                         )
-                        repo.add_event_progress(event_id, "已推送抢占恢复通知")
+                        failed = [name for name, state in results.items() if state != "ok"]
+                        if failed:
+                            # send_all 内部吞掉渠道异常并返回 failed，别在这里写成「已推送」
+                            repo.add_event_progress(event_id, f"通知发送失败：{'、'.join(failed)}")
+                        elif not results:
+                            repo.add_event_progress(event_id, "未启用通知渠道，跳过推送")
+                        else:
+                            repo.add_event_progress(event_id, "已推送抢占恢复通知")
                     except Exception as exc:  # noqa: BLE001
                         repo.add_event_progress(event_id, f"通知发送失败：{exc}")
             elif pending == "Running" and info.public_ip:
-                # 手动开机到位后，若这台闲散机器绑了域名，立刻把解析指过来
+                # 手动开机到位后，把这台机器绑的域名全指过来（一台可以挂好几条）
                 try:
-                    record = repo.dns_record_of(dns.TARGET_SERVER, server_id)
-                    if record:
-                        result = dns.sync_record(record, config, ip=info.public_ip)
-                        repo.add_event_progress(event_id, f"解析 {record} {result.status}")
+                    names, statuses = dns.sync_target(
+                        dns.TARGET_SERVER, server_id, config, ip=info.public_ip
+                    )
+                    if names:
+                        # 单条就报域名，多条把清单列出来，一眼看出这台机器挂了几个域名
+                        label = names[0] if len(names) == 1 else "、".join(names)
+                        repo.add_event_progress(
+                            event_id, f"解析 {label} {dns.combine_status(statuses)}"
+                        )
                 except Exception as exc:  # noqa: BLE001
                     repo.add_event_progress(event_id, f"解析同步失败：{exc}")
 
-            repo.add_event_progress(event_id, f"已确认 {info.status}{suffix}")
             repo.finish_event(event_id, "done")
         else:
             # 还没到位：记录一次当前状态，方便用户在进度里看到中间态

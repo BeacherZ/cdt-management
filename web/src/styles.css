@@ -1706,12 +1706,31 @@ input[type='number']::-webkit-inner-spin-button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* 头部多了「立即换班」按钮后，窄屏要靠它把组名压成省略号，别把操作区挤出去 */
+  min-width: 0;
 }
 
 .group-head .group-actions {
   margin-left: auto;
   display: flex;
+  align-items: center;
   gap: 2px;
+  flex-shrink: 0;
+}
+
+/* 手动换班：带文字的主操作，比旁边的编辑/删除图标显眼一档，
+   但仍用色调而不是实心块，避免和页面顶部的「新建换班组」抢注意力 */
+.group-head .switch-btn {
+  margin-right: 5px;
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 26%, transparent);
+  background: var(--accent-soft);
+  box-shadow: none;
+}
+
+.group-head .switch-btn:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 44%, transparent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 .group-foot {

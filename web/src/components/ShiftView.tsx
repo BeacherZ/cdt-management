@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ArrowRight, Clock3, LoaderCircle, Pencil, Plus, RefreshCw, Repeat, Trash2 } from 'lucide-react'
+import { ArrowRight, Clock3, LoaderCircle, Pencil, Plus, Repeat, Trash2, Zap } from 'lucide-react'
 import type { ShiftGroup } from '../types'
 import { Badge, Empty, Meter, phaseTone, statusLabel, statusTone } from './ui'
 
@@ -60,7 +60,8 @@ export default function ShiftView({
           <h1>联合换班</h1>
           <p>
             把多台服务器编成一组，按顺序各自运行设定的时长，同一时刻只保留一台在线，其余节省停机。
-            当班流量达标会自动切到下一台没超的成员，全部达标则全局熔断。DDNS 始终指向当班实例。
+            当班流量达标会自动切到下一台没超的成员；找不到可接班的成员（全部达标或状态读不到）
+            就全局熔断停机。DDNS 始终指向当班实例。
           </p>
         </div>
         <div className="page-actions">
@@ -92,16 +93,17 @@ export default function ShiftView({
                   {!group.failover_enabled && <Badge tone="gray">故障转移关闭</Badge>}
                   <div className="group-actions">
                     <button
-                      className="btn ghost icon sm"
-                      title="立即换到下一台"
+                      className="btn sm switch-btn"
+                      title="立即换到下一台：拉起下一台、停掉当前当班、同步 DDNS"
                       disabled={busyId === group.id}
                       onClick={() => onSwitch(group)}
                     >
                       {busyId === group.id ? (
-                        <LoaderCircle size={14} className="spin" />
+                        <LoaderCircle size={13} className="spin" />
                       ) : (
-                        <RefreshCw size={14} />
+                        <Zap size={13} />
                       )}
+                      立即换班
                     </button>
                     <button className="btn ghost icon sm" title="编辑" onClick={() => onEdit(group)}>
                       <Pencil size={14} />

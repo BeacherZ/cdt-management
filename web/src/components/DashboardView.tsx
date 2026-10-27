@@ -294,13 +294,28 @@ export default function DashboardView({
   )
 }
 
+// 通知永远是流程的最后一步：事件都是「确认状态到位 → 同步 DDNS → 推送通知」。
+// 旧版本的事件把「已推送…通知」记在了确认之前，这里按显示顺序沉到最后，
+// 让历史事件和新事件读起来一致（各自保持原有的先后关系）。
+function orderSteps(steps: { ts: number; text: string }[]) {
+  if (steps.length < 2) return steps
+  const notify: typeof steps = []
+  const rest: typeof steps = []
+  for (const step of steps) {
+    if (step.text.includes('通知')) notify.push(step)
+    else rest.push(step)
+  }
+  return notify.length ? [...rest, ...notify] : steps
+}
+
 function EventRow({ event }: { event: EventItem }) {
   const [open, setOpen] = useState(false)
   const Icon = EVENT_ICON[event.kind] ?? Info
   const level = event.level === 'error' ? 'error' : event.level === 'warning' ? 'warning' : 'info'
   const running = event.status === 'running'
   const failed = event.status === 'error'
-  const hasProgress = (event.progress?.length ?? 0) > 0
+  const steps = orderSteps(event.progress ?? [])
+  const hasProgress = steps.length > 0
   const finishedAt = event.finished_at || 0
 
   return (
@@ -344,7 +359,7 @@ function EventRow({ event }: { event: EventItem }) {
 
           {hasProgress && (
             <ol className="event-progress">
-              {event.progress.map((step, index) => (
+              {steps.map((step, index) => (
                 <li key={index}>
                   <span className="event-progress-time">{clock(step.ts)}</span>
                   <span className="event-progress-dot" />

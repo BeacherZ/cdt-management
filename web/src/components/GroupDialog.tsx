@@ -181,6 +181,14 @@ export default function GroupDialog({ group, servers, onClose, onSaved }: Props)
         return
       }
     }
+    // 只有部分成员填了时刻会被引擎当成「没填」整组退回按小时轮换，
+    // 界面上却还显示着时刻表 —— 直接拦住，别让它静默降级
+    const enabledRows = rows.filter((row) => row.enabled)
+    const timedRows = enabledRows.filter((row) => row.start_time && row.end_time)
+    if (timedRows.length > 0 && timedRows.length !== enabledRows.length) {
+      setError('要么每台都填起止时刻（按时刻表轮换），要么全部留空（按班次时长轮换）')
+      return
+    }
     setBusy(true)
     try {
       await post('/api/v1/groups', {
@@ -367,7 +375,7 @@ export default function GroupDialog({ group, servers, onClose, onSaved }: Props)
         <Switch label="启用该换班组" checked={enabled} onChange={setEnabled} />
         <Switch
           label="允许流量故障转移"
-          hint="当班流量达标时自动切到下一台没超的成员；全部达标则全局熔断"
+          hint="当班流量达标时自动切到下一台没超的成员；找不到没超的成员（含状态读不到）就全局熔断停机"
           checked={failover}
           onChange={setFailover}
         />

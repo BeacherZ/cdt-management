@@ -137,9 +137,62 @@ def _message(kind: str, title_html: str, title: str, body: str) -> notify.Messag
 # 块
 # --------------------------------------------------------------------------
 
+REGION_LABELS = {
+    # -- 中国内地 --
+    "cn-qingdao": "华北 1（青岛）",
+    "cn-beijing": "华北 2（北京）",
+    "cn-zhangjiakou": "华北 3（张家口）",
+    "cn-huhehaote": "华北 5（呼和浩特）",
+    "cn-wulanchabu": "华北 6（乌兰察布）",
+    "cn-hangzhou": "华东 1（杭州）",
+    "cn-shanghai": "华东 2（上海）",
+    "cn-nanjing": "华东 5（南京-本地地域）",
+    "cn-fuzhou": "华东 6（福州-本地地域）",
+    "cn-shenzhen": "华南 1（深圳）",
+    "cn-heyuan": "华南 2（河源）",
+    "cn-guangzhou": "华南 3（广州）",
+    "cn-chengdu": "西南 1（成都）",
+    "cn-wuhan-lr": "华中 1（武汉-本地地域）",
+    # -- 中国港澳台 --
+    "cn-hongkong": "中国香港",
+    "cn-macau": "中国澳门",
+    # -- 亚太 --
+    "ap-southeast-1": "新加坡",
+    "ap-southeast-2": "澳大利亚（悉尼）",
+    "ap-southeast-3": "马来西亚（吉隆坡）",
+    "ap-southeast-5": "印度尼西亚（雅加达）",
+    "ap-southeast-6": "菲律宾（马尼拉）",
+    "ap-southeast-7": "泰国（曼谷）",
+    "ap-southeast-8": "马来西亚（柔佛）",
+    "ap-northeast-1": "日本（东京）",
+    "ap-northeast-2": "韩国（首尔）",
+    "ap-south-1": "印度（孟买）",
+    # -- 欧洲 --
+    "eu-central-1": "德国（法兰克福）",
+    "eu-west-1": "英国（伦敦）",
+    # -- 美洲 --
+    "us-west-1": "美国（硅谷）",
+    "us-east-1": "美国（弗吉尼亚）",
+    "na-south-1": "墨西哥",
+    "sa-east-1": "巴西（圣保罗）",
+    # -- 中东 --
+    "me-east-1": "阿联酋（迪拜）",
+    "me-central-1": "沙特阿拉伯（利雅得）",
+}
+
+
 def _region(server: dict[str, Any]) -> str:
-    """地域：ECS DescribeInstances 返回的真实 RegionId（如 cn-hongkong），没读到给「-」。"""
-    return str(server.get("region_id") or "-")
+    """地域：ECS DescribeInstances 返回的 RegionId 翻成中文名，没读到给「-」。
+
+    RegionId 本身是 API 原值（cn-hongkong / ap-northeast-1 这种代码），
+    直接摆进通知用户看不懂，这里翻译成人话，清单外的代码原样返回、不猜。
+    表里是阿里云全局地域（含已关停的本地地域，仅用于翻译老旧机器）；
+    创建服务器时的可选列表是 web/src/regions.ts，那边只管能买到的地域。
+    """
+    raw = str(server.get("region_id") or "").strip()
+    if not raw:
+        return "-"
+    return REGION_LABELS.get(raw, raw)
 
 
 def running_block(heading: str, server: dict[str, Any], ddns_status: str) -> str:
@@ -235,15 +288,23 @@ def shift_failover(
     )
 
 
-def breaker(servers: list[dict[str, Any]], group_name: str = "") -> notify.Message:
+def breaker(
+    servers: list[dict[str, Any]], group_name: str = "", note: str = ""
+) -> notify.Message:
     """🚨 全局熔断。脚本原文含「到达到阈值」「“全局熔断”」，保持原样。
 
     尾巴按真实停机模式写：脚本默认全是节省停机，但有的规格不支持，
     会退化成普通停机（照常收规格费），这时候还说「均已节省停机」就是骗人。
+
+    note 非空表示「不是因为全员超限、而是找不到替班」（其他成员状态读不到）：
+    此时我们并不知道别人用了多少流量，不能照抄「N 台流量均已到达到阈值」。
     """
     prefix = f"{group_name} " if group_name else ""
     count = "双实例" if len(servers) == 2 else f"{len(servers)} 台实例"
-    warn = f"{count}流量均已到达到阈值，“全局熔断”，{stop_tail(servers)}。"
+    if note:
+        warn = f"当班流量已到达到阈值，{note}，按“全局熔断”处理，{stop_tail(servers)}。"
+    else:
+        warn = f"{count}流量均已到达到阈值，“全局熔断”，{stop_tail(servers)}。"
     blocks = [
         "\n".join(
             [
@@ -265,8 +326,9 @@ def breaker(servers: list[dict[str, Any]], group_name: str = "") -> notify.Messa
 
 
 def limit_stop(server: dict[str, Any], group_name: str = "") -> notify.Message:
-    """🚨 全局熔断（单台场景）：当班超限且无处可换，只停这一台。
+    """🚨 全局熔断（单台场景）：当班超限，这台机器只停它自己。
 
+    两种情况：组里关掉了「允许流量故障转移」，或当班自身状态都读不到、无从判断。
     和 breaker() 共用同一个标题「全局熔断报告」——两者都是「流量到阈值被迫停机」，
     只是范围不同（单台 / 全组），分两个标题在推送里只会让人以为是两件事。
     正文保留 ＩＰ 行，与其它通知的实例块字段顺序一致。

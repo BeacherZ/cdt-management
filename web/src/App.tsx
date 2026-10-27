@@ -338,15 +338,16 @@ export default function App() {
   async function bindDns(record: string, kind: string, id: number) {
     setBusyDns(record)
     try {
-      const result = await post<{ released?: string }>(
+      const result = await post<{ records?: string[] }>(
         `/api/v1/dns/records/${encodeURIComponent(record)}/bind`,
         { kind, id },
       )
       await loadAll()
       if (!kind) {
         toast('已解绑，这条记录不再被动', 'success')
-      } else if (result?.released) {
-        toast(`已绑定，原来的 ${result.released} 同时解绑`, 'success')
+      } else if ((result?.records?.length ?? 0) > 1) {
+        // 一个目标可以挂多条域名，链第二条时提醒一下总量，免得以为是重复绑定
+        toast(`已绑定，该目标现在有 ${result?.records?.length} 条域名`, 'success')
       } else {
         toast('已绑定', 'success')
       }
