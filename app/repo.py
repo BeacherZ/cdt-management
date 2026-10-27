@@ -689,7 +689,7 @@ def get_run(group_id: int, slot: str) -> dict[str, Any] | None:
 
 # 换班「正常」阶段：note 是异常原因（熔断 / 超限停机），回到这些阶段就该清掉，
 # 否则界面上会一直挂着「全部成员流量超限」，而同一张卡片写着「已就绪、当班运行中」。
-_HEALTHY_PHASES = ("pending", "switching", "settled", "failover")
+_HEALTHY_PHASES = ("pending", "switching", "settled", "failover", "manual")
 
 
 def upsert_run(group_id: int, slot: str, **fields: Any) -> dict[str, Any]:

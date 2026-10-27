@@ -70,6 +70,7 @@ export function statusLabel(status: string, mode?: string | null) {
 export function phaseTone(phase: string): Tone {
   if (phase === 'settled') return 'green'
   if (phase === 'failover') return 'amber'
+  if (phase === 'manual') return 'blue'
   if (phase === 'breaker') return 'red'
   if (phase === 'error') return 'red'
   if (phase === 'switching') return 'blue'

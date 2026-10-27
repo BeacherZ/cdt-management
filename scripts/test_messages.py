@@ -85,6 +85,18 @@ class ShiftDone(unittest.TestCase):
         self.assertTrue(message.html.startswith("✅ <b>CDT 换班成功报告 (延迟恢复)</b>\n\n"))
         self.assertIn(f"🕒 <b>当前班次</b>：PM\n{SEP}", message.html)
 
+    def test_manual_switch_title(self):
+        """手动换班的报告靠标题后缀区分：内容与自动换班一致，不能写成故障转移。"""
+        message = messages.shift_done(A, [B], "AM", "✅ 已同步", group_name="港新联合", manual=True)
+        self.assertEqual(message.title, "CDT 港新联合 换班完成报告(手动换班)")
+        self.assertTrue(message.html.startswith("✅ <b>CDT 港新联合 换班完成报告(手动换班)</b>\n\n"))
+        self.assertNotIn("故障转移", message.html)
+        # 正文和自动换班完全一致，只是标题不同
+        auto = messages.shift_done(A, [B], "AM", "✅ 已同步", group_name="港新联合")
+        self.assertEqual(
+            message.html.split("\n", 1)[1], auto.html.split("\n", 1)[1]
+        )
+
     def test_three_members_adds_block_and_names_duty(self):
         period = messages.shift_period("白班", "00:00", "12:00")
         message = messages.shift_done(A, [B, C], period, "✅ 已同步")

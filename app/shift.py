@@ -21,6 +21,9 @@ PHASE_PENDING = "pending"
 PHASE_SWITCHING = "switching"
 PHASE_SETTLED = "settled"
 PHASE_FAILOVER = "failover"
+# 人工点了「立即换班」并已就绪：内部当班是 run.duty_server_id 覆盖出来的，
+# 和流量超限的 failover 共用一个覆盖字段，但对外必须说「手动换班」。
+PHASE_MANUAL = "manual"
 PHASE_BREAKER = "breaker"
 PHASE_ERROR = "error"
 
@@ -383,13 +386,15 @@ class Engine:
         slot_key = str(shift_start)
         run = repo.get_run(group_id, slot_key) or {}
 
-        # 手动换班：本班次被用户手动切过，当班沿用 run.duty_server_id，
-        # 且不再发「流量超限故障转移」这类误导通知（界面 toast 已反馈）。
+        # 手动换班：本班次被用户手动切过，当班沿用 run.duty_server_id。
+        # 注意 manual 和 failover 是两个独立的含义：manual 是「人切的」，
+        # failover 是「流量超限自动转的」。以前手动切班借用 failover 字段做覆盖，
+        # 结果自己点的按钮被写成「故障转移」，现在各用各的。
         manual_switch = bool(run.get("manual"))
 
-        # 本班次内已经故障转移过：沿用当时选中的替补，不再按时间重新推导当班。
+        # 本班次内已经故障转移 / 被手动切过：沿用当时选中的那台，不再按时间推导当班。
         failed_over = bool(run.get("failover"))
-        if failed_over and int(run.get("duty_server_id") or 0):
+        if (failed_over or manual_switch) and int(run.get("duty_server_id") or 0):
             for member in active_members(group):
                 if int(member["server_id"]) == int(run["duty_server_id"]):
                     duty_member = member
@@ -483,7 +488,11 @@ class Engine:
         # 3) 保证当班运行 —— 只做「启动当班」，不碰非当班。
         #    整个换班过程（启动当班 → 停非当班 → DDNS）都记在同一条事件里：
         #    以前每一步都单开一条事件，界面上一轮换班会冒出三条互不相干的记录。
-        previously_settled = run.get("phase") in (PHASE_SETTLED, PHASE_FAILOVER)
+        previously_settled = run.get("phase") in (
+            PHASE_SETTLED,
+            PHASE_FAILOVER,
+            PHASE_MANUAL,
+        )
         duty_status = str(duty.get("instance_status") or "")
         duty_not_running = duty_status not in ("Running",) and duty_status not in TRANSIENT_STATUS
         # 抢占恢复跨多轮，用 flag 记住「这次是恢复而不是换班」（本地变量活不过一轮）
@@ -636,13 +645,24 @@ class Engine:
             # 一台机器可能挂着好几条域名，汇总文案「✅ 已同步 / ❌ 更新失败」开头也是 ✅，
             # 单看前缀会把「有一条没指过去」当成全部成功，于是事件打完成、通知照发。
             ddns_ok = (not ddns_enabled) or (not ddns_bound) or dns.is_success(ddns_text)
-            if not previously_settled:
+            # 只有「开了 DDNS 且确实挂了域名」才在流程里记这一步：
+            # 没绑定域名时写一行「DDNS：⏸ 未绑定域名」是纯噪音。
+            if not previously_settled and ddns_enabled and ddns_bound:
                 repo.add_event_progress(event_id, f"DDNS：{ddns_text}", once=True)
 
         ready = duty_status == "Running" and all_stopped and (has_ip or not ddns_enabled) and ddns_ok
 
         first_settle = ready and not previously_settled
-        phase = (PHASE_FAILOVER if failover_flag else PHASE_SETTLED) if ready else PHASE_SWITCHING
+        if not ready:
+            phase = PHASE_SWITCHING
+        elif failover_flag:
+            # 真·流量超限转移优先：手动切的班次后续又超限，那也是故障转移
+            phase = PHASE_FAILOVER
+        elif manual_switch:
+            # 人工切的班次：当班是人为指定的，别显示成「故障转移」
+            phase = PHASE_MANUAL
+        else:
+            phase = PHASE_SETTLED
         stage = "" if ready else "stopping_standby"
 
         repo.upsert_run(
@@ -661,7 +681,7 @@ class Engine:
             "group_id": group_id,
             "slot": slot_key,
             "duty": duty.get("label"),
-            "mode": "failover" if failover_flag else "normal",
+            "mode": "manual" if manual_switch else ("failover" if failover_flag else "normal"),
             "ready": ready,
             "ddns": ddns_text,
         }
@@ -677,11 +697,16 @@ class Engine:
         # 复用「换班进行中」这条 running 事件而不是另开一条，这样事件全程耗时才是真实的换班过程。
         if first_settle and event_id:
             repo.add_event_progress(event_id, "全部状态确认完毕", once=True)
-            repo.update_event(
-                event_id,
-                title=f"{name}：{'故障转移' if failover_flag else '换班完成'}",
-                kind="shift_failover" if failover_flag else "shift_done",
-            )
+            # 标题按来源判：真故障转移 > 手动换班 > 普通换班。
+            # 手动切班的事件从「手动换班进行中」一路走到「手动换班完成」，
+            # 全程同一条，点进去能看到完整流程。
+            if failover_flag:
+                label, kind = "故障转移", "shift_failover"
+            elif manual_switch:
+                label, kind = "手动换班完成", "manual"
+            else:
+                label, kind = "换班完成", "shift_done"
+            repo.update_event(event_id, title=f"{name}：{label}", kind=kind)
             repo.finish_event(event_id, "done")
 
         # 抢占恢复：当班被拉起并重新就绪，收掉那条恢复事件。
@@ -703,16 +728,12 @@ class Engine:
         if not notify_enabled:
             return summary
 
-        # 手动换班：换班动作已执行、事件已打完完成标志，但不再推通知 ——
-        # 用户是自己点按钮切的，界面上已经看到结果，再发一条「流量超限故障转移」
-        # 或「换班完成」都是误导。
-        if manual_switch:
-            return summary
-
-        # 全部确认（当班 Running + 非当班节省停机 + DDNS 已同步）后才发通知
+        # 全部确认（当班 Running + 非当班节省停机 + DDNS 已同步）后才发通知。
+        # 手动换班同样走这条：报告标题带「(手动换班)」后缀，和自动换班、故障转移分开。
         if first_settle or failover:
             self._notify_settled(
-                group, config, duty, others, ddns_text, failover_flag, slot_key
+                group, config, duty, others, ddns_text, failover_flag, slot_key,
+                manual=manual_switch,
             )
         elif recovered and config.get("notify_on_recovery") == "1":
             notify.send_all(config, messages.recovery(duty, ddns_text))
@@ -983,14 +1004,17 @@ class Engine:
         ddns_status: str,
         failover: int,
         slot_key: str,
+        manual: bool = False,
     ) -> None:
         group_id = int(group["id"])
         name = group.get("name") or ""
         is_failover = bool(failover)
+        is_manual = bool(manual) and not is_failover
         kind = "shift_failover" if is_failover else "shift_done"
-        # 换班完成与临时换班共用同一个 slot，但要去重键必须分开，
+        # 换班完成 / 手动换班 / 临时换班共用同一个 slot，去重键必须分开，
         # 否则「已结算过又临时换班」时这条报告会被当成重复直接吞掉
-        flag = f"notify:{group_id}:{slot_key}:{'failover' if is_failover else 'settled'}"
+        scope = "failover" if is_failover else ("manual" if is_manual else "settled")
+        flag = f"notify:{group_id}:{slot_key}:{scope}"
         if repo.get_flag(flag):
             return
 
@@ -1011,11 +1035,18 @@ class Engine:
                 duty, over, standby, str(ddns_status), group_name=name
             )
         else:
-            # 本班次如果先发过「换班异常」，成功时按脚本换标题
+            # 本班次如果先发过「换班异常」，成功时按脚本换标题；
+            # 手动切班的报告标题带「(手动换班)」，与自动换班区分
             delayed = bool(repo.get_flag(f"timeout:{group_id}:{slot_key}"))
             period = _shift_span(group, duty, config)
             message = messages.shift_done(
-                duty, others, period, str(ddns_status), group_name=name, delayed=delayed
+                duty,
+                others,
+                period,
+                str(ddns_status),
+                group_name=name,
+                delayed=delayed,
+                manual=is_manual,
             )
             if delayed:
                 repo.clear_flag(f"timeout:{group_id}:{slot_key}")
@@ -1036,7 +1067,7 @@ class Engine:
             # 万一 run 里丢了 event_id，仍补一条结果事件，别让通知发了却无迹可寻
             repo.add_event(
                 kind,
-                f"{name}：{'故障转移' if is_failover else '换班完成'}",
+                f"{name}：{'故障转移' if is_failover else ('手动换班完成' if is_manual else '换班完成')}",
                 f"当班 {duty.get('label')} / 待机 {len(others)} 台 / {ddns_status}",
                 group_id=group_id,
                 server_id=int(duty["id"]),
@@ -1048,8 +1079,10 @@ class Engine:
 
         老 hours 累加模式：把轮换起点 anchor_at 平移到下一班的开头。
         固定时刻表模式：当班由真实时钟决定，anchor 不起作用，改走
-        shift_runs 的 failover/duty_server_id 覆盖 —— reconcile_group 里
-        failed_over 分支会沿用这个手动指定，把下一台拉起来、停掉原当班。
+        shift_runs 的 manual/duty_server_id 覆盖 —— reconcile_group 会沿用
+        这个手动指定，把下一台拉起来、停掉原当班，走完整流程后发报告。
+
+        两种模式都只开一条「手动换班」事件，后续进度全部追加到这条上。
         """
         # 和后台调度抢同一把锁：否则两边会同时给同一批实例下指令
         if not self._lock.acquire(timeout=30):
@@ -1080,9 +1113,11 @@ class Engine:
             accumulated = 0.0
             cum_before_next = 0.0
             size = len(members)
+            current_member = members[0]
             for index, member in enumerate(members):
                 span = float(member["hours"]) * 3600
                 if offset < accumulated + span:
+                    current_member = member
                     cum_before_next = accumulated + span if index + 1 < size else 0.0
                     break
                 accumulated += span
@@ -1094,15 +1129,44 @@ class Engine:
                 "UPDATE shift_groups SET anchor_at=? WHERE id=?", (new_anchor, group_id)
             )
             fresh = repo.get_group(group_id) or group
-            # 平移后这一班也要打 manual 标记：和时刻表模式统一「手动切换不发通知」。
-            # 否则同样是点按钮，一种模式静默、另一种会推一条「换班完成」。
             picked = duty_at(fresh, now_ts)
             if picked is not None:
-                repo.upsert_run(group_id, str(picked[1]), manual=1)
-            repo.add_event("manual", f"{group.get('name')}：手动换班", "已跳到下一台", group_id=group_id)
+                slot_key = str(picked[1])
+                # manual 与 failover 分开记：手动切的班次不该被当成故障转移
+                repo.upsert_run(group_id, slot_key, manual=1, failover=0)
+                self._manual_event(
+                    group_id, slot_key, group.get("name") or "", current_member, picked[0]
+                )
             return self.reconcile_group(fresh, config, now, now_ts)
         finally:
             self._lock.release()
+
+    def _manual_event(
+        self,
+        group_id: int,
+        slot_key: str,
+        name: str,
+        current: dict[str, Any],
+        target: dict[str, Any],
+    ) -> int:
+        """开一条「手动换班」事件，并把 ID 记进本班次 run。
+
+        整轮换班（确认成员状态 → 停原当班 → DDNS → 结算）都追加到这一条上，
+        点进去就是完整流程；和自动换班「一次换班只留一条事件」保持一致。
+        """
+        from_label = current.get("label") or current.get("server_id")
+        to_label = target.get("label") or target.get("server_id")
+        event_id = repo.add_event(
+            "manual",
+            f"{name}：手动换班进行中",
+            f"{from_label} → {to_label}",
+            level="info",
+            group_id=group_id,
+            status="running",
+        )
+        repo.add_event_progress(event_id, f"手动换班：{from_label} → {to_label}")
+        repo.upsert_run(group_id, slot_key, event_id=event_id)
+        return event_id
 
     def _manual_switch_timetable(
         self,
@@ -1112,7 +1176,7 @@ class Engine:
         now_ts: float,
     ) -> dict[str, Any]:
         """固定时刻表模式下的手动换班：把「下一台」写进本班次 run 的 duty_server_id，
-        借 reconcile_group 的 failed_over 分支完成切换（开下一台 → 停原当班 → 通知）。"""
+        借 reconcile_group 的 manual 分支完成切换（开下一台 → 停原当班 → DDNS → 发报告）。"""
         group_id = int(group["id"])
         members = active_members(group)
         picked = duty_at(group, now_ts)
@@ -1120,6 +1184,17 @@ class Engine:
             raise ValueError("组内启用的成员不足两台")
         current_member, shift_start = picked
         slot_key = str(shift_start)
+
+        # 本班次可能已经被手动切过 / 故障转移过：当前实际当班以 run.duty_server_id 为准。
+        # 只按时钟推「下一台」会永远算出同一台 —— 用户第二次点按钮时，时钟还是那个
+        # 成员，算出来的「下一台」还是同一台，于是怎么点都换不回来。
+        run = repo.get_run(group_id, slot_key) or {}
+        if (run.get("failover") or run.get("manual")) and int(run.get("duty_server_id") or 0):
+            actual_id = int(run["duty_server_id"])
+            for member in members:
+                if int(member["server_id"]) == actual_id:
+                    current_member = member
+                    break
 
         # 按 position 顺序取当前当班的下一台（循环到队首）
         current_index = next(
@@ -1134,19 +1209,11 @@ class Engine:
             phase=PHASE_SWITCHING,
             stage="",
             duty_server_id=int(next_member["server_id"]),
-            failover=1,
+            failover=0,
             manual=1,
-            event_id=0,
         )
-        repo.add_event(
-            "manual",
-            f"{group.get('name')}：手动换班",
-            f"{current_member.get('label') or current_member['server_id']} → "
-            f"{next_member.get('label') or next_member['server_id']}",
-            group_id=group_id,
-        )
-        # reconcile_group 里 failed_over 会沿用 run.duty_server_id，把下一台当班；
-        # manual 标记让它在换班动作完成后跳过通知（手动换班界面已反馈）。
+        # 只开一条事件，后面启动 / 停机 / DDNS / 结算全部追加到它上面
+        self._manual_event(group_id, slot_key, group.get("name") or "", current_member, next_member)
         return self.reconcile_group(repo.get_group(group_id) or group, config, now, now_ts)
 
     def _managed_note(self, server_id: int) -> str:

@@ -242,8 +242,13 @@ def shift_done(
     ddns_status: str,
     group_name: str = "",
     delayed: bool = False,
+    manual: bool = False,
 ) -> notify.Message:
-    """✅ 换班完成 / 换班成功（延迟恢复）。"""
+    """✅ 换班完成 / 换班成功（延迟恢复）/ 换班完成（手动换班）。
+
+    手动换班走完整流程（确认成员状态 → DDNS → 结算），报告照发，只在标题
+    加后缀区分来源，不让人误以为是自动换班或故障转移。
+    """
     prefix = f"{group_name} " if group_name else ""
     if delayed:
         return _message(
@@ -256,10 +261,11 @@ def shift_done(
                 + [stopped_block("停止账号", s, _status(s)) for s in stopped]
             ),
         )
+    title = f"CDT {prefix}换班完成报告(手动换班)" if manual else f"CDT {prefix}换班完成报告"
     return _message(
         "shift_done",
-        f"✅ <b>CDT {prefix}换班完成报告</b>",
-        f"CDT {prefix}换班完成报告",
+        f"✅ <b>{title}</b>",
+        title,
         f"🕒 <b>当前班次</b>：{period}\n{SEP}\n"
         + _join_blocks(
             [running_block("运行账号", duty, ddns_status)]

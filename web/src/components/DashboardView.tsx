@@ -23,6 +23,7 @@ import { Badge, Meter, Ring, phaseTone, statusLabel, statusTone } from './ui'
 const EVENT_ICON: Record<string, typeof Info> = {
   shift_done: Zap,
   shift_failover: AlertTriangle,
+  manual: Repeat,
   breaker: ShieldAlert,
   limit_stop: ShieldAlert,
   recovery: Activity,

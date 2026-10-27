@@ -69,6 +69,10 @@ class ShiftFlow(unittest.TestCase):
         db.execute(
             "UPDATE shift_groups SET anchor_at=? WHERE id=?", (int(now_ts - 3600), cls.group_id)
         )
+        # 换班组绑一条域名：DDNS 是换班流程里的最后一步，事件里要能看到这一行
+        repo.set_settings({"ddns_enabled": "1"})
+        repo.ensure_dns_record("shift-flow.example.com")
+        repo.bind_dns_record("shift-flow.example.com", dns.TARGET_GROUP, cls.group_id)
         # 换班前的真实样子：当班 A 还没起来，非当班 B 还在跑
         server_b = repo.get_server(cls.b_id, decrypt_secret=True)
         aliyun.start_instance(server_b)
@@ -126,10 +130,11 @@ class ShiftFlow(unittest.TestCase):
 
 
 class ManualSwitch(unittest.TestCase):
-    """手动换班不发通知：两种模式（小时轮换 / 固定时刻表）行为要一致。
+    """手动换班走完整流程并单独发一条报告：两种模式（小时轮换 / 固定时刻表）行为一致。
 
-    界面点完按钮有 toast、事件里也有记录，再推一条「换班完成」只会让人以为
-    自己不小心触发了自动换班。
+    以前手动切换是静默的，用户在界面点完只看到 toast；现在改成
+    事件一条「手动换班」全程可看 + 收尾推「换班完成报告(手动换班)」，
+    但绝不能出现「故障转移」字样 —— 那是流量超限自动转移的说法。
     """
 
     def setUp(self) -> None:
@@ -178,7 +183,7 @@ class ManualSwitch(unittest.TestCase):
             repo.get_group(self.group_id) or {}, repo.get_settings(), _now_dt(), float(time.time())
         )
 
-    def test_manual_switch_is_silent(self):
+    def test_manual_switch_reports_once(self):
         for _ in range(3):
             self._reconcile()
         self.assertTrue(self.sent, "正常结算应该发一条换班完成，测试前提不成立")
@@ -188,13 +193,22 @@ class ManualSwitch(unittest.TestCase):
         for _ in range(5):
             self._reconcile()
 
-        self.assertEqual(self.sent, [], "手动换班不该再推通知")
-        manual = [
-            e
-            for e in repo.list_events(limit=50, group_id=self.group_id)
-            if e["kind"] == "manual"
-        ]
-        self.assertEqual(len(manual), 1, [e["title"] for e in manual])
+        # 收尾推一条带「(手动换班)」后缀的报告，只推一次
+        self.assertEqual(self.sent, ["CDT 手换组 换班完成报告(手动换班)"], self.sent)
+
+        events = repo.list_events(limit=50, group_id=self.group_id)
+        manual = [e for e in events if e["kind"] == "manual"]
+        self.assertEqual(len(manual), 1, [e["title"] for e in events])
+        self.assertTrue(manual[0]["title"].endswith("：手动换班完成"), manual[0]["title"])
+        self.assertEqual(manual[0]["status"], "done")
+
+        # 一条事件里能看完整流程：起当班 → 停原当班 → 确认完毕
+        texts = [step["text"] for step in manual[0]["progress"]]
+        self.assertTrue(any("已下发启动当班" in t for t in texts), texts)
+        self.assertTrue(any("已下发停机" in t for t in texts), texts)
+        self.assertEqual(texts[-1], "全部状态确认完毕", texts)
+        # 手动换班和故障转移无关
+        self.assertFalse([e for e in events if e["title"].endswith("故障转移")], events)
 
 
 class PartialDdns(unittest.TestCase):
@@ -425,6 +439,102 @@ def _now_dt():
     import datetime as dt
 
     return dt.datetime.now(shift._timezone("Asia/Shanghai"))
+
+
+class ManualSwitchTimetable(unittest.TestCase):
+    """固定时刻表模式下的「立即换班」。
+
+    锁死两条：
+      1. 连点两次必须能切回上一台 —— 只按时钟推「下一台」的话，第二次点还是同一台，
+         用户就被卡在某一台上换不回来（实际踩过）。
+      2. 手动切的班次，事件标题和阶段徽章都写「手动换班」，不能因为内部借用了
+         run.failover 做当班覆盖就显示成「故障转移」。
+    """
+
+    def setUp(self) -> None:
+        db.init_db()
+        for table in ("events", "flags", "shift_runs", "shift_members", "shift_groups", "servers"):
+            db.execute(f"DELETE FROM {table}")
+        repo.set_settings({"notify_on_shift": "1", "notify_on_failover": "1"})
+        self.a = _make_server("表A", "i-tt-aaa")
+        self.b = _make_server("表B", "i-tt-bbb")
+        self.group_id = repo.upsert_group(
+            {
+                "name": "时刻表组",
+                "enabled": True,
+                "failover_enabled": True,
+                "members": [
+                    {"server_id": self.a, "hours": 12, "start_time": "00:00", "end_time": "12:00"},
+                    {"server_id": self.b, "hours": 12, "start_time": "12:00", "end_time": "23:59"},
+                ],
+            }
+        )
+        self.sent: list[str] = []
+        self._orig_send = notify.send_all
+        notify.send_all = self._fake_send
+
+    def tearDown(self) -> None:
+        notify.send_all = self._orig_send
+
+    def _fake_send(self, config, message):  # noqa: ANN001, ARG002
+        self.sent.append(message.title)
+        return {"webhook": "ok"}
+
+    def _duty_id(self) -> int:
+        group = repo.get_group(self.group_id) or {}
+        picked = shift.duty_at(group, time.time())
+        slot_key = str(picked[1])
+        run = repo.get_run(self.group_id, slot_key) or {}
+        return int(run.get("duty_server_id") or 0)
+
+    def _settle(self) -> None:
+        for _ in range(5):
+            shift.engine.reconcile_group(
+                repo.get_group(self.group_id) or {},
+                repo.get_settings(),
+                _now_dt(),
+                float(time.time()),
+            )
+
+    def test_second_click_switches_back(self):
+        self._settle()
+        before = self._duty_id()
+        self.assertIn(before, (self.a, self.b))
+
+        shift.engine.manual_switch(self.group_id)
+        self._settle()
+        first = self._duty_id()
+        self.assertNotEqual(first, before, "第一次点应该切到下一台")
+
+        shift.engine.manual_switch(self.group_id)
+        self._settle()
+        self.assertEqual(self._duty_id(), before, "第二次点必须切回上一台，不能卡住")
+
+    def test_manual_switch_is_not_labelled_failover(self):
+        self._settle()
+        self.sent.clear()
+        shift.engine.manual_switch(self.group_id)
+        self._settle()
+
+        group = repo.get_group(self.group_id) or {}
+        picked = shift.duty_at(group, time.time())
+        run = repo.get_run(self.group_id, str(picked[1])) or {}
+        self.assertEqual(run.get("phase"), shift.PHASE_MANUAL)
+        self.assertEqual(int(run.get("failover") or 0), 0, "手动换班不该打故障转移标记")
+
+        events = repo.list_events(limit=20, group_id=self.group_id)
+        manual = [e for e in events if e["kind"] == "manual"]
+        self.assertEqual(len(manual), 1, [e["title"] for e in events])
+        self.assertEqual(manual[0]["title"], "时刻表组：手动换班完成")
+        self.assertEqual(manual[0]["status"], "done")
+        # 全程一条事件：点进去就是完整流程
+        texts = [step["text"] for step in manual[0]["progress"]]
+        self.assertTrue(any("已下发启动当班" in t for t in texts), texts)
+        self.assertTrue(any("已下发停机" in t for t in texts), texts)
+        self.assertEqual(texts[-1], "全部状态确认完毕", texts)
+        self.assertFalse([e["title"] for e in events if e["title"].endswith("故障转移")], events)
+        # 报告标题带「(手动换班)」
+        self.assertEqual(self.sent, ["CDT 时刻表组 换班完成报告(手动换班)"], self.sent)
 
 
 class Timezone(unittest.TestCase):
