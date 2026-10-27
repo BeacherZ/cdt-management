@@ -444,3 +444,34 @@ def record_books() -> dict[str, dict[int, list[str]]]:
         elif kind == TARGET_GROUP:
             group_map.setdefault(int(row["target_id"]), []).append(str(row["record"]))
     return {"servers": server_map, "groups": group_map}
+
+
+def books_for_cards(
+    now_ts: float | None = None,
+    books: dict[str, dict[int, list[str]]] | None = None,
+) -> dict[int, list[str]]:
+    """服务器卡片用：把换班组绑定的域名挂到「此刻当班」那台机器上。
+
+    换班组的域名只解析到当班机，所以域名框也只该出现在当班机的卡片上；
+    非当班成员不显示 —— 否则会让人以为那几台也在占着这个记录。
+    故障转移过的班次按 run.duty_server_id 走，跟界面高亮保持一致。
+    """
+    books = books if books is not None else record_books()
+    merged: dict[int, list[str]] = {
+        int(server_id): list(names) for server_id, names in books.get("servers", {}).items()
+    }
+    group_map = books.get("groups") or {}
+    if not group_map:
+        return merged
+
+    now_ts = time.time() if now_ts is None else now_ts
+    servers = _servers()
+    for group_id, names in group_map.items():
+        runner = _group_runner(int(group_id), now_ts, servers)
+        if runner is None:
+            continue
+        bucket = merged.setdefault(int(runner["id"]), [])
+        for name in names:
+            if name not in bucket:
+                bucket.append(name)
+    return merged

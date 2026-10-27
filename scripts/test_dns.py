@@ -9,6 +9,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -455,6 +456,65 @@ class DutyDdns(Base):
         status = shift.engine._sync_ddns(server, self.config(), dns.TARGET_GROUP, group_id)
         self.assertEqual(status, dns.STATUS_UNBOUND)
         self.assertEqual(CALLS, [])
+
+
+class Cards(Base):
+    """服务器卡片上的域名框：换班组绑定的域名只挂在「此刻当班」那台的卡上。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        repo.set_settings({"ddns_records": '["a.example.com","b.example.com"]'})
+        dns.sync_registry(self.config())
+
+    def add_pair(self) -> tuple[int, int, int]:
+        a = self.add_server("香港-A", ip="47.243.10.21")
+        b = self.add_server("香港-B", status="Stopped", ip="47.243.10.22")
+        group_id = self.add_group("双机轮换", [a, b])
+        return a, b, group_id
+
+    def test_group_binding_shows_only_on_duty_card(self):
+        a, b, group_id = self.add_pair()
+        dns.bind("a.example.com", dns.TARGET_GROUP, group_id)
+
+        cards = dns.books_for_cards(time.time())
+        self.assertEqual(cards.get(a), ["a.example.com"])
+        # 非当班成员不该显示组域名，否则会被误认为它也在占着这条记录
+        self.assertNotIn(b, cards)
+
+    def test_server_binding_stays_on_its_own_card(self):
+        a, b, group_id = self.add_pair()
+        dns.bind("a.example.com", dns.TARGET_GROUP, group_id)
+        dns.bind("b.example.com", dns.TARGET_SERVER, b)
+
+        cards = dns.books_for_cards(time.time())
+        # 当班机只有组域名，非当班机只有自己绑的那条，两边互不串味
+        self.assertEqual(cards.get(a), ["a.example.com"])
+        self.assertEqual(cards.get(b), ["b.example.com"])
+
+    def test_duty_merges_own_and_group_records(self):
+        a, _b, group_id = self.add_pair()
+        dns.bind("a.example.com", dns.TARGET_GROUP, group_id)
+        dns.bind("b.example.com", dns.TARGET_SERVER, a)
+
+        cards = dns.books_for_cards(time.time())
+        # 自己的记录在前，组绑定的接在后面
+        self.assertEqual(cards.get(a), ["b.example.com", "a.example.com"])
+
+    def test_failover_moves_the_chip_to_standby(self):
+        a, b, group_id = self.add_pair()
+        dns.bind("a.example.com", dns.TARGET_GROUP, group_id)
+
+        from app import shift
+
+        now_ts = time.time()
+        group = repo.get_group(group_id) or {}
+        slot = str(shift.duty_at(group, now_ts)[1])
+        repo.upsert_run(group_id, slot, failover=1, duty_server_id=b)
+
+        # 本班次已经故障转移到 B：域名框跟着实际在跑的机器走，跟界面高亮一致
+        cards = dns.books_for_cards(now_ts)
+        self.assertEqual(cards.get(b), ["a.example.com"])
+        self.assertNotIn(a, cards)
 
 
 def tearDownModule() -> None:

@@ -37,6 +37,14 @@ type Props = {
 
 type ViewMode = 'card' | 'list'
 
+/** 后端把多台记录用顿号连成一串（一台可以绑多条），这里拆回一个个小框 */
+function dnsRecords(value?: string): string[] {
+  return (value || '')
+    .split('、')
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
 export default function ServersView({
   servers,
   busyId,
@@ -254,23 +262,25 @@ export default function ServersView({
                 )}
 
                 <div className="card-foot">
-                  {server.dns_record && (
-                    <span className="dns-chip" title="已绑定的 DNS 记录">
-                      <Globe2 size={10} />
-                      {server.dns_record}
-                    </span>
-                  )}
                   <span className={`owner-tag${owner ? (locked ? ' locked' : ' paused') : ' free'}`}>
                     {owner ? (
                       <>
                         {owner.kind === 'group' ? <Repeat size={10} /> : <HeartPulse size={10} />}
-                        {ownerText}
-                        {locked ? '托管' : '已暂停'}
+                        <span className="owner-tag-text">
+                          {ownerText}
+                          {locked ? '托管' : '已暂停'}
+                        </span>
                       </>
                     ) : (
                       <>闲散 · 手动</>
                     )}
                   </span>
+                  {dnsRecords(server.dns_record).map((record) => (
+                    <span className="dns-chip" key={record} title={record}>
+                      <Globe2 size={10} />
+                      <span className="dns-chip-text">{record}</span>
+                    </span>
+                  ))}
 
                   <div className="foot-actions">
                     {!owner && (
@@ -329,16 +339,27 @@ function ServerTable({
   return (
     <div className="card server-table-card">
       <table className="server-table">
+        <colgroup>
+          <col style={{ width: '13%' }} />
+          <col style={{ width: '10%' }} />
+          <col style={{ width: '8%' }} />
+          <col style={{ width: '9%' }} />
+          <col style={{ width: '9%' }} />
+          <col style={{ width: '12%' }} />
+          <col style={{ width: '13%' }} />
+          <col style={{ width: '15%' }} />
+          <col style={{ width: '11%' }} />
+        </colgroup>
         <thead>
           <tr>
-            <th>服务器</th>
+            <th>服务器 / 实例 ID</th>
             <th>状态</th>
             <th>地域 / 站点</th>
-            <th>实例 ID</th>
             <th>公网 IP</th>
             <th>流量 / 配额</th>
             <th>本月 / 余额</th>
             <th>归属</th>
+            <th>域名</th>
             <th style={{ textAlign: 'right' }}>操作</th>
           </tr>
         </thead>
@@ -357,9 +378,12 @@ function ServerTable({
             return (
               <tr key={server.id}>
                 <td>
-                  <strong className="server-table-name" title={server.label}>
+                  <div className="server-table-title" title={server.label}>
                     {server.label}
-                  </strong>
+                  </div>
+                  <code className="server-table-sub" title={server.instance_id}>
+                    {server.instance_id || '未填实例 ID'}
+                  </code>
                 </td>
                 <td>
                   <Badge tone={statusTone(server.instance_status)} pulse={running}>
@@ -367,21 +391,15 @@ function ServerTable({
                   </Badge>
                 </td>
                 <td>
-                  <span className="server-table-cell">
-                    <MapPin size={11} />
-                    {regionLabel(server.region_id)}
-                  </span>
-                  <span
-                    className={`site-tag ${server.site === 'international' ? 'intl' : ''}`}
-                    style={{ marginLeft: 6 }}
-                  >
-                    {server.site === 'international' ? '国际' : '中国'}
-                  </span>
-                </td>
-                <td>
-                  <code style={{ fontSize: 11 }} className="server-table-id">
-                    {server.instance_id || '—'}
-                  </code>
+                  <div className="server-table-region">
+                    <span className="server-table-cell">
+                      <MapPin size={11} />
+                      {regionLabel(server.region_id)}
+                    </span>
+                    <span className={`site-tag ${server.site === 'international' ? 'intl' : ''}`}>
+                      {server.site === 'international' ? '国际' : '中国'}
+                    </span>
+                  </div>
                 </td>
                 <td>
                   <span className="server-table-mono">{server.public_ip || '—'}</span>
@@ -397,7 +415,7 @@ function ServerTable({
                     )}
                   </div>
                 </td>
-                <td>
+                <td className="server-table-cost">
                   <CostRow
                     billing={server.billing}
                     busy={billingId === server.id}
@@ -406,16 +424,31 @@ function ServerTable({
                   />
                 </td>
                 <td>
-                  <span className={`owner-tag${owner ? (locked ? ' locked' : ' paused') : ' free'}`}>
+                  <span
+                    className={`owner-tag${owner ? (locked ? ' locked' : ' paused') : ' free'}`}
+                    title={ownerText}
+                  >
                     {owner ? (
                       <>
                         {owner.kind === 'group' ? <Repeat size={10} /> : <HeartPulse size={10} />}
-                        {ownerText}
+                        <span className="owner-tag-text">{ownerText}</span>
                       </>
                     ) : (
                       <>闲散 · 手动</>
                     )}
                   </span>
+                </td>
+                <td>
+                  {/* 与卡片同一套数据：换班组绑定的域名只出现在当班那台 */}
+                  <div className="server-table-dns">
+                    {dnsRecords(server.dns_record).map((record) => (
+                      <span className="dns-chip" key={record} title={record}>
+                        <Globe2 size={10} />
+                        <span className="dns-chip-text">{record}</span>
+                      </span>
+                    ))}
+                    {!server.dns_record && <span className="server-table-muted">—</span>}
+                  </div>
                 </td>
                 <td>
                   <div className="server-table-actions">

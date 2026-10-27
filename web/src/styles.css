@@ -1322,6 +1322,14 @@ input[type='number']::-webkit-inner-spin-button {
   opacity: 0.7;
 }
 
+/* 域名太长时省略号要落在文字上（flex 容器直接写 text-overflow 不生效） */
+.dns-chip-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ---------------------------------------------------- 卡片底部：托管 / 手动 */
 
 .card-foot {
@@ -1508,14 +1516,16 @@ input[type='number']::-webkit-inner-spin-button {
 
 .server-table {
   width: 100%;
-  min-width: 880px;
+  /* 定宽布局：列宽由 colgroup 的百分比决定，内容再长也只会换行/省略，
+     不会把表格撑出容器 —— 之前 min-width:880px + 不换行，宽屏下也会被拉出横向滚动条 */
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: 12.5px;
 }
 
 .server-table th {
   text-align: left;
-  padding: 10px 14px;
+  padding: 10px 12px;
   font-size: 11px;
   font-weight: 650;
   color: var(--muted);
@@ -1526,7 +1536,7 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 .server-table td {
-  padding: 10px 14px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--line);
   vertical-align: middle;
 }
@@ -1539,16 +1549,32 @@ input[type='number']::-webkit-inner-spin-button {
   background: var(--panel-inset);
 }
 
-.server-table-name {
+/* 名字与实例 ID 上下两行：ID 单独占一列太费宽度，塞进名字下面一屏能少拉一格 */
+.server-table-title {
   font-size: 13px;
   font-weight: 620;
   color: var(--ink);
-  display: inline-block;
-  max-width: 180px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  vertical-align: middle;
+}
+
+.server-table-sub {
+  display: block;
+  margin-top: 2px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 10.5px;
+  color: var(--muted-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.server-table-region {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
 }
 
 .server-table-cell {
@@ -1566,15 +1592,6 @@ input[type='number']::-webkit-inner-spin-button {
   white-space: nowrap;
 }
 
-.server-table-id {
-  display: inline-block;
-  max-width: 150px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  vertical-align: middle;
-}
-
 .server-table-muted {
   color: var(--muted-soft);
   white-space: nowrap;
@@ -1587,17 +1604,92 @@ input[type='number']::-webkit-inner-spin-button {
   white-space: nowrap;
 }
 
+/* 费用两行（本月 / 余额），刷新按钮浮在右侧，别占掉一整行宽度 */
+.server-table td.server-table-cost {
+  position: relative;
+  padding-right: 30px;
+}
+
+.server-table-cost .cost-row.compact {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.server-table-cost .cost-refresh {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  margin-left: 0;
+}
+
+/* 域名框：一行放得下就并排，放不下换行，绝不撑宽表格 */
+.server-table-dns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* 表格里省一点内边距，20 字符的域名才装得进这一列 */
+.server-table-dns .dns-chip {
+  gap: 3px;
+  padding: 1px 5px;
+}
+
 .server-table-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  flex-wrap: nowrap;
   gap: 3px;
+}
+
+/* 表格里的按钮压到 22px 上下，5 个图标才排得进一行 */
+.server-table-actions .btn {
+  padding: 3px 4px;
+}
+
+.server-table-actions .btn svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* 换班组名字长的别把单元格顶开，超了直接省略 */
+.server-table .owner-tag {
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.owner-tag-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .cost-row.compact {
   flex-wrap: nowrap;
   gap: 8px;
+}
+
+/* 窄屏（手机/半屏）再允许横向滚动，定宽布局会把 9 列压得没法看 */
+@media (max-width: 900px) {
+  .server-table {
+    table-layout: auto;
+    min-width: 820px;
+  }
+
+  .server-table-cost .cost-row.compact {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+  }
 }
 
 

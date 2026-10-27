@@ -461,6 +461,8 @@ def register(app: FastAPI) -> None:
         keepalives = repo.list_keepalives()
         managed = _managed_map()
         books = dns.record_books()
+        # 卡片上的域名框：本机自己绑的 + 它所在换班组「当班时」的域名
+        cards = dns.books_for_cards(now.timestamp(), books)
 
         return {
             "now": now.isoformat(),
@@ -470,7 +472,7 @@ def register(app: FastAPI) -> None:
             "brand": settings.BRAND,
             "repo": settings.REPO,
             "servers": [
-                server_summary(s, managed, books.get("servers")) for s in repo.list_servers()
+                server_summary(s, managed, cards) for s in repo.list_servers()
             ],
             "keepalives": [
                 {
@@ -505,12 +507,9 @@ def register(app: FastAPI) -> None:
     @app.get("/api/v1/servers")
     def servers(user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
         managed = _managed_map()
-        books = dns.record_books()
-        return {
-            "items": [
-                server_summary(s, managed, books.get("servers")) for s in repo.list_servers()
-            ]
-        }
+        # 与 overview 一致：换班组绑定的域名只挂在「此刻当班」那台的卡片上
+        cards = dns.books_for_cards()
+        return {"items": [server_summary(s, managed, cards) for s in repo.list_servers()]}
 
     @app.post("/api/v1/servers")
     def save_server(request: Request, payload: dict[str, Any], user: str = Depends(require_admin)):  # noqa: ANN202, ARG001

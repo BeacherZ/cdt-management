@@ -253,6 +253,33 @@ class Cdp {
     await cdp.clickByText('.sidebar .nav-item', '服务器')
     await cdp.shot('05-servers.png')
 
+    // 3.1 列表视图：域名列的逻辑跟卡片一致（组域名只在当班那台），且不许被撑出横向滚动条
+    await cdp.clickByText('.view-toggle button', '列表')
+    await cdp.waitSelector('.server-table')
+    await sleep(400)
+    const tableCheck = await cdp.evaluate(`(() => {
+      const card = document.querySelector('.server-table-card')
+      const rows = [...document.querySelectorAll('.server-table tbody tr')]
+      const dnsOf = (row) => {
+        const cells = [...row.querySelectorAll('td')]
+        return cells[7] ? cells[7].textContent.replace(/\\s+/g, '') : ''
+      }
+      return {
+        overflow: card.scrollWidth - card.clientWidth,
+        rows: rows.length,
+        chips: document.querySelectorAll('.server-table tbody .dns-chip').length,
+        dns: rows.map(dnsOf).join(' / '),
+      }
+    })()`)
+    if (tableCheck.overflow > 1) {
+      throw new Error('列表视图被撑出横向滚动：+' + tableCheck.overflow + 'px')
+    }
+    if (!tableCheck.rows || !tableCheck.chips) {
+      throw new Error('列表视图没显示域名框：' + JSON.stringify(tableCheck))
+    }
+    console.log(`  ✓ 列表视图无横向滚动（${tableCheck.rows} 行 / ${tableCheck.chips} 个域名框）`)
+    await cdp.shot('05b-servers-list.png')
+
     // 3.5 DNS 页：一条域名只绑一个目标，没绑的不动
     await cdp.clickByText('.sidebar .nav-parent', 'DNS')
     await cdp.waitSelector('.dns-row')
