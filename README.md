@@ -112,7 +112,7 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 
 ## 阿里云 RAM 权限
 
-给一套 AccessKey 就能跑，权限按下面三组挂上同名系统策略即可：
+权限按下面三组挂上同名系统策略就行：
 
 | 系统策略 | 用在哪 |
 | --- | --- |
@@ -120,10 +120,8 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 | `AliyunCDTReadOnlyAccess` | 读当月 CDT 公网流量 |
 | `AliyunBSSReadOnlyAccess` | 账户余额、实例账单 |
 
-想收窄一点就自建策略，只放这六个 Action：`ecs:DescribeInstances`、`ecs:StartInstances`、`ecs:StopInstances`、`cdt:ListCdtInternetTraffic`、`bss:QueryAccountBalance`、`bss:DescribeInstanceBill`。
-
-- 少 `cdt:ListCdtInternetTraffic`：整轮对账都会失败，不只是流量空着
-- 少 `bss:*`：只是费用和余额显示不出来，启停照常
+- 少了 CDT 这组，整轮对账都会失败，不是流量空着 —— 必须给
+- 少了 BSS 这组，费用和余额显示不出来，启停照常
 - 国内站和国际站的 AK 不通用，一台服务器一套凭据
 - 控制台：[国内站](https://ram.console.aliyun.com/users) · [国际站](https://ram.console.alibabacloud.com/users)
 
