@@ -3,14 +3,21 @@ import { ArrowDown, ArrowUp, Divide, GripVertical, Plus, Repeat, Trash2, Triangl
 import { post } from '../api'
 import type { Server, ShiftGroup } from '../types'
 import { Modal, Switch } from './ui'
+import ServerPicker from './ServerPicker'
 
 type Row = {
+  /** 0 = 还没选服务器 */
   server_id: number
   hours: number
   enabled: boolean
   slot_name: string
   start_time: string
   end_time: string
+}
+
+/** 新建时先摆两行空位：选择框留空，由用户自己挑，不自动塞前两台 */
+function emptyRow(): Row {
+  return { server_id: 0, hours: 12, enabled: true, slot_name: '', start_time: '', end_time: '' }
 }
 
 /** 把「HH:MM 起始 + 时长小时」换算成「HH:MM 结束」，自动处理跨天（次日 00:00 归零） */
@@ -48,9 +55,11 @@ type Props = {
   servers: Server[]
   onClose: () => void
   onSaved: (message: string) => void
+  /** 在选择器里取消了某台机器的单机保活后，让父级刷新一次归属 */
+  onKeepaliveCleared?: () => void
 }
 
-export default function GroupDialog({ group, servers, onClose, onSaved }: Props) {
+export default function GroupDialog({ group, servers, onClose, onSaved, onKeepaliveCleared }: Props) {
   const editing = Boolean(group && group.id)
   const [name, setName] = useState(group?.name ?? '联合换班')
   const [enabled, setEnabled] = useState(group?.enabled ?? true)
@@ -66,20 +75,19 @@ export default function GroupDialog({ group, servers, onClose, onSaved }: Props)
         end_time: member.end_time ?? '',
       }))
     }
-    const seed = servers.slice(0, 2)
-    return seed.map((server) => ({
-      server_id: server.id,
-      hours: Math.round(24 / Math.max(1, seed.length)),
-      enabled: true,
-      slot_name: '',
-      start_time: '',
-      end_time: '',
-    }))
+    return [emptyRow(), emptyRow()]
   })
+  const [picking, setPicking] = useState<number | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
-  const total = rows.filter((row) => row.enabled).reduce((sum, row) => sum + (row.hours || 0), 0)
+  const total = rows
+    .filter((row) => row.enabled && row.server_id)
+    .reduce((sum, row) => sum + (row.hours || 0), 0)
+
+  function labelOf(serverId: number): string {
+    return servers.find((server) => server.id === serverId)?.label ?? '（服务器已删除）'
+  }
 
   function update(index: number, patch: Partial<Row>) {
     setRows((current) => current.map((row, i) => (i === index ? { ...row, ...patch } : row)))
@@ -101,21 +109,21 @@ export default function GroupDialog({ group, servers, onClose, onSaved }: Props)
 
   function add() {
     const used = new Set(rows.map((row) => row.server_id))
-    const candidate = servers.find((server) => !used.has(server.id))
-    if (!candidate) {
+    if (!servers.some((server) => !used.has(server.id))) {
       setError('所有服务器都已经在这个组里了')
       return
     }
-    setRows((current) => [
-      ...current,
-      { server_id: candidate.id, hours: 12, enabled: true, slot_name: '', start_time: '', end_time: '' },
-    ])
+    setRows((current) => [...current, emptyRow()])
     setError('')
   }
 
   /** 平摊工时：24 小时按成员数均分，组员 1 从 0 点起步，依次首尾相接 */
   function splitEvenly() {
     if (rows.length === 0) return
+    if (rows.some((row) => !row.server_id)) {
+      setError('先把每行的服务器选上，再平摊工时')
+      return
+    }
     const count = rows.length
     // 用分钟做整数均分，除不尽的余数补给最后一位，保证总和正好 24 小时
     const base = Math.floor((24 * 60) / count)
@@ -159,6 +167,11 @@ export default function GroupDialog({ group, servers, onClose, onSaved }: Props)
 
   async function save() {
     setError('')
+    const blank = rows.findIndex((row) => !row.server_id)
+    if (blank >= 0) {
+      setError(`第 ${blank + 1} 行还没选服务器`)
+      return
+    }
     if (rows.length < 2) {
       setError('至少需要两台服务器')
       return
@@ -230,7 +243,7 @@ export default function GroupDialog({ group, servers, onClose, onSaved }: Props)
       footer={
         <>
           <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>
-            一个周期 {total || 0} 小时，按顺序轮换
+            {total > 0 ? `一个周期 ${total} 小时，按顺序轮换` : '选好服务器后，这里显示一个周期多长'}
           </span>
           <span className="spacer" />
           <button className="btn" onClick={onClose}>
@@ -267,23 +280,16 @@ export default function GroupDialog({ group, servers, onClose, onSaved }: Props)
             <div className="member-row" key={`${row.server_id}-${index}`}>
               <GripVertical size={14} style={{ color: 'var(--muted-soft)' }} />
               <span className="member-order">{index + 1}</span>
-              <select
-                className="select"
-                value={row.server_id}
-                onChange={(event) => update(index, { server_id: Number(event.target.value) })}
+              <button
+                type="button"
+                className={`select member-pick${row.server_id ? '' : ' is-empty'}`}
+                title="点击选择服务器"
+                onClick={() => setPicking(index)}
               >
-                {servers.map((server) => {
-                  // 已经被别的行占用就别再选一次，省得保存时才报「重复添加」
-                  const taken = rows.some(
-                    (other, otherIndex) => otherIndex !== index && other.server_id === server.id,
-                  )
-                  return (
-                    <option key={server.id} value={server.id} disabled={taken}>
-                      {taken ? `${server.label}（已在本组）` : server.label}
-                    </option>
-                  )
-                })}
-              </select>
+                <span className="member-pick-text">
+                  {row.server_id ? labelOf(row.server_id) : '选择服务器'}
+                </span>
+              </button>
               <input
                 className="input member-slot"
                 value={row.slot_name}
@@ -393,6 +399,30 @@ export default function GroupDialog({ group, servers, onClose, onSaved }: Props)
           <TriangleAlert size={14} />
           {error}
         </div>
+      )}
+
+      {picking !== null && (
+        <ServerPicker
+          servers={servers}
+          currentGroupId={group?.id || undefined}
+          taken={
+            new Set(
+              rows
+                .filter((row, index) => index !== picking && row.server_id)
+                .map((row) => row.server_id),
+            )
+          }
+          onClose={() => setPicking(null)}
+          onKeepaliveCleared={onKeepaliveCleared}
+          onPick={(server) => {
+            const index = picking
+            setRows((current) =>
+              current.map((row, i) => (i === index ? { ...row, server_id: server.id } : row)),
+            )
+            setPicking(null)
+            setError('')
+          }}
+        />
       )}
     </Modal>
   )

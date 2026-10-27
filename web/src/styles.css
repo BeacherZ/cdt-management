@@ -2872,6 +2872,99 @@ input[type='number']::-webkit-inner-spin-button {
   color: var(--muted-soft);
 }
 
+/* 成员行里的「选择服务器」：长得像下拉框，点开是带归属状态的列表 */
+.member-pick {
+  flex: 1 1 150px;
+  min-width: 128px;
+  display: flex;
+  align-items: center;
+  text-align: left;
+  cursor: pointer;
+}
+
+.member-pick-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.member-pick.is-empty .member-pick-text {
+  color: var(--muted-soft);
+}
+
+/* ---- 选服务器：右侧标出现有归属，灰的不能选 ---- */
+
+.server-pick-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 46vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.server-pick-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  background: var(--panel-inset);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease);
+}
+
+.server-pick-row:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+  background: var(--panel-solid);
+}
+
+.server-pick-row.is-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.server-pick-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.server-pick-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.server-pick-id {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--muted-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.server-pick-note {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--muted-soft);
+}
+
+.server-pick-row .owner-tag {
+  flex: none;
+}
+
 /* -------------------------------------------------------------- 手机（≤700px） */
 
 /* 手机上一律不横向滚动：能堆就堆，能换行就换行 */

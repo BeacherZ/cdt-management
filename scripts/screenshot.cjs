@@ -343,6 +343,35 @@ class Cdp {
     await cdp.shot('10-group-dialog.png')
     await cdp.clickSelector('.modal .close')
 
+    // 5.1 新建组：成员框留空由用户自己选；选择器里已编组的机器要是灰的
+    await cdp.clickByText('.page-actions button', '新建换班组')
+    await cdp.waitSelector('.member-pick')
+    const emptyPicks = await cdp.evaluate(
+      `[...document.querySelectorAll('.member-pick')].map((node) => node.textContent.trim())`,
+    )
+    if (!emptyPicks.length || emptyPicks.some((text) => text !== '选择服务器')) {
+      throw new Error('新建组默认没留空：' + JSON.stringify(emptyPicks))
+    }
+    await cdp.clickSelector('.member-pick')
+    await cdp.waitSelector('.server-pick-list')
+    await sleep(400)
+    const pickRows = await cdp.evaluate(`[...document.querySelectorAll('.server-pick-row')].map((node) => ({
+      owner: node.querySelector('.owner-tag').textContent.trim(),
+      disabled: node.disabled,
+    }))`)
+    if (!pickRows.some((row) => row.owner.includes('换班组') && row.disabled)) {
+      throw new Error('选择器里已加入换班组的机器不是灰的：' + JSON.stringify(pickRows))
+    }
+    if (!pickRows.some((row) => row.owner.includes('闲散') && !row.disabled)) {
+      throw new Error('选择器里没有可选的闲散机器')
+    }
+    await cdp.shot('10b-group-picker.png')
+    await cdp.evaluate(`[...document.querySelectorAll('.modal')].pop().querySelector('.close').click()`)
+    await sleep(400)
+    await cdp.clickSelector('.modal .close')
+    await sleep(300)
+    console.log('  ✓ 新建组默认留空，选择器按归属灰选')
+
     // 6. 添加服务器：站点类型 + 按站点过滤的地域
     await cdp.clickByText('.sidebar .nav-item', '服务器')
     await cdp.clickByText('.page-actions button', '添加服务器')

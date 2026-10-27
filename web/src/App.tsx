@@ -710,6 +710,7 @@ export default function App() {
           group={groupDialog.group}
           servers={overview.servers}
           onClose={() => setGroupDialog({ open: false, group: null })}
+          onKeepaliveCleared={() => void loadAll()}
           onSaved={async (message) => {
             setGroupDialog({ open: false, group: null })
             await loadAll()

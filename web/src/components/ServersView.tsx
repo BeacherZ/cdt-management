@@ -18,7 +18,8 @@ import {
   Trash2,
 } from 'lucide-react'
 import { regionLabel } from '../regions'
-import type { Billing, Managed, Server } from '../types'
+import { ownerBase, ownerLabel } from '../owners'
+import type { Billing, Server } from '../types'
 import { Badge, Empty, Meter, statusLabel, statusTone, stoppedModeLabel } from './ui'
 
 type Props = {
@@ -43,16 +44,6 @@ function dnsRecords(value?: string): string[] {
     .split('、')
     .map((item) => item.trim())
     .filter(Boolean)
-}
-
-/** 「归属」的名字部分：卡片和列表共用，避免同一台机器两处措辞不一样 */
-function ownerBase(owner: Managed): string {
-  return owner.kind === 'group' ? `换班组「${owner.name}」` : '单机保活'
-}
-
-/** 「归属」完整文案：名字 + 托管状态，卡片和列表都走这里 */
-function ownerLabel(owner: Managed | null): string {
-  return owner ? `${ownerBase(owner)}${owner.active ? '托管' : '已暂停'}` : '闲散 · 手动'
 }
 
 export default function ServersView({
