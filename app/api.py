@@ -184,6 +184,10 @@ _login_lock = threading.Lock()
 LOGIN_WINDOW = 300
 LOGIN_MAX_FAILURES = 8
 
+# 概览页的事件窗口：一次最多给这么多条。前端先露 8 条，
+# 剩下的点「显示更多事件」再展开，不用每次翻页都重新请求。
+OVERVIEW_EVENT_LIMIT = 20
+
 
 # --------------------------------------------------------------------------
 # 鉴权
@@ -601,7 +605,8 @@ def register(app: FastAPI) -> None:
                 "email": "email" in channels,
                 "webhook": "webhook" in channels,
             },
-            "events": repo.list_events(limit=40),
+            # 概览页的事件窗口，最近 20 条；要翻更早的走 /api/v1/events（可传 limit）
+            "events": repo.list_events(limit=OVERVIEW_EVENT_LIMIT),
         }
 
     @app.post("/api/v1/reconcile")

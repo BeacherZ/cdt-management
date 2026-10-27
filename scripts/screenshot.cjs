@@ -216,6 +216,45 @@ class Cdp {
     await sleep(1200)
     await cdp.shot('02-dashboard.png')
 
+    // 2.0 「最近事件」默认只列 8 条，底下的「显示更多事件」负责展开剩下的（后端最多给 20 条）
+    const recent = await cdp.evaluate(`(() => {
+      const head = [...document.querySelectorAll('.section-head')].find((node) =>
+        (node.textContent || '').includes('最近事件'))
+      const more = document.querySelector('.events-more')
+      return {
+        rows: document.querySelectorAll('.events .event').length,
+        badge: head ? (head.querySelector('.badge') || {}).textContent || '' : '',
+        more: more ? more.textContent.trim() : '',
+      }
+    })()`)
+    const eventRows = recent.rows
+    const eventTotal = Number(recent.badge.trim() || 0)
+    if (eventRows > 8) throw new Error(`最近事件默认显示了 ${eventRows} 条，应不超过 8 条`)
+    if (eventTotal < eventRows) throw new Error(`事件角标 ${eventTotal} 小于列表 ${eventRows} 条`)
+    if (eventTotal > 20) throw new Error(`概览一次给了 ${eventTotal} 条事件，后端上限应为 20`)
+    if (eventTotal > eventRows) {
+      if (!recent.more.includes('显示更多事件')) {
+        throw new Error(`事件还有 ${eventTotal - eventRows} 条没露出来，却没找到「显示更多事件」按钮`)
+      }
+      await cdp.clickSelector('.events-more')
+      await sleep(300)
+      const expanded = await cdp.evaluate(`(() => ({
+        rows: document.querySelectorAll('.events .event').length,
+        more: (document.querySelector('.events-more') || {}).textContent || '',
+      }))()`)
+      if (expanded.rows <= eventRows) throw new Error('点了「显示更多事件」列表没变长')
+      if (expanded.rows > eventTotal) throw new Error('展开后条数超过了总数')
+      if (expanded.rows < eventTotal && !expanded.more.includes('显示更多事件')) {
+        throw new Error('还没展开完，「显示更多事件」按钮就不见了')
+      }
+      console.log(
+        `  ✓ 最近事件默认 8 条，展开后 ${eventRows} → ${expanded.rows}（共 ${eventTotal} 条）`,
+      )
+    } else {
+      if (recent.more) throw new Error('事件已经全部露出来了，不该还有「显示更多事件」按钮')
+      console.log(`  ✓ 最近事件 ${eventRows} 条全部列出，没有多余按钮`)
+    }
+
     // 2.1 概览页前三个指标卡要能点进对应页面（顺序：服务器 / 单机保活 / 联合换班）
     const navByStat = await cdp.evaluate(`(async () => {
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms))

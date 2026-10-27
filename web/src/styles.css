@@ -2054,6 +2054,18 @@ input[type='number']::-webkit-inner-spin-button {
   flex-direction: column;
 }
 
+/* 事件列表底部「显示更多事件」：整行宽、居中、低调，别抢事件本身的注意力 */
+.events-more {
+  width: 100%;
+  margin-top: 6px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.events-more:hover:not(:disabled) {
+  color: var(--ink);
+}
+
 .event {
   display: flex;
   flex-direction: column;

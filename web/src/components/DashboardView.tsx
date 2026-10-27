@@ -47,6 +47,9 @@ function timeAgo(ts: number): string {
   return new Date(ts * 1000).toLocaleDateString('zh-CN')
 }
 
+/** 事件列表默认露这么多条，点一次「显示更多事件」再加这么多（后端最多给 20 条） */
+const RECENT_EVENT_PAGE = 8
+
 function clock(ts: number): string {
   if (!ts) return '—'
   return new Date(ts * 1000).toLocaleTimeString('zh-CN', {
@@ -62,11 +65,15 @@ export default function DashboardView({
   overview: Overview
   onNavigate: (view: 'servers' | 'keepalive' | 'shift') => void
 }) {
+  // 后端一次给最近 20 条，先露 8 条，剩下的点「显示更多事件」再展开
+  const [eventCount, setEventCount] = useState(RECENT_EVENT_PAGE)
   const running = overview.servers.filter((server) => server.instance_status === 'Running').length
   const totalTraffic = overview.servers.reduce((sum, server) => sum + (server.traffic_used || 0), 0)
   const alarms = overview.servers.filter(
     (server) => (server.traffic_used || 0) >= server.threshold_gb,
   ).length
+  const recentEvents = overview.events.slice(0, eventCount)
+  const hiddenEvents = overview.events.length - recentEvents.length
 
   return (
     <>
@@ -278,7 +285,7 @@ export default function DashboardView({
           </div>
         </div>
         <div className="card card-pad">
-          {overview.events.length === 0 ? (
+          {recentEvents.length === 0 ? (
             <div className="empty">
               <div className="empty-icon">
                 <Info size={20} />
@@ -287,11 +294,23 @@ export default function DashboardView({
               <p>第一轮同步完成后，这里会出现换班与状态变化的记录。</p>
             </div>
           ) : (
-            <div className="events">
-              {overview.events.map((event) => (
-                <EventRow key={event.id} event={event} />
-              ))}
-            </div>
+            <>
+              <div className="events">
+                {recentEvents.map((event) => (
+                  <EventRow key={event.id} event={event} />
+                ))}
+              </div>
+              {hiddenEvents > 0 && (
+                <button
+                  type="button"
+                  className="btn ghost events-more"
+                  onClick={() => setEventCount((current) => current + RECENT_EVENT_PAGE)}
+                >
+                  <ChevronDown size={14} />
+                  显示更多事件（还有 {hiddenEvents} 条）
+                </button>
+              )}
+            </>
           )}
         </div>
       </div>
