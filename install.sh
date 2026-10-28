@@ -79,8 +79,33 @@ remove_project() {
     if command -v docker >/dev/null 2>&1; then
         say "删除容器 $NAME"
         docker rm -f "$NAME" >/dev/null 2>&1 || true
-        say "删除镜像 $IMAGE"
-        docker rmi "$IMAGE" >/dev/null 2>&1 || true
+        # 镜像名去掉 tag 部分：localhost:5000/x/y:latest 要留 registry 的端口，
+        # 所以不能简单按第一个冒号切。
+        case "$IMAGE" in
+            *@*) repo="${IMAGE%@*}" ;;
+            *:*) repo="${IMAGE%:*}" ;;
+            *) repo="$IMAGE" ;;
+        esac
+        say "删除镜像 $repo"
+        # 镜像在本地可能挂着多个 tag（比如用户手动 pull 过 :1.1.12）。这时
+        # `docker rmi <单个 tag>` 会以「image is referenced in multiple
+        # repositories」失败退出；错误再被吞掉，镜像就留在本地了 —— 下次安装的
+        # docker pull 直接命中缓存、一个字节都不下载，GHCR 那边也就统计不到。
+        # 所以按仓库名把所有本地 tag 一起清掉，而不是只删 $IMAGE 那一个。
+        docker rmi -f "$IMAGE" >/dev/null 2>&1 || true
+        docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null |
+            { grep -F "${repo}:" || true; } |
+            while read -r ref; do
+                docker rmi -f "$ref" >/dev/null 2>&1 || true
+            done
+        # 删完自检：还留着就明确告警，别静默当成功
+        left="$(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null |
+            { grep -F "${repo}:" || true; })"
+        if [ -n "$left" ]; then
+            warn "镜像没删干净，下次安装会命中本地缓存、不会重新下载："
+            printf '%s\n' "$left" | sed 's/^/      /'
+            warn "手动清理：docker rmi -f $(printf '%s' "$left" | tr '\n' ' ')"
+        fi
     else
         say "没装 Docker，跳过容器和镜像"
     fi
