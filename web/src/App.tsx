@@ -7,7 +7,6 @@ import {
   HeartPulse,
   LoaderCircle,
   LogOut,
-  Plus,
   RefreshCw,
   Repeat,
   Server as ServerIcon,
@@ -15,7 +14,7 @@ import {
   Zap,
 } from 'lucide-react'
 import { APIError, SLOW_TIMEOUT_MS, api, del, post } from './api'
-import type { InitStatus, Keepalive, Overview, Server, Settings, ShiftGroup } from './types'
+import type { InitStatus, Keepalive, Managed, Overview, Server, Settings, ShiftGroup } from './types'
 import Auth from './components/Auth'
 import DashboardView from './components/DashboardView'
 import KeepaliveView from './components/KeepaliveView'
@@ -26,7 +25,8 @@ import GroupDialog from './components/GroupDialog'
 import SettingsDrawer from './components/SettingsDrawer'
 import ConfirmDialog from './components/ConfirmDialog'
 import DNSView from './components/DNSView'
-import { Badge, Empty, Modal, statusLabel, statusTone } from './components/ui'
+import { Badge, Modal } from './components/ui'
+import { ownerLabel } from './owners'
 
 type Phase = 'loading' | 'setup' | 'login' | 'ready' | 'fatal'
 type View = 'dashboard' | 'keepalive' | 'shift' | 'servers' | 'dns'
@@ -594,9 +594,18 @@ export default function App() {
   const groupedIds = new Set(
     overview.groups.flatMap((group) => group.members.map((member) => member.server_id)),
   )
-  const available = overview.servers.filter(
-    (server) => !keepaliveIds.has(server.id) && !groupedIds.has(server.id),
-  )
+  // 组名回查：后端 managed 只标「启用的组员」，停用组员 managed 缺失，这里补全
+  // 名字供「加入单机保活」选择器展示归属标签（active 按 组启用 && 成员启用 算）。
+  const groupOwnerOf = new Map<number, Managed>()
+  for (const group of overview.groups) {
+    for (const member of group.members) {
+      groupOwnerOf.set(member.server_id, {
+        kind: 'group',
+        name: group.name,
+        active: group.enabled && member.enabled,
+      })
+    }
+  }
 
   return (
     <div className="app-shell">
@@ -814,33 +823,57 @@ export default function App() {
           title="加入单机保活"
           icon={<HeartPulse size={16} style={{ color: 'var(--green)' }} />}
           onClose={() => setKeepalivePicker(false)}
+          footer={
+            <>
+              <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>
+                已加入单机保活或换班组的机器是灰的，一台机器只能进一个
+              </span>
+              <span className="spacer" />
+              <button className="btn" onClick={() => setKeepalivePicker(false)}>
+                关闭
+              </button>
+            </>
+          }
         >
-          {available.length === 0 ? (
-            <Empty icon={<Plus size={18} />} title="没有可添加的服务器">
-              所有服务器都已在单机保活或换班组里了。编进换班组的机器按班次自动启停，不会再进单机保活。
-            </Empty>
+          {overview.servers.length === 0 ? (
+            <div className="hint">还没有服务器，先去「服务器」页添加</div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {available.map((server) => (
-                <button
-                  key={server.id}
-                  className="slot"
-                  style={{ textAlign: 'left', cursor: 'pointer' }}
-                  disabled={addingKeepalive}
-                  onClick={() => addKeepalive(server.id)}
-                >
-                  <div className="slot-top">
-                    <Badge tone={statusTone(server.instance_status)}>
-                      {statusLabel(server.instance_status, server.stopped_mode)}
-                    </Badge>
-                  </div>
-                  <div className="slot-name">{server.label}</div>
-                  <div className="slot-line">
-                    <code>{server.instance_id || '未填实例'}</code>
-                    <span>{server.public_ip || '无公网 IP'}</span>
-                  </div>
-                </button>
-              ))}
+            <div className="server-pick-list">
+              {overview.servers.map((server) => {
+                const owner = server.managed ?? null
+                const inKeepalive = keepaliveIds.has(server.id)
+                const inGroup = groupedIds.has(server.id)
+                const blocked = inKeepalive || inGroup
+                const reason = inGroup
+                  ? '已加入联合换班组，一台机器只能进一个组'
+                  : inKeepalive
+                    ? '已加入单机保活，先移出后再添加'
+                    : ''
+                // 归属标签：managed 优先（含名称与启停状态）；停用组员 managed 缺失，用组名回查兜底
+                const display = owner ?? (inGroup ? groupOwnerOf.get(server.id) : undefined)
+                return (
+                  <button
+                    type="button"
+                    key={server.id}
+                    className={`server-pick-row${blocked ? ' is-disabled' : ''}`}
+                    disabled={blocked || addingKeepalive}
+                    title={reason || `选择「${server.label}」`}
+                    onClick={() => addKeepalive(server.id)}
+                  >
+                    <span className="server-pick-main">
+                      <span className="server-pick-name">{server.label}</span>
+                      <code className="server-pick-id">{server.instance_id || '未填实例 ID'}</code>
+                    </span>
+                    <span
+                      className={`owner-tag${display ? (display.active ? ' locked' : ' paused') : ' free'}`}
+                    >
+                      {display?.kind === 'group' ? <Repeat size={10} /> : null}
+                      {display?.kind === 'keepalive' ? <HeartPulse size={10} /> : null}
+                      <span className="owner-tag-text">{ownerLabel(display)}</span>
+                    </span>
+                  </button>
+                )
+              })}
             </div>
           )}
         </Modal>
