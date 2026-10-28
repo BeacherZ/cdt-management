@@ -78,9 +78,10 @@ jobs:
 
       # 只有发版才推送，所以这里产出的 tag 只服务发行版：
       #   latest      最新发行版，给日常 pull 用
-      #   v1.1.12     与 GitHub 发行版同名，一眼能对上
-      #   1.1.12      语义版本，习惯写法
+      #   v1.1.12     与 GitHub 发行版同名（tag 统一带 v，跟 Release 一致）
       #   sha-26b1def 这次发版对应的提交
+      # 不再产出不带 v 的 1.1.12：镜像 tag 与发行版同名，用户在 GHCR 和发行版
+      # 页之间才能一眼对上版本、判断要不要更新（带不带 v 都按 GitHub 惯例带 v）。
       # flavor latest=false：关掉 metadata-action 给 semver 自动补 latest 的行为，
       # 让 latest 只有「打 v* 标签」一个来源，不再有第二条路径抢它。
       #
@@ -93,7 +94,6 @@ jobs:
             latest=false
           tags: |
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-            type=semver,pattern={{version}}
             type=ref,event=tag
             type=sha,prefix=sha-
 
@@ -115,3 +115,34 @@ jobs:
             BUILT_AT=${{ steps.stamp.outputs.date }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # 打 v* 标签时自动建同名发行版：tag_name 直接取 git 标签（v1.1.15），
+  # 与镜像 tag、版本号同源，不再靠手动创建 —— 免得镜像出了、发行版忘了建，
+  # 或者版本号对不上。用户在 Release 页看到 v1.1.15，就能直接对到镜像 v1.1.15。
+  release:
+    needs: image
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 读取提交短哈希
+        id: sha
+        run: echo "short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: 创建发行版
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          body: |
+            ### 镜像标签
+
+            | 标签 | 指向 |
+            | --- | --- |
+            | `latest` | 最新发行版，只在打 `v*` 标签时移动 |
+            | `${{ github.ref_name }}` | 与发行版同名 |
+            | `sha-${{ steps.sha.outputs.short }}` | 对应提交 |
