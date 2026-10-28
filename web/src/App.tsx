@@ -13,7 +13,7 @@ import {
   Settings as SettingsIcon,
   Zap,
 } from 'lucide-react'
-import { APIError, api, del, post } from './api'
+import { APIError, SLOW_TIMEOUT_MS, api, del, post } from './api'
 import type { InitStatus, Keepalive, Overview, Server, Settings, ShiftGroup } from './types'
 import Auth from './components/Auth'
 import DashboardView from './components/DashboardView'
@@ -123,7 +123,13 @@ export default function App() {
   const [confirmBusy, setConfirmBusy] = useState(false)
   const [busyDns, setBusyDns] = useState<string | null>(null)
   const [dnsSyncingAll, setDnsSyncingAll] = useState(false)
+  // 轮询连续失败两轮以上才置 true：偶发一次抖动静默跳过，别每分钟弹一次提示
+  const [stale, setStale] = useState(false)
   const polling = useRef<number | null>(null)
+  const pollingBusy = useRef(false)
+  const failedRounds = useRef(0)
+  // settings 只在这里存一份，供 loadAll 判断「这次失败后还有没有旧值可用」
+  const settingsRef = useRef<Settings | null>(null)
 
   const toast = useCallback((message: string, tone: Toast['tone'] = 'info') => {
     const id = Date.now() + Math.random()
@@ -131,13 +137,32 @@ export default function App() {
     window.setTimeout(() => setToasts((current) => current.filter((item) => item.id !== id)), 4200)
   }, [])
 
-  const loadAll = useCallback(async () => {
-    const [nextOverview, nextSettings] = await Promise.all([
+  const loadAll = useCallback(async (): Promise<void> => {
+    // 两个接口各自成败：settings 偶发一次 500 不该把已经取到的 overview 一起丢掉，
+    // 否则整页停在旧数据上，看起来像同步坏了。
+    const [overviewResult, settingsResult] = await Promise.allSettled([
       api<Overview>('/api/v1/overview'),
       api<Settings>('/api/v1/settings'),
     ])
-    setOverview(nextOverview)
-    setSettings(nextSettings)
+
+    if (overviewResult.status === 'rejected') {
+      const error = overviewResult.reason
+      if (error instanceof APIError && error.status === 401) {
+        setPhase('login')
+        return
+      }
+      // 概览是整页的地基，取不到就没法渲染，如实抛给调用方
+      throw error
+    }
+    setOverview(overviewResult.value)
+
+    if (settingsResult.status === 'fulfilled') {
+      settingsRef.current = settingsResult.value
+      setSettings(settingsResult.value)
+    } else if (!settingsRef.current) {
+      // 一次都没成功过：页脚的同步间隔、SDK 状态都没有来源，这时报错比空着诚实
+      throw settingsResult.reason
+    }
     setPhase('ready')
   }, [])
 
@@ -168,10 +193,25 @@ export default function App() {
       return
     }
     polling.current = window.setInterval(() => {
+      // 后端慢于轮询间隔时别再叠一个请求上去，等上一轮回来再说
+      if (pollingBusy.current) return
+      pollingBusy.current = true
       void api<Overview>('/api/v1/overview')
-        .then(setOverview)
+        .then((next) => {
+          setOverview(next)
+          failedRounds.current = 0
+          setStale(false)
+        })
         .catch((error) => {
-          if (error instanceof APIError && error.status === 401) setPhase('login')
+          if (error instanceof APIError && error.status === 401) {
+            setPhase('login')
+            return
+          }
+          failedRounds.current += 1
+          if (failedRounds.current >= 2) setStale(true)
+        })
+        .finally(() => {
+          pollingBusy.current = false
         })
     }, REFRESH_MS)
     return () => {
@@ -181,7 +221,7 @@ export default function App() {
 
   async function reconcile() {
     try {
-      await post('/api/v1/reconcile')
+      await post('/api/v1/reconcile', undefined, SLOW_TIMEOUT_MS)
       await loadAll()
       toast('已触发一轮同步', 'success')
     } catch (error) {
@@ -242,7 +282,11 @@ export default function App() {
   async function serverBilling(server: Server) {
     setBillingServer(server.id)
     try {
-      const result = await post<{ error?: string }>(`/api/v1/servers/${server.id}/billing`)
+      const result = await post<{ error?: string }>(
+        `/api/v1/servers/${server.id}/billing`,
+        undefined,
+        SLOW_TIMEOUT_MS,
+      )
       await loadAll()
       if (result?.error) {
         toast(`费用已刷新，但${result.error}`, 'info')
@@ -274,7 +318,8 @@ export default function App() {
   async function switchGroup(group: ShiftGroup) {
     setBusyGroup(group.id)
     try {
-      await post(`/api/v1/groups/${group.id}/switch`)
+      // 手动换班要等引擎锁（后台可能正在对账），再走完整轮换班流程
+      await post(`/api/v1/groups/${group.id}/switch`, undefined, SLOW_TIMEOUT_MS)
       await loadAll()
       toast('正在切到下一台，完成后会推送报告', 'success')
     } catch (error) {
@@ -351,7 +396,12 @@ export default function App() {
       const result = await post<{
         records?: string[]
         sync?: { status: string; detail?: string }
-      }>(`/api/v1/dns/records/${encodeURIComponent(record)}/bind`, { kind, id })
+      }>(
+        `/api/v1/dns/records/${encodeURIComponent(record)}/bind`,
+        { kind, id },
+        // 绑完会立刻同步一次解析（Cloudflare 走网络），给慢接口的超时
+        SLOW_TIMEOUT_MS,
+      )
       await loadAll()
       // 绑定会立刻同步一次解析，把这次同步的结果带上，省得用户再去点「立即同步」
       const sync = result?.sync?.status ? `，解析${result.sync.status}` : ''
@@ -375,6 +425,9 @@ export default function App() {
     try {
       const result = await post<{ status?: string; detail?: string }>(
         `/api/v1/dns/records/${encodeURIComponent(record)}/sync`,
+        undefined,
+        // 单条同步内部还要重试 3 次、每次 12 秒超时，别用普通接口的 20 秒掐掉它
+        SLOW_TIMEOUT_MS,
       )
       await loadAll()
       const ok = (result?.status ?? '').startsWith('✅')
@@ -390,7 +443,11 @@ export default function App() {
   async function syncAllDns() {
     setDnsSyncingAll(true)
     try {
-      const result = await post<{ items?: { record: string; status: string }[] }>('/api/v1/dns/sync')
+      const result = await post<{ items?: { record: string; status: string }[] }>(
+        '/api/v1/dns/sync',
+        undefined,
+        SLOW_TIMEOUT_MS,
+      )
       await loadAll()
       const items = result?.items ?? []
       if (items.length === 0) {
@@ -686,6 +743,11 @@ export default function App() {
           <button className="btn ghost sm" onClick={reconcile}>
             <RefreshCw size={12} /> 立即同步
           </button>
+          {stale && (
+            <Badge tone="amber" dot>
+              连不上后端，数据可能已过期
+            </Badge>
+          )}
           <span>
             同步间隔 {settings.reconcile_interval} 秒 · {overview.timezone}
           </span>

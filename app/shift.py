@@ -1509,27 +1509,28 @@ class Engine:
                     self._manual_switch_timetable(group, config, now, now_ts)
                 )
 
-            total = sum(float(m["hours"]) for m in members) * 3600
-            anchor = float(group.get("anchor_at") or group.get("created_at") or now_ts)
-            elapsed = max(0.0, now_ts - anchor)
-            cycle_index = int(elapsed // total)
-            offset = elapsed - cycle_index * total
+            # 「当前谁当班」必须走 actual_duty：本班次可能已经故障转移过、
+            # 也被手动切过，那时 run.duty_server_id 才是真相。以前这里按偏移量
+            # 从时钟推当前成员，一旦发生过转移，「下一台」算出来的正是那个已经被
+            # 覆盖上去的当班机 —— 用户点「立即换班」看着按钮转了一圈，机器没变。
+            picked_now = actual_duty(group, now_ts)
+            current_member = picked_now[0] if picked_now else members[0]
 
-            # 找到当前所在成员，再取「下一个成员」在一个周期里的累计起点。
-            # 把 anchor 挪到 now - 该起点，此刻就正好落在下一班的开头。
-            accumulated = 0.0
-            cum_before_next = 0.0
             size = len(members)
-            current_member = members[0]
-            for index, member in enumerate(members):
-                span = float(member["hours"]) * 3600
-                if offset < accumulated + span:
-                    current_member = member
-                    cum_before_next = accumulated + span if index + 1 < size else 0.0
-                    break
-                accumulated += span
-            else:
-                cum_before_next = 0.0
+            current_index = next(
+                (
+                    index
+                    for index, member in enumerate(members)
+                    if int(member["server_id"]) == int(current_member["server_id"])
+                ),
+                -1,
+            )
+            # current_index = -1（实际当班不在启用成员里：被移出组或已停用）时，
+            # next_index 落回 0，从队首重新开始，不会取到不存在的下一个。
+            next_index = (current_index + 1) % size
+            # 「下一台」在一个周期里的累计起点；把 anchor 挪到 now - 该起点，
+            # 此刻就正好落在下一班的开头。
+            cum_before_next = sum(float(m["hours"]) for m in members[:next_index]) * 3600
 
             new_anchor = int(now_ts - cum_before_next)
             dbmod.execute(
@@ -1539,8 +1540,18 @@ class Engine:
             picked = duty_at(fresh, now_ts)
             if picked is not None:
                 slot_key = str(picked[1])
-                # manual 与 failover 分开记：手动切的班次不该被当成故障转移
-                repo.upsert_run(group_id, slot_key, manual=1, failover=0)
+                # manual 与 failover 分开记：手动切的班次不该被当成故障转移。
+                # duty_server_id 必须显式写成目标机：anchor 精确到秒，新 slot 的键
+                # 有可能和旧 slot 同值（同一秒内连点、或 elapsed 正好落在整秒），
+                # 那一行上还留着上一次的当班，而 actual_duty 见到 manual=1 就直接
+                # 采信 duty_server_id —— 于是「点了换班，当班没动」。
+                repo.upsert_run(
+                    group_id,
+                    slot_key,
+                    manual=1,
+                    failover=0,
+                    duty_server_id=int(picked[0]["server_id"]),
+                )
                 self._manual_event(
                     group_id, slot_key, group.get("name") or "", current_member, picked[0]
                 )

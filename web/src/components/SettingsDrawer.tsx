@@ -14,7 +14,7 @@ import {
   UserRound,
   X,
 } from 'lucide-react'
-import { fetchLatestRelease, post } from '../api'
+import { SLOW_TIMEOUT_MS, fetchLatestRelease, post } from '../api'
 import type { Settings } from '../types'
 import { Segmented, Switch } from './ui'
 
@@ -135,6 +135,8 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
       const result = await post<{ ok: boolean; detail: string; status?: string }>(
         `/api/v1/settings/test/${channel}`,
         form,
+        // 测试连接要真连 Cloudflare / Telegram / SMTP，DNS 那边还会逐条查记录
+        SLOW_TIMEOUT_MS,
       )
       // DDNS 后端返回的 status 已带 emoji（如「✅ 连接正常」「❌ DDNS 异常」），
       // 真正的原因在 detail 里，得一起露出来；其它渠道只有不带 emoji 的 detail。

@@ -212,7 +212,10 @@ def _send_email(config: dict[str, str], message: Message) -> None:
     try:
         if password:
             server.login(username, password)
-        server.sendmail(username, [recipient], mime.as_string())
+        # 发信信封的 MAIL FROM 也走同一个兜底：有些 SMTP（只填主机 + 收件人、
+        # 用服务器匿名转发的场景）留空 SMTP 账号是合法的，而空 from 会被直接拒信。
+        # 上面 header 里的 From 早就用 `username or recipient` 兜过一次了，两处要一致。
+        server.sendmail(username or recipient, [recipient], mime.as_string())
     finally:
         try:
             server.quit()
@@ -223,6 +226,17 @@ def _send_email(config: dict[str, str], message: Message) -> None:
 # --------------------------------------------------------------------------
 # Webhook
 # --------------------------------------------------------------------------
+
+def _json_inner(value: str) -> str:
+    """把值转义成「能安全放进 JSON 字符串字面量」的形式（去掉首尾引号）。
+
+    以前是直接 str.replace 塞进用户模板：换班组名 / 服务器备注都是自由输入，
+    含一个双引号（如 `香港"主力"`）就会产出 `{"content":"香港"主力"..."}`
+    这种非法 JSON，对方回 400，通知静默失败。json.dumps 顺带把换行转成 \\n，
+    正好也是嵌进 JSON 字符串该有的样子。
+    """
+    return json.dumps(str(value), ensure_ascii=False)[1:-1]
+
 
 def _send_webhook(config: dict[str, str], message: Message) -> None:
     url = config.get("notify_wh_url", "")
@@ -243,9 +257,9 @@ def _send_webhook(config: dict[str, str], message: Message) -> None:
         )
     else:
         body = (
-            body.replace("{title}", message.title)
-            .replace("{text}", message.text.replace("\n", "\\n"))
-            .replace("{kind}", message.kind)
+            body.replace("{title}", _json_inner(message.title))
+            .replace("{text}", _json_inner(message.text))
+            .replace("{kind}", _json_inner(message.kind))
         )
 
     if method == "GET":

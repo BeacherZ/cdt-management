@@ -70,7 +70,9 @@ export default function DashboardView({
   const running = overview.servers.filter((server) => server.instance_status === 'Running').length
   const totalTraffic = overview.servers.reduce((sum, server) => sum + (server.traffic_used || 0), 0)
   const alarms = overview.servers.filter(
-    (server) => (server.traffic_used || 0) >= server.threshold_gb,
+    // 和后端 shift._over_threshold 同一口径：阈值没配（0）的机器不算超限。
+    // 少了 threshold_gb > 0，0 >= 0 永远成立，概览会报「N 台超阈值」而引擎根本不动作。
+    (server) => server.threshold_gb > 0 && (server.traffic_used || 0) >= server.threshold_gb,
   ).length
   const recentEvents = overview.events.slice(0, eventCount)
   const hiddenEvents = overview.events.length - recentEvents.length
@@ -321,12 +323,18 @@ export default function DashboardView({
 // 通知永远是流程的最后一步：事件都是「确认状态到位 → 同步 DDNS → 推送通知」。
 // 旧版本的事件把「已推送…通知」记在了确认之前，这里按显示顺序沉到最后，
 // 让历史事件和新事件读起来一致（各自保持原有的先后关系）。
+// 文案有两代：「已推送 xxx 通知」（旧）和「报告已发送 / 报告发送失败：xxx」（新），
+// 两个都认；只认「通知」会让新事件里这一步失去排序保护。
+function isNotifyStep(text: string) {
+  return text.includes('通知') || text.includes('报告')
+}
+
 function orderSteps(steps: { ts: number; text: string }[]) {
   if (steps.length < 2) return steps
   const notify: typeof steps = []
   const rest: typeof steps = []
   for (const step of steps) {
-    if (step.text.includes('通知')) notify.push(step)
+    if (isNotifyStep(step.text)) notify.push(step)
     else rest.push(step)
   }
   return notify.length ? [...rest, ...notify] : steps

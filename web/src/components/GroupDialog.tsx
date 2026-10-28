@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { ArrowDown, ArrowUp, Divide, GripVertical, Plus, Repeat, Trash2, TriangleAlert } from 'lucide-react'
-import { post } from '../api'
+import { post, SLOW_TIMEOUT_MS } from '../api'
 import type { Server, ShiftGroup } from '../types'
 import { Modal, Switch } from './ui'
 import ServerPicker from './ServerPicker'
@@ -204,21 +204,26 @@ export default function GroupDialog({ group, servers, onClose, onSaved, onKeepal
     }
     setBusy(true)
     try {
-      const result = await post<{ id: number; bootstrap?: { error?: string } }>('/api/v1/groups', {
-        id: group?.id ?? 0,
-        name,
-        enabled,
-        failover_enabled: failover,
-        // 域名绑定不在这里改：由 DNS 页统一维护，避免两个入口写出不一致的绑定
-        members: rows.map((row) => ({
-          server_id: row.server_id,
-          hours: row.hours,
-          enabled: row.enabled,
-          slot_name: row.slot_name,
-          start_time: row.start_time,
-          end_time: row.end_time,
-        })),
-      })
+      const result = await post<{ id: number; bootstrap?: { error?: string } }>(
+        '/api/v1/groups',
+        {
+          id: group?.id ?? 0,
+          name,
+          enabled,
+          failover_enabled: failover,
+          // 域名绑定不在这里改：由 DNS 页统一维护，避免两个入口写出不一致的绑定
+          members: rows.map((row) => ({
+            server_id: row.server_id,
+            hours: row.hours,
+            enabled: row.enabled,
+            slot_name: row.slot_name,
+            start_time: row.start_time,
+            end_time: row.end_time,
+          })),
+        },
+        // 新建组会立刻按排班表整队（等引擎锁 + 开机 + 停待机），普通 20 秒不够
+        SLOW_TIMEOUT_MS,
+      )
       if (editing) {
         onSaved('换班组已更新')
       } else if (result?.bootstrap?.error) {

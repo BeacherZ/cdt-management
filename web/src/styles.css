@@ -679,6 +679,8 @@ label {
 .input:not([type='color']):not([type='checkbox']):not([type='radio']),
 .select,
 .textarea {
+  /* 老浏览器不认识 color-mix，整条会失效 → 输入框掉回透明底，和卡片糊在一起 */
+  background: var(--panel-soft);
   background: color-mix(in srgb, var(--panel-solid) 82%, var(--panel-inset));
 }
 
@@ -876,6 +878,8 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 .ring .ring-track {
+  /* 老浏览器兜底：stroke 失效的话整个底槽消失，只剩一段进度弧看不出占比 */
+  stroke: var(--line);
   stroke: color-mix(in srgb, var(--ink) 10%, transparent);
 }
 
@@ -944,6 +948,8 @@ input[type='number']::-webkit-inner-spin-button {
   bottom: 0;
   width: 1.5px;
   margin-left: -0.75px;
+  /* 老浏览器兜底：这条阈值线消失就看不出「用到哪就该换班」 */
+  background: var(--muted-soft);
   background: color-mix(in srgb, var(--ink) 46%, transparent);
   border-radius: 2px;
   transition: left 400ms var(--ease);
@@ -2160,6 +2166,10 @@ input[type='number']::-webkit-inner-spin-button {
   line-height: 1.55;
   color: var(--muted);
   word-break: break-word;
+  /* detail 里是「摘要 + 换行 + 补充说明」（比如 DNS 绑定那两条）。
+     默认 white-space 会把换行压成空格，窄屏上就断成「绑定后立 / 即同步」这种
+     拦腰截断的中文。pre-line 保留换行、其余照常折行。 */
+  white-space: pre-line;
 }
 
 .event-status {
@@ -2229,6 +2239,7 @@ input[type='number']::-webkit-inner-spin-button {
   color: var(--muted);
   line-height: 1.6;
   margin: 0;
+  white-space: pre-line;
 }
 
 .event-progress {
@@ -2336,6 +2347,8 @@ input[type='number']::-webkit-inner-spin-button {
   align-items: center;
   justify-content: center;
   padding: 20px;
+  /* 兜底在前、color-mix 在后：老浏览器只认前一条，遮罩不会变全透明 */
+  background: rgba(10, 16, 23, 0.46);
   background: color-mix(in srgb, #0a1017 46%, transparent);
   backdrop-filter: blur(6px) saturate(1.1);
   -webkit-backdrop-filter: blur(6px) saturate(1.1);
@@ -2428,7 +2441,10 @@ input[type='number']::-webkit-inner-spin-button {
   top: 0;
   right: 0;
   z-index: 95;
+  /* 抽屉底部就是「取消 / 保存」。iOS Safari 的 100vh 按地址栏收起时算，
+     比可视区高 60–100px，只写 100vh 会让保存按钮落在屏幕外点不到。 */
   height: 100vh;
+  height: 100dvh;
   width: min(540px, 100vw);
   display: flex;
   flex-direction: column;
@@ -2649,6 +2665,7 @@ input[type='number']::-webkit-inner-spin-button {
 
 .auth {
   min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   place-items: center;
   padding: 24px;
@@ -2768,6 +2785,7 @@ input[type='number']::-webkit-inner-spin-button {
 
 .boot {
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
   align-items: center;

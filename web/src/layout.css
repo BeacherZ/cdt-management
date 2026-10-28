@@ -5,7 +5,10 @@
 .app-shell {
   display: grid;
   grid-template-columns: 244px minmax(0, 1fr);
+  /* 100dvh 是「地址栏收起后」的真实可视高度；iOS Safari 上 100vh 比可视区高，
+     整页会多出一截滚动。不认识 dvh 的浏览器自动忽略第二行，用回 100vh。 */
   min-height: 100vh;
+  min-height: 100dvh;
 }
 
 /* -------------------------------------------------------------- 侧栏 */
@@ -15,12 +18,17 @@
   top: 0;
   align-self: start;
   height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   gap: 2px;
   padding: 18px 12px 14px;
   border-right: 1px solid var(--line);
-  /* 玻璃质感：上浓下淡，透出背景的环境光 */
+  /* 玻璃质感：上浓下淡，透出背景的环境光。
+     上一行是给不支持 color-mix 的浏览器兜底（Chrome < 111 / Safari < 16.2 /
+     Firefox < 113，Win7/8.1 上的 Chrome 109 就在此列）：那条渐变会整条失效，
+     侧栏直接变全透明，只剩一条右边线。留着纯色至少还是块实心面板。 */
+  background: var(--panel-solid);
   background: linear-gradient(
     180deg,
     color-mix(in srgb, var(--panel-solid) 58%, transparent),

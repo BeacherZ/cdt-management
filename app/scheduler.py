@@ -220,7 +220,10 @@ def _confirm_pending_events() -> None:
                     )
                 except Exception as exc:  # noqa: BLE001
                     ddns_status = f"❌ DDNS 异常：{exc}"
-                repo.add_event_progress(event_id, f"DDNS：{ddns_status}")
+                # DDNS 关着时这一步什么也没做（返回「⏸ DDNS 未启用」），
+                # 不必在进度里占一行；通知那边照旧带上，让用户知道域名没跟着走。
+                if config.get("ddns_enabled") == "1":
+                    repo.add_event_progress(event_id, f"DDNS：{ddns_status}")
                 if config.get("notify_on_keepalive") == "1":
                     try:
                         results = notify.send_all(
@@ -236,8 +239,11 @@ def _confirm_pending_events() -> None:
                         notify.note_notify(event_id, results)
                     except Exception as exc:  # noqa: BLE001
                         repo.add_event_progress(event_id, f"通知发送失败：{exc}")
-            elif pending == "Running" and info.public_ip:
-                # 手动开机到位后，把这台机器绑的域名全指过来（一台可以挂好几条）
+            elif pending == "Running" and info.public_ip and config.get("ddns_enabled") == "1":
+                # 手动开机到位后，把这台机器绑的域名全指过来（一台可以挂好几条）。
+                # DDNS 关着的时候一步都别走：sync_record 会返回「⏸ DDNS 未启用」，
+                # 那句会被当成这条解析的结果写进进度，还会把 dns_records.last_status
+                # 覆盖掉 —— 原本「✅ 已同步」的记录变成「待同步」黄点，界面开始报假异常。
                 try:
                     names, statuses = dns.sync_target(
                         dns.TARGET_SERVER, server_id, config, ip=info.public_ip
