@@ -259,7 +259,7 @@ class Breaker(unittest.TestCase):
     def test_block_has_ip_between_instance_and_region(self):
         """块内字段顺序与其它报告一致：实例 → ＩＰ → 地域 → 已用 → 状态。"""
         block = messages.breaker([B]).html.split("🖥 ")[1]
-        order = [block.index(k) for k in ("📦 实例", "🌐 ＩＰ", "📍 地域", "📈 已用", "🚧 状态")]
+        order = [block.index(k) for k in ("📦 实例", "🌐 ＩＰ", "📍 地域", "📈 已用", "⚪ 状态")]
         self.assertEqual(order, sorted(order))
 
 
@@ -276,7 +276,7 @@ class OtherReports(unittest.TestCase):
             "┃ 🌐 ＩＰ：198.51.100.2\n"
             "┃ 📍 地域：中国香港\n"
             "┃ 📈 已用：190.00 GB（阈值 188 GB）\n"
-            "┃ 🔴 状态：Stopped (StopCharging)\n"
+            "┃ ⚪ 状态：Stopped (StopCharging)\n"
             f"{SEP}"
         )
         self.assertEqual(messages.limit_stop(B).html, expected)

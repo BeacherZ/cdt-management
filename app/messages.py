@@ -379,7 +379,7 @@ def breaker(
                 f"┃ 🌐 ＩＰ：{_ip(s)}",
                 f"┃ 📍 地域：{_region(s)}",
                 _used_line(s),
-                f"┃ 🚧 状态：{_status(s)}",
+                f"┃ {_state_icon(s)} 状态：{_status(s)}",
             ]
         )
         for s in servers
@@ -414,7 +414,7 @@ def limit_stop(server: dict[str, Any], group_name: str = "") -> notify.Message:
                 f"┃ 🌐 ＩＰ：{_ip(server)}",
                 f"┃ 📍 地域：{_region(server)}",
                 _used_line(server),
-                f"┃ 🔴 状态：{_status(server)}",
+                f"┃ {_state_icon(server)} 状态：{_status(server)}",
                 SEP,
             ]
         ),
@@ -442,7 +442,7 @@ def over_limit(server: dict[str, Any], scope: str) -> notify.Message:
                 f"┃ 🌐 ＩＰ：{_ip(server)}",
                 f"┃ 📍 地域：{_region(server)}",
                 _used_line(server),
-                f"┃ 🔴 状态：{_status(server)}",
+                f"┃ {_state_icon(server)} 状态：{_status(server)}",
                 SEP,
             ]
         ),

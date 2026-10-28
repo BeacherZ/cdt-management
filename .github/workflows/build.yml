@@ -116,9 +116,8 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # 打 v* 标签时自动建同名发行版：tag_name 直接取 git 标签（v1.1.15），
-  # 与镜像 tag、版本号同源，不再靠手动创建 —— 免得镜像出了、发行版忘了建，
-  # 或者版本号对不上。用户在 Release 页看到 v1.1.15，就能直接对到镜像 v1.1.15。
+  # 打 v* 标签时自动建同名发行版，正文直接取 tag 的变更说明（annotated tag 的 message）。
+  # 不再往 Release 里塞「镜像标签」之类与发版无关的内容 —— 用户要的是「这次修了什么」。
   release:
     needs: image
     if: github.ref_type == 'tag'
@@ -128,21 +127,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 读取提交短哈希
-        id: sha
-        run: echo "short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+      - name: 读取标签变更说明
+        id: notes
+        run: |
+          # 取 annotated tag 的 message，去掉第一行版本号（Release name 已含版本号）
+          body="$(git for-each-ref "refs/tags/${{ github.ref_name }}" --format='%(contents)' | tail -n +2 | sed '/./,$!d')"
+          # 多行安全地写入 output
+          {
+            echo 'body<<EOF'
+            echo "$body"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
 
       - name: 创建发行版
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
-          generate_release_notes: true
-          body: |
-            ### 镜像标签
-
-            | 标签 | 指向 |
-            | --- | --- |
-            | `latest` | 最新发行版，只在打 `v*` 标签时移动 |
-            | `${{ github.ref_name }}` | 与发行版同名 |
-            | `sha-${{ steps.sha.outputs.short }}` | 对应提交 |
+          body: ${{ steps.notes.outputs.body }}
