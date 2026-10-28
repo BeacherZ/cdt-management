@@ -189,8 +189,6 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 | ⚠️ 换班异常 | 班次开始后迟迟没达到预期状态 |
 | 📊 每日汇总 | 到设定时间推全部服务器的流量与额度 |
 
-标题统一为 `CDT {事件}报告（{范围}）`：换班组写「（换班组：组名）」，单机保活写「（单机保活）」，闲散手动写「（闲散手动）」。手动换班是 `CDT 手动换班完成报告（换班组：组名）`。
-
 支持 Telegram、邮件、Webhook 三类渠道同时开启。
 
 实际推出来的样子（按上表顺序，点开看原图）：
