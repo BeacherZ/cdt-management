@@ -191,21 +191,21 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 
 支持 Telegram、邮件、Webhook 三类渠道同时开启。
 
-实际推出来的样子：
+实际推出来的样子（按上表顺序，每行 2 张，点开看原图）：
 
 <p align="center">
-  <img src="docs/screenshots/16-notify-daily.png" width="460" alt="CDT 每日流量报告">
-  <br><sub>CDT 每日流量报告</sub>
+  <img src="docs/screenshots/16-notify-shift.png" width="48%" align="top" alt="CDT（换班组）换班完成报告">
+  <img src="docs/screenshots/17-notify-failover.png" width="48%" align="top" alt="CDT（换班组）故障转移报告">
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/17-notify-shift.png" width="460" alt="CDT（换班组）换班完成报告">
-  <br><sub>CDT（换班组）换班完成报告</sub>
+  <img src="docs/screenshots/18-notify-breaker.png" width="48%" align="top" alt="CDT（换班组）全局熔断报告">
+  <img src="docs/screenshots/19-notify-recovery.png" width="48%" align="top" alt="CDT 抢占恢复报告">
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/18-notify-recovery.png" width="460" alt="CDT 抢占恢复报告">
-  <br><sub>CDT 抢占恢复报告</sub>
+  <img src="docs/screenshots/20-notify-error.png" width="48%" align="top" alt="CDT（换班组）换班异常报告">
+  <img src="docs/screenshots/21-notify-daily.png" width="48%" align="top" alt="CDT 每日流量报告">
 </p>
 
 ## 数据放在哪

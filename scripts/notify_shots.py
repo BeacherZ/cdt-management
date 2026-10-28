@@ -8,7 +8,9 @@
 
 第二步：
     node scripts/notify_shots.cjs
-    → 截成 docs/screenshots/16~18-notify-*.png
+    → 截成 docs/screenshots/16~21-notify-*.png
+
+编号顺序 = README「通知」一节里那张表的顺序，6 张正好凑两行（README 里一行排 3 张）。
 """
 
 from __future__ import annotations
@@ -122,30 +124,73 @@ THIRD = server(
     "Stopped", "StopCharging",
 )
 
+# 流量保护场景：阈值 188GB（200 × 0.94），下面这几台都已过线
+MAIN_OVER = server(
+    "香港-主力", "i-demo00000000000001", "47.243.12.32", "cn-hongkong", 200, 189.40,
+    "Stopped", "StopCharging",
+)
+BACKUP_OVER = server(
+    "香港-备用", "i-demo00000000000002", "47.243.13.33", "cn-hongkong", 200, 191.20,
+    "Stopped", "KeepCharging",
+)
+THIRD_OVER = server(
+    "新加坡-二线", "i-demo00000000000003", "47.243.14.34", "ap-southeast-1", 200, 188.75,
+    "Stopped", "StopCharging",
+)
+THIRD_TAKEOVER = server(
+    "新加坡-二线", "i-demo00000000000003", "47.243.14.34", "ap-southeast-1", 200, 96.08,
+)
+
+GROUP = "港新联合保活"
+
 SHOTS = [
     (
-        "16-notify-daily",
-        "每日流量报告",
-        messages.daily_report([MAIN, BACKUP, THIRD], "2026-10-27 09:00"),
-        "09:00",
-    ),
-    (
-        "17-notify-shift",
+        "16-notify-shift",
         "换班完成报告",
         messages.shift_done(
             MAIN,
             [BACKUP, THIRD],
             messages.shift_period("第 2 班", "12:00", "24:00"),
             "✅ 已同步",
-            group_name="港新联合保活",
+            group_name=GROUP,
         ),
         "12:00",
     ),
     (
-        "18-notify-recovery",
+        "17-notify-failover",
+        "故障转移报告",
+        messages.shift_failover(
+            THIRD_TAKEOVER,
+            [MAIN_OVER],
+            [BACKUP],
+            "✅ 已同步",
+            group_name=GROUP,
+        ),
+        "18:26",
+    ),
+    (
+        "18-notify-breaker",
+        "全局熔断报告",
+        messages.breaker([MAIN_OVER, BACKUP_OVER, THIRD_OVER], group_name=GROUP),
+        "18:31",
+    ),
+    (
+        "19-notify-recovery",
         "抢占恢复报告",
         messages.recovery(MAIN, "✅ 已同步"),
         "15:42",
+    ),
+    (
+        "20-notify-error",
+        "换班异常报告",
+        messages.shift_error(MAIN, [BACKUP, THIRD], 8, group_name=GROUP),
+        "00:08",
+    ),
+    (
+        "21-notify-daily",
+        "每日流量报告",
+        messages.daily_report([MAIN, BACKUP, THIRD], "2026-10-27 09:00"),
+        "09:00",
     ),
 ]
 
