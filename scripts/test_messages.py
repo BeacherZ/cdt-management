@@ -268,7 +268,8 @@ class OtherReports(unittest.TestCase):
         expected = (
             "🚨 <b>CDT 全局熔断报告（换班组）</b>\n"
             "\n"
-            "当班实例流量超限，已强制节省停机。\n"
+            "当班实例流量超限，该换班组没有启用故障转移，已强制节省停机。\n"
+            "如有需要，请开启故障转移或者去管理后台手动点击“立即换班”。\n"
             "\n"
             "🖥 AliCloud-CDT-PM\n"
             "┃ 📦 实例：<code>i-bbb222</code>\n"
@@ -330,11 +331,15 @@ class OtherReports(unittest.TestCase):
         self.assertEqual(message.title, "CDT 抢占恢复报告（换班组：港新联合）")
 
     def test_shift_error(self):
+        # duty=B 是 Stopped（该运行没运行 → ⚪），stopped=[A] 是 Running（该停没停 → 🟢）
         message = messages.shift_error(B, [A], 10)
         self.assertTrue(message.html.startswith("⚠️ <b>CDT 换班异常报告（换班组）</b>\n\n"))
         self.assertIn("⏳ <b>换班超时：换班指令已执行 10 分钟，但状态未就绪。</b>", message.html)
         self.assertIn("🚩 <b>应当运行账号 </b>", message.html)
         self.assertIn("🚩 <b>应当停止账号 </b>", message.html)
+        # 状态图标跟着真实状态走，不再写死 🚧
+        self.assertIn("┃ ⚪ 状态：Stopped (StopCharging)", message.html)
+        self.assertIn("┃ 🟢 状态：Running", message.html)
 
     def test_every_notification_has_region_line(self):
         # 所有通知的实例块都要跟每日报告一样带「地域」行（IP 下面一行；熔断块没有 IP 行，

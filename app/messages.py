@@ -124,6 +124,15 @@ def _status(server: dict[str, Any]) -> str:
     return f"{status} ({mode})" if mode and mode != "-" else status
 
 
+def _state_icon(server: dict[str, Any]) -> str:
+    """状态行图标：运行中 🟢，其余（停机 / 中间态）⚪。
+
+    换班异常报告里当班「应当运行」却超时未就绪，停机的那台该 ⚪；
+    应当停止的那台若还赖在 Running，该 🟢。写死 🚧 会让图标和状态文字打架。
+    """
+    return "🟢" if str(server.get("instance_status") or "") == "Running" else "⚪"
+
+
 def _used(server: dict[str, Any]) -> float:
     return float(server.get("traffic_used") or 0)
 
@@ -397,7 +406,8 @@ def limit_stop(server: dict[str, Any], group_name: str = "") -> notify.Message:
         title_of("全局熔断", group_name),
         "\n".join(
             [
-                "当班实例流量超限，已强制节省停机。",
+                "当班实例流量超限，该换班组没有启用故障转移，已强制节省停机。",
+                "如有需要，请开启故障转移或者去管理后台手动点击“立即换班”。",
                 "",
                 f"🖥 {_label(server)}",
                 f"┃ 📦 实例：<code>{_instance(server)}</code>",
@@ -484,7 +494,7 @@ def shift_error(
                 f"┃ 📦 实例：<code>{_instance(duty)}</code>",
                 f"┃ 🌐 ＩＰ：{_ip(duty)}",
                 f"┃ 📍 地域：{_region(duty)}",
-                f"┃ 🚧 状态：{_status(duty)}",
+                f"┃ {_state_icon(duty)} 状态：{_status(duty)}",
             ]
         )
     ]
@@ -497,7 +507,7 @@ def shift_error(
                     f"┃ 📦 实例：<code>{_instance(server)}</code>",
                     f"┃ 🌐 ＩＰ：{_ip(server)}",
                     f"┃ 📍 地域：{_region(server)}",
-                    f"┃ 🚧 状态：{_status(server)}",
+                    f"┃ {_state_icon(server)} 状态：{_status(server)}",
                 ]
             )
         )

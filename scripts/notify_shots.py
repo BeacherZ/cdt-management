@@ -141,6 +141,18 @@ THIRD_TAKEOVER = server(
     "新加坡-二线", "i-demo00000000000003", "47.243.14.34", "ap-southeast-1", 200, 96.08,
 )
 
+# 换班异常：当班该运行却超时没运行（Stopped → ⚪），standby 该停却还赖在 Running（→ 🟢）
+ERROR_DUTY = server(
+    "香港-主力", "i-demo00000000000001", "47.243.12.32", "cn-hongkong", 200, 148.62,
+    "Stopped", "StopCharging",
+)
+ERROR_STANDBY = server(
+    "香港-备用", "i-demo00000000000002", "47.243.13.33", "cn-hongkong", 200, 121.35,
+)
+ERROR_STANDBY2 = server(
+    "新加坡-二线", "i-demo00000000000003", "47.243.14.34", "ap-southeast-1", 200, 96.08,
+)
+
 GROUP = "港新联合保活"
 
 SHOTS = [
@@ -183,7 +195,7 @@ SHOTS = [
     (
         "20-notify-error",
         "换班异常报告",
-        messages.shift_error(MAIN, [BACKUP, THIRD], 8, group_name=GROUP),
+        messages.shift_error(ERROR_DUTY, [ERROR_STANDBY, ERROR_STANDBY2], 8, group_name=GROUP),
         "00:08",
     ),
     (
