@@ -127,13 +127,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # 浅克隆下 annotated tag 的 message 会丢，%(contents) 会退化返回 commit
-          # message。完整拉取才能读到真正的 tag 变更说明。
+          # 完整拉取历史与全部 tag 对象，配合下面显式重拉 annotated tag 使用
           fetch-depth: 0
 
       - name: 读取标签变更说明
         id: notes
         run: |
+          # checkout 会把触发本次构建的 tag 覆盖成指向 commit 的轻量引用（annotated
+          # tag 被解引用），%(contents) 就会读到 commit message 而非 tag 说明。所以
+          # 这里显式强制重拉一次 annotated tag 对象。
+          git fetch --force origin "+refs/tags/${{ github.ref_name }}:refs/tags/${{ github.ref_name }}"
           # 取 annotated tag 的 message，去掉第一行版本号（Release name 已含版本号）
           body="$(git for-each-ref "refs/tags/${{ github.ref_name }}" --format='%(contents)' | tail -n +2 | sed '/./,$!d')"
           # 多行安全地写入 output
