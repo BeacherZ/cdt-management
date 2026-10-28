@@ -1071,7 +1071,6 @@ def _attach_session(response: JSONResponse, username: str, epoch: int | None = N
         max_age=settings.SESSION_TTL_SECONDS,
         httponly=True,
         samesite="lax",
-        secure=settings.COOKIE_SECURE,
         path="/",
     )
     response.set_cookie(
@@ -1080,7 +1079,6 @@ def _attach_session(response: JSONResponse, username: str, epoch: int | None = N
         max_age=settings.SESSION_TTL_SECONDS,
         httponly=False,
         samesite="lax",
-        secure=settings.COOKIE_SECURE,
         path="/",
     )
 

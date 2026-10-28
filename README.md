@@ -224,7 +224,7 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 
 面板默认监听 `0.0.0.0:8080`。如果把它直接暴露到公网（或通过端口映射），建议：
 
-- **套一层 HTTPS 反向代理**，并把会话 Cookie 设为只在加密连接下发送：`-e CDT_COOKIE_SECURE=1`（默认关，内网 HTTP 不用动）。
+- **套一层 HTTPS 反向代理**。
 
 ## 常见问题
 

@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 APP_NAME = "cdt-management"
-VERSION = "1.2.2"
+VERSION = "1.2.3"
 
 DATA_DIR = Path(os.environ.get("CDT_DATA_DIR", "./data")).resolve()
 DB_PATH = DATA_DIR / "cdt-management.db"
@@ -47,10 +47,6 @@ MOCK_OP_DELAY = max(0.0, float(os.environ.get("CDT_MOCK_OP_DELAY", "3")))
 SESSION_COOKIE = "cdt_mgmt_session"
 CSRF_COOKIE = "cdt_mgmt_csrf"
 SESSION_TTL_SECONDS = 14 * 24 * 3600
-
-# 会话 / CSRF Cookie 是否加 secure 标志。公网 HTTPS 部署应设为 1：浏览器只在加密
-# 连接下发送票据，杜绝明文 HTTP 下被嗅探重放。默认关，避免破坏内网 HTTP 部署。
-COOKIE_SECURE = os.environ.get("CDT_COOKIE_SECURE", "0") == "1"
 
 
 def ensure_dirs() -> None:
