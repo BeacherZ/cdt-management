@@ -85,9 +85,14 @@ def refresh_server(server_id: int, *, force: bool = False) -> dict[str, Any] | N
 
     try:
         wallet = aliyun.get_account_balance(server, force=force)
-        balance = float(wallet.get("amount") or 0)
         currency = str(wallet.get("currency") or "")
         detected_site = detected_site or str(wallet.get("site") or "")
+        # 国际站是后付费（信用额度扣款），没有「账户余额」这个概念，接口恒返回 0，
+        # 落库成 NULL，展示层据此显示「后付费」，避免出现误导人的 ¥0.00。
+        if repo.normalize_site(server.get("site")) == "international":
+            balance = None
+        else:
+            balance = float(wallet.get("amount") or 0)
     except Exception as exc:  # noqa: BLE001
         errors.append(str(exc))
         log.warning("账户余额查询失败 server=%s: %s", server_id, exc)

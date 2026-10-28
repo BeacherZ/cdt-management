@@ -520,6 +520,40 @@ def shift_error(
     )
 
 
+CURRENCY_SIGNS = {
+    "CNY": "¥",
+    "USD": "$",
+    "HKD": "HK$",
+    "JPY": "JP¥",
+    "EUR": "€",
+    "GBP": "£",
+}
+
+
+def _currency_sign(currency: str | None) -> str:
+    """货币代码 → 符号。清单外的原样带空格（如「SGD 12.34」）。"""
+    currency = str(currency or "").strip().upper()
+    return CURRENCY_SIGNS.get(currency, f"{currency} " if currency else "")
+
+
+def _money(value: Any, currency: str | None) -> str:
+    """金额 → `¥12.34`；查不到给「—」。"""
+    if value is None:
+        return "—"
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        return "—"
+    return f"{_currency_sign(currency)}{amount:.2f}"
+
+
+def _balance_text(server: dict[str, Any]) -> str:
+    """余额：国际站后付费没有余额概念，写「后付费」；国内站写金额。"""
+    if str(server.get("site") or "") == "international":
+        return "后付费"
+    return _money(server.get("balance_amount"), server.get("billing_currency"))
+
+
 def report_block(server: dict[str, Any]) -> str:
     """脚本里的 build_report_block。额度取每台自己的配额，没填就按 200GB。"""
     used = _used(server)
@@ -533,7 +567,9 @@ def report_block(server: dict[str, Any]) -> str:
             f"┃ 📦 实例：<code>{_instance(server)}</code>",
             f"┃ 🌐 ＩＰ：{_ip(server)}",
             f"┃ 📍 地域：{_region(server)}",
-            f"┃ 📈 已用：{used:.2f} GB",
+            f"┃ 💰 费用：{_money(server.get('monthly_cost'), server.get('billing_currency'))}",
+            f"┃ 💳 余额：{_balance_text(server)}",
+            f"┃ 📈 流量：{used:.2f} GB",
             f"┃ 💾 剩余：{remain:.2f} GB",
             f"┃ 🔥 使用率：{percent:.2f}%  {color}",
         ]
@@ -541,11 +577,11 @@ def report_block(server: dict[str, Any]) -> str:
 
 
 def daily_report(servers: list[dict[str, Any]], timestamp: str) -> notify.Message:
-    """📊 每日流量报告。"""
+    """📊 每日报告。"""
     return _message(
         "daily_report",
-        "📊 <b>CDT 每日流量报告</b>",
-        "CDT 每日流量报告",
+        "📊 <b>CDT-Management 每日报告</b>",
+        "CDT-Management 每日报告",
         "\n\n".join(report_block(s) for s in servers) + f"\n\n⏰ 更新时间：{timestamp}",
     )
 

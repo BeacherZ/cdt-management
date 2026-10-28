@@ -383,15 +383,31 @@ class OtherReports(unittest.TestCase):
         )
 
     def test_daily_report(self):
-        message = messages.daily_report([A, B], "2026-10-26 23:58")
+        a = {
+            **A,
+            "site": "china",
+            "monthly_cost": 12.34,
+            "balance_amount": 1234.56,
+            "billing_currency": "CNY",
+        }
+        b = {
+            **B,
+            "site": "international",
+            "monthly_cost": 3.21,
+            "balance_amount": None,
+            "billing_currency": "USD",
+        }
+        message = messages.daily_report([a, b], "2026-10-26 23:58")
         expected = (
-            "📊 <b>CDT 每日流量报告</b>\n"
+            "📊 <b>CDT-Management 每日报告</b>\n"
             "\n"
             "🖥 AliCloud-CDT-AM\n"
             "┃ 📦 实例：<code>i-aaa111</code>\n"
             "┃ 🌐 ＩＰ：198.51.100.1\n"
             "┃ 📍 地域：中国香港\n"
-            "┃ 📈 已用：12.00 GB\n"
+            "┃ 💰 费用：¥12.34\n"
+            "┃ 💳 余额：¥1234.56\n"
+            "┃ 📈 流量：12.00 GB\n"
             "┃ 💾 剩余：188.00 GB\n"
             "┃ 🔥 使用率：6.00%  🟢 正常\n"
             "\n"
@@ -399,7 +415,9 @@ class OtherReports(unittest.TestCase):
             "┃ 📦 实例：<code>i-bbb222</code>\n"
             "┃ 🌐 ＩＰ：198.51.100.2\n"
             "┃ 📍 地域：中国香港\n"
-            "┃ 📈 已用：190.00 GB\n"
+            "┃ 💰 费用：$3.21\n"
+            "┃ 💳 余额：后付费\n"
+            "┃ 📈 流量：190.00 GB\n"
             "┃ 💾 剩余：10.00 GB\n"
             "┃ 🔥 使用率：95.00%  🔴 危险\n"
             "\n"

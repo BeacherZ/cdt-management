@@ -228,8 +228,15 @@ SHOTS = [
     ),
     (
         "24-notify-daily",
-        "每日流量报告",
-        messages.daily_report([MAIN, BACKUP, THIRD], "2026-10-27 09:00"),
+        "每日报告",
+        messages.daily_report(
+            [
+                {**MAIN, "site": "china", "monthly_cost": 12.34, "balance_amount": 1234.56, "billing_currency": "CNY"},
+                {**BACKUP, "site": "china", "monthly_cost": 5.67, "balance_amount": 2345.67, "billing_currency": "CNY"},
+                {**THIRD, "site": "international", "monthly_cost": 3.21, "balance_amount": None, "billing_currency": "USD"},
+            ],
+            "2026-10-27 09:00",
+        ),
         "09:00",
     ),
 ]
