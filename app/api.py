@@ -197,23 +197,6 @@ def _is_initialized() -> bool:
     return repo.get_setting("initialized") == "1"
 
 
-def _expected_setup_token() -> str:
-    """初始化向导期望的令牌：优先取环境变量，其次读数据目录下的 init.token。
-
-    返回空串表示「不要求令牌」—— 老版本升级上来、文件还没生成时保持兼容，
-    不能因为加了一道锁就把还没初始化的人永久挡在门外。
-    """
-    if settings.SETUP_TOKEN:
-        return settings.SETUP_TOKEN
-    path = settings.SETUP_TOKEN_PATH
-    if path.exists():
-        try:
-            return path.read_text(encoding="utf-8").strip()
-        except OSError:
-            return ""
-    return ""
-
-
 def _session_epoch() -> int:
     try:
         return int(repo.get_setting("session_epoch") or 0)
@@ -520,7 +503,6 @@ def register(app: FastAPI) -> None:
     def init_status():  # noqa: ANN202
         return {
             "initialized": _is_initialized(),
-            "setup_token_required": bool(_expected_setup_token()) and not _is_initialized(),
             "brand": settings.BRAND,
             "version": settings.VERSION,
             "repo": settings.REPO,
@@ -530,12 +512,6 @@ def register(app: FastAPI) -> None:
     def setup(payload: dict[str, Any]):  # noqa: ANN202
         if _is_initialized():
             raise HTTPException(status_code=409, detail="系统已初始化")
-        expected = _expected_setup_token()
-        if expected and str(payload.get("token") or "") != expected:
-            raise HTTPException(
-                status_code=403,
-                detail="初始化令牌不正确，请查看启动日志或数据目录下的 init.token",
-            )
         username = str(payload.get("username") or "").strip()
         password = str(payload.get("password") or "")
         if len(username) < 3:
@@ -549,11 +525,6 @@ def register(app: FastAPI) -> None:
                 "initialized": "1",
             }
         )
-        # 令牌用完即焚：下次启动或重新初始化都不再复用这张令牌
-        try:
-            settings.SETUP_TOKEN_PATH.unlink(missing_ok=True)
-        except OSError:
-            pass
         repo.add_event("system", "系统初始化完成", f"管理员：{username}")
         response = JSONResponse({"ok": True})
         _attach_session(response, username)

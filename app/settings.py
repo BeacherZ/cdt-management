@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 APP_NAME = "cdt-management"
-VERSION = "1.2.1"
+VERSION = "1.2.2"
 
 DATA_DIR = Path(os.environ.get("CDT_DATA_DIR", "./data")).resolve()
 DB_PATH = DATA_DIR / "cdt-management.db"
@@ -19,11 +19,6 @@ LISTEN_PORT = int(os.environ.get("CDT_LISTEN_PORT", "8080"))
 # 首次启动时若提供，则跳过初始化向导直接创建管理员
 BOOTSTRAP_USERNAME = os.environ.get("CDT_ADMIN_USERNAME", "").strip()
 BOOTSTRAP_PASSWORD = os.environ.get("CDT_ADMIN_PASSWORD", "").strip()
-
-# 首次初始化向导的令牌：不设则启动时自动生成并写到 DATA_DIR/init.token，防止
-# 公网暴露时被人抢先初始化接管系统。设了就用它（适合无人值守 / 编排脚本）。
-SETUP_TOKEN = os.environ.get("CDT_SETUP_TOKEN", "").strip()
-SETUP_TOKEN_PATH = DATA_DIR / "init.token"
 
 BRAND = os.environ.get("CDT_BRAND", "CDT-Management")
 

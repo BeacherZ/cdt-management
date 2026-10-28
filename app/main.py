@@ -36,7 +36,6 @@ def create_app() -> FastAPI:
 
     db.init_db()
     _bootstrap_admin()
-    _ensure_setup_token()
 
     app = FastAPI(
         title=settings.BRAND,
@@ -112,32 +111,6 @@ def _bootstrap_admin() -> None:
         }
     )
     log.info("已根据环境变量创建管理员 %s", username)
-
-
-def _ensure_setup_token() -> None:
-    """首次初始化向导的令牌：堵住「公网暴露时被人抢先初始化接管系统」的窗口。
-
-    - 已初始化（含刚走完 _bootstrap_admin）就不再需要令牌。
-    - 显式设了 CDT_SETUP_TOKEN 就写进文件，setup 端点以文件内容为准。
-    - 否则首次启动自动生成一个随机令牌，写 init.token（0600）并打日志。
-    初始化成功后 setup 端点会删掉该文件。
-    """
-    if repo.get_setting("initialized") == "1":
-        return
-    token = settings.SETUP_TOKEN
-    if not token:
-        path = settings.SETUP_TOKEN_PATH
-        if path.exists():
-            return
-        token = security.new_csrf_token()
-        path.write_text(token)
-        try:
-            os.chmod(path, 0o600)
-        except OSError:
-            pass
-        log.info("已生成初始化令牌（写入 %s），首次设置管理员时需填写：%s", path, token)
-    else:
-        settings.SETUP_TOKEN_PATH.write_text(token)
 
 
 app = create_app()

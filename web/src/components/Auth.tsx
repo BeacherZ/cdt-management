@@ -1,20 +1,17 @@
 import { useState, type FormEvent } from 'react'
-import { ArrowRight, KeyRound, LoaderCircle, LockKeyhole, ShieldCheck, TriangleAlert, UserCog } from 'lucide-react'
+import { ArrowRight, LoaderCircle, LockKeyhole, ShieldCheck, TriangleAlert, UserCog } from 'lucide-react'
 import { post } from '../api'
 
 type Props = {
   mode: 'setup' | 'login'
   brand: string
-  /** 首次初始化向导是否要求令牌（后端启动时生成，防止公网抢先初始化） */
-  setupTokenRequired?: boolean
   onDone: () => void
 }
 
-export default function Auth({ mode, brand, setupTokenRequired = false, onDone }: Props) {
+export default function Auth({ mode, brand, onDone }: Props) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
-  const [token, setToken] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -22,10 +19,6 @@ export default function Auth({ mode, brand, setupTokenRequired = false, onDone }
     event.preventDefault()
     setError('')
     if (mode === 'setup') {
-      if (setupTokenRequired && !token.trim()) {
-        setError('请填写初始化令牌（见启动日志或数据目录 init.token）')
-        return
-      }
       if (password.length < 10) {
         setError('密码至少 10 个字符')
         return
@@ -38,7 +31,7 @@ export default function Auth({ mode, brand, setupTokenRequired = false, onDone }
     setBusy(true)
     try {
       if (mode === 'setup') {
-        await post('/api/v1/setup', { username, password, token: token.trim() })
+        await post('/api/v1/setup', { username, password })
       } else {
         await post('/api/v1/auth/login', { username, password })
       }
@@ -75,23 +68,6 @@ export default function Auth({ mode, brand, setupTokenRequired = false, onDone }
         </div>
 
         <div className="auth-form">
-          {isSetup && setupTokenRequired && (
-            <div className="field">
-              <label htmlFor="token">
-                <KeyRound size={13} /> 初始化令牌
-              </label>
-              <input
-                id="token"
-                className="input mono"
-                value={token}
-                autoComplete="off"
-                onChange={(event) => setToken(event.target.value)}
-                placeholder="见启动日志或数据目录 init.token"
-                required
-              />
-            </div>
-          )}
-
           <div className="field">
             <label htmlFor="username">
               <UserCog size={13} /> 用户名

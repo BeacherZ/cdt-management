@@ -4,8 +4,7 @@
 锁死这几条规则：
   1. add_keepalive 是原子 upsert：重复添加不报 UNIQUE 冲突，只覆盖 enabled；
   2. manual_action 幂等：同一台机器同一目标状态已有进行中事件时不再重复下发；
-  3. upsert_server 配额显式校验：quota 传 0/负数直接拒绝，不再被 or 默认值吞掉；
-  4. _expected_setup_token 从数据目录 init.token 读令牌。
+  3. upsert_server 配额显式校验：quota 传 0/负数直接拒绝，不再被 or 默认值吞掉。
 
 跑法：python scripts/test_security_hardening.py
 """
@@ -26,7 +25,7 @@ os.environ["CDT_DATA_DIR"] = _TMP
 os.environ["CDT_DRY_RUN"] = "1"
 os.environ["CDT_MOCK_OP_DELAY"] = "0"
 
-from app import api, db, repo, settings, shift  # noqa: E402
+from app import db, repo, shift  # noqa: E402
 
 db.init_db()
 
@@ -91,15 +90,6 @@ class SecurityHardening(unittest.TestCase):
                     "threshold_gb": 188,
                 }
             )
-
-    def test_expected_setup_token_from_file(self):
-        # 环境变量没设时，令牌来自数据目录下的 init.token
-        settings.SETUP_TOKEN = ""
-        settings.SETUP_TOKEN_PATH.write_text("tok-abc-123")
-        try:
-            self.assertEqual(api._expected_setup_token(), "tok-abc-123")
-        finally:
-            settings.SETUP_TOKEN_PATH.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

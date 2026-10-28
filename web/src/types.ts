@@ -233,8 +233,6 @@ export type Settings = {
 
 export type InitStatus = {
   initialized: boolean
-  /** 首次初始化向导是否需要令牌（后端生成，见启动日志 / 数据目录 init.token） */
-  setup_token_required?: boolean
   brand: string
   version: string
   repo: string

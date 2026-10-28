@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -42,35 +41,18 @@ def call(method: str, path: str, payload: dict | None = None) -> tuple[int, dict
     return response.status_code, body
 
 
-def setup_token(required: bool) -> str:
-    """初始化令牌：启动服务时若加了 CDT_SETUP_TOKEN 就用它，否则读数据目录 init.token。"""
-    if not required:
-        return ""
-    token = os.environ.get("CDT_SETUP_TOKEN", "").strip()
-    if token:
-        return token
-    data_dir = Path(os.environ.get("CDT_DATA_DIR", "./data"))
-    path = data_dir / "init.token"
-    if path.exists():
-        return path.read_text(encoding="utf-8").strip()
-    return ""
-
-
 print("\n== 1. 健康检查与初始化状态 ==")
 status, body = call("GET", "/api/health")
 check("health 返回 ok", status == 200 and body.get("status") == "ok", str(body))
 
 status, body = call("GET", "/api/v1/system/init-status")
 check("初始为未初始化", status == 200 and body.get("initialized") is False, str(body))
-token_required = bool(body.get("setup_token_required"))
-token = setup_token(token_required)
-check("初始化令牌已就绪", not token_required or bool(token), f"required={token_required}")
 
 print("\n== 2. 初始化管理员 ==")
-status, body = call("POST", "/api/v1/setup", {"username": "admin", "password": "short", "token": token})
+status, body = call("POST", "/api/v1/setup", {"username": "admin", "password": "short"})
 check("弱密码被拒绝", status == 400, str(body))
 
-status, body = call("POST", "/api/v1/setup", {"username": "admin", "password": "test-password-12345", "token": token})
+status, body = call("POST", "/api/v1/setup", {"username": "admin", "password": "test-password-12345"})
 check("初始化成功", status == 200 and body.get("ok"), str(body))
 check("会话 cookie 已下发", "cdt_mgmt_session" in session.cookies, str(dict(session.cookies)))
 

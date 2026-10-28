@@ -572,7 +572,6 @@ export default function App() {
       <Auth
         mode={phase}
         brand={meta.brand || 'CDT-Management'}
-        setupTokenRequired={meta.setup_token_required}
         onDone={() => {
           setPhase('loading')
           void loadAll().catch(() => setPhase('login'))
