@@ -222,9 +222,7 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 
 ## 公网部署与安全
 
-面板默认监听 `0.0.0.0:8080`。如果把它直接暴露到公网（或通过端口映射），建议：
-
-- **套一层 HTTPS 反向代理**。
+直接暴露到公网（或通过端口映射）并不安全，**建议套一层 HTTPS 反向代理**。
 
 ## 常见问题
 
