@@ -8,9 +8,9 @@
 
 第二步：
     node scripts/notify_shots.cjs
-    → 截成 docs/screenshots/16~21-notify-*.png
+    → 截成 docs/screenshots/16~24-notify-*.png
 
-编号顺序 = README「通知」一节里那张表的顺序，6 张正好凑两行（README 里一行排 3 张）。
+编号顺序 = README「通知」一节里那张表的顺序，9 张正好凑三行（README 里一行排 3 张）。
 """
 
 from __future__ import annotations
@@ -141,6 +141,16 @@ THIRD_TAKEOVER = server(
     "新加坡-二线", "i-demo00000000000003", "47.243.14.34", "ap-southeast-1", 200, 96.08,
 )
 
+# 超限停机：单机保活 / 闲散手动的机器各自到阈值，被迫节省停机
+KEEPALIVE_OVER = server(
+    "香港-保活机", "i-demo00000000000004", "47.243.15.35", "cn-hongkong", 200, 189.40,
+    "Stopped", "StopCharging",
+)
+IDLE_OVER = server(
+    "新加坡-闲散机", "i-demo00000000000005", "47.243.16.36", "ap-southeast-1", 200, 189.40,
+    "Stopped", "StopCharging",
+)
+
 # 换班异常：当班该运行却超时没运行（Stopped → ⚪），standby 该停却还赖在 Running（→ 🟢）
 ERROR_DUTY = server(
     "香港-主力", "i-demo00000000000001", "47.243.12.32", "cn-hongkong", 200, 148.62,
@@ -187,19 +197,37 @@ SHOTS = [
         "18:31",
     ),
     (
-        "19-notify-recovery",
+        "19-notify-limitstop",
+        "全局熔断报告（单台）",
+        messages.limit_stop(MAIN_OVER, group_name=GROUP),
+        "18:33",
+    ),
+    (
+        "20-notify-over-keepalive",
+        "超限停机报告",
+        messages.over_limit(KEEPALIVE_OVER, messages.SCOPE_KEEPALIVE),
+        "22:10",
+    ),
+    (
+        "21-notify-over-idle",
+        "超限停机报告",
+        messages.over_limit(IDLE_OVER, messages.SCOPE_IDLE),
+        "22:12",
+    ),
+    (
+        "22-notify-recovery",
         "抢占恢复报告",
         messages.recovery(MAIN, "✅ 已同步", group_name=GROUP),
         "15:42",
     ),
     (
-        "20-notify-error",
+        "23-notify-error",
         "换班异常报告",
         messages.shift_error(ERROR_DUTY, [ERROR_STANDBY, ERROR_STANDBY2], 8, group_name=GROUP),
         "00:08",
     ),
     (
-        "21-notify-daily",
+        "24-notify-daily",
         "每日流量报告",
         messages.daily_report([MAIN, BACKUP, THIRD], "2026-10-27 09:00"),
         "09:00",

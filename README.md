@@ -11,7 +11,7 @@
 | **DNS** | 域名记录集中管理，一条记录显式绑一台机器或一个换班组，没绑的谁也不会动 |
 
 当班实例的公网 IP 会同步到它绑定的 Cloudflare A 记录 —— 一台机器可以同时挂多条域名，开机时一起更新。
-换班、故障转移、熔断、抢占恢复都会推一条通知。没编进任何流程的**闲散服务器**照旧可以手动开关机。
+换班、故障转移、熔断、超限停机、抢占恢复都会推一条通知。没编进任何流程的**闲散服务器**照旧可以手动开关机。
 
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 ![python](https://img.shields.io/badge/python-3.13-blue)
@@ -163,12 +163,12 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 
 ### 流量保护
 
-每台服务器单独配「限流阈值（GB）」。当班流量到阈值时：
+每台服务器单独配「限流阈值（GB）」。**三类机器超限都会停机**，绝不让超限的那台继续烧流量：
 
-- 还有没超的成员 → **故障转移**：切到用量最低的那台，原当班停机
-- 全部都超了 / 其他成员状态查不到 → **全局熔断**：全部节省停机（找不到替班就绝不让超限的那台继续跑）
-
-关掉「允许流量故障转移」后，当班超限就直接停机。
+- **换班组**：还有没超的成员 → **故障转移**（切到用量最低那台）；全部超限或状态查不到 → **全局熔断**（全部节省停机）
+- **换班组·单台**：关掉「允许流量故障转移」后，当班超限只停当班这一台
+- **单机保活**：到阈值就节省停机并暂停保活，流量回落后自动恢复
+- **闲散手动**：到阈值就节省停机，同样回落自动恢复
 
 ### DNS
 
@@ -185,7 +185,9 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 | ✅ 换班完成 | 到点换班，新当班运行、其余停机、DDNS 已同步 |
 | ⚠️ 故障转移 | 当班流量到阈值，自动切到用量最低的一台 |
 | 🚨 全局熔断 | 换班组全部成员都到阈值，全部节省停机 |
-| 🚨 超限停机 | 单机保活或闲散手动的机器流量到阈值，节省停机并暂停保活 |
+| 🚨 全局熔断（单台） | 当班超限但组里没开故障转移，只停当班这一台 |
+| 🚨 超限停机（单机保活） | 单机保活的机器到阈值，节省停机并暂停保活 |
+| 🚨 超限停机（闲散手动） | 闲散手动的机器到阈值，节省停机 |
 | 🟢 抢占恢复 | 当班被回收后自动拉起（单机保活也是这个标题） |
 | ⚠️ 换班异常 | 班次开始后迟迟没达到预期状态 |
 | 📊 每日汇总 | 到设定时间推全部服务器的流量与额度 |
@@ -197,18 +199,21 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 实际推出来的样子（按上表顺序，点开看原图）：
 
 <p align="center">
-  <img src="docs/screenshots/16-notify-shift.png" width="48%" align="top" alt="CDT（换班组）换班完成报告">
-  <img src="docs/screenshots/17-notify-failover.png" width="48%" align="top" alt="CDT（换班组）故障转移报告">
+  <img src="docs/screenshots/16-notify-shift.png" width="31%" align="top" alt="CDT 换班完成报告（换班组）">
+  <img src="docs/screenshots/17-notify-failover.png" width="31%" align="top" alt="CDT 故障转移报告（换班组）">
+  <img src="docs/screenshots/18-notify-breaker.png" width="31%" align="top" alt="CDT 全局熔断报告（换班组）">
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/18-notify-breaker.png" width="48%" align="top" alt="CDT（换班组）全局熔断报告">
-  <img src="docs/screenshots/19-notify-recovery.png" width="48%" align="top" alt="CDT 抢占恢复报告">
+  <img src="docs/screenshots/19-notify-limitstop.png" width="31%" align="top" alt="CDT 全局熔断报告（换班组·单台）">
+  <img src="docs/screenshots/20-notify-over-keepalive.png" width="31%" align="top" alt="CDT 超限停机报告（单机保活）">
+  <img src="docs/screenshots/21-notify-over-idle.png" width="31%" align="top" alt="CDT 超限停机报告（闲散手动）">
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/20-notify-error.png" width="48%" align="top" alt="CDT（换班组）换班异常报告">
-  <img src="docs/screenshots/21-notify-daily.png" width="48%" align="top" alt="CDT 每日流量报告">
+  <img src="docs/screenshots/22-notify-recovery.png" width="31%" align="top" alt="CDT 抢占恢复报告">
+  <img src="docs/screenshots/23-notify-error.png" width="31%" align="top" alt="CDT 换班异常报告（换班组）">
+  <img src="docs/screenshots/24-notify-daily.png" width="31%" align="top" alt="CDT 每日流量报告">
 </p>
 
 ## 数据放在哪
