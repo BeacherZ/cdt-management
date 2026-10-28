@@ -191,7 +191,7 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 
 支持 Telegram、邮件、Webhook 三类渠道同时开启。
 
-实际推出来的样子（按上表顺序，每行 2 张，点开看原图）：
+实际推出来的样子（按上表顺序，点开看原图）：
 
 <p align="center">
   <img src="docs/screenshots/16-notify-shift.png" width="48%" align="top" alt="CDT（换班组）换班完成报告">
