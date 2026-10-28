@@ -311,8 +311,8 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
 
               <div>
                 <Switch
-                  label="每日流量报告"
-                  hint="到点把所有服务器的流量与状态推送一次"
+                  label="每日报告"
+                  hint="到点把所有服务器的费用、余额、流量与状态推送一次"
                   checked={form.daily_report_enabled}
                   onChange={(value) => patch((draft) => (draft.daily_report_enabled = value))}
                 />

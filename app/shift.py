@@ -1881,7 +1881,7 @@ class Engine:
         )
         results = notify.send_all(config, message)
         repo.set_flag(flag)
-        event_id = repo.add_event("daily_report", "每日流量报告已推送", f"{len(servers)} 台服务器")
+        event_id = repo.add_event("daily_report", "每日报告已推送", f"{len(servers)} 台服务器")
         notify.note_notify(event_id, results)
         return True
 

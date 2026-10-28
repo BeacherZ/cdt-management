@@ -13,7 +13,7 @@
 不按脚本写死「Stopped (StopCharging)」——普通停机照常收规格费，写错会误导。
 
 唯一在脚本之外统一加的一行是「📍 地域」：跟着 ＩＰ 行的下一行，取 ECS DescribeInstances
-返回的真实 RegionId（如 cn-hongkong），和每日流量报告字段顺序一致。其余字段位置不动。
+返回的真实 RegionId（如 cn-hongkong），和每日报告字段顺序一致。其余字段位置不动。
 
 本模块只做拼装，不查库、不调接口，方便和脚本对着看。
 """

@@ -213,7 +213,7 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 <p align="center">
   <img src="docs/screenshots/22-notify-recovery.png" width="31%" align="top" alt="CDT 抢占恢复报告">
   <img src="docs/screenshots/23-notify-error.png" width="31%" align="top" alt="CDT 换班异常报告（换班组）">
-  <img src="docs/screenshots/24-notify-daily.png" width="31%" align="top" alt="CDT 每日流量报告">
+  <img src="docs/screenshots/24-notify-daily.png" width="31%" align="top" alt="CDT 每日报告">
 </p>
 
 ## 数据放在哪
