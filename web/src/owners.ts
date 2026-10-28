@@ -13,5 +13,5 @@ export function ownerBase(owner: Managed): string {
 
 /** 名字 + 托管状态；没有归属就是闲散手动 */
 export function ownerLabel(owner: Managed | null | undefined): string {
-  return owner ? `${ownerBase(owner)}${owner.active ? '托管' : '已暂停'}` : '闲散 · 手动'
+  return owner ? `${ownerBase(owner)}${owner.active ? '托管' : '已暂停'}` : '闲散手动'
 }

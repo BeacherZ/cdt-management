@@ -312,6 +312,7 @@ class Engine:
             now_ts = now.timestamp()
 
             grouped = self._grouped_server_ids()
+            keepalive_ids = repo.keepalive_server_ids()
             results: list[dict[str, Any]] = []
 
             try:
@@ -319,6 +320,14 @@ class Engine:
             except Exception as exc:  # noqa: BLE001
                 log.exception("单机保活对账失败")
                 repo.add_event("error", "单机保活同步异常", str(exc), level="error")
+
+            try:
+                results.extend(
+                    self.reconcile_idle_limits(config, now, grouped, keepalive_ids)
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.exception("闲散机器超限对账失败")
+                repo.add_event("error", "闲散机器超限检查异常", str(exc), level="error")
 
             for group in repo.list_groups():
                 try:
@@ -403,6 +412,24 @@ class Engine:
             if repo.get_flag(f"keepalive_err:{server_id}"):
                 repo.clear_flag(f"keepalive_err:{server_id}")
 
+            # 流量超限 → 节省停机并暂停保活，不再无脑拉起。
+            # 这是 1.1.15 补上的功能：之前单机保活只判断「停了就拉」，从不看阈值，
+            # 机器超了阈值还在烧流量。停一次打一个 limit_stop 标记，标记在就不再
+            # 碰它（否则下轮又被拉起）；流量回落到阈值以下（包重置 / 调高阈值）后
+            # 自动清标记、恢复保活。
+            if _over_threshold(server):
+                if self._limit_stop_server(server_id, server, config, messages.SCOPE_KEEPALIVE):
+                    results.append({"keepalive": server_id, "over_limit": True})
+                # 超限停机的机器不再走「停了就拉」：清掉等待标记，别让残留状态
+                # 干扰下一轮判断（流量回落前它就该保持停机）。
+                if repo.get_flag(f"keepalive_wait:{server_id}"):
+                    repo.clear_flag(f"keepalive_wait:{server_id}")
+                continue
+            # 流量回落到阈值以下（流量包重置 / 调高阈值）：清掉超限标记，
+            # 恢复正常的「停了就拉」。否则标记会永久钉住这台机器。
+            if repo.get_flag(f"limit_stop:{messages.SCOPE_KEEPALIVE}:{server_id}"):
+                repo.clear_flag(f"limit_stop:{messages.SCOPE_KEEPALIVE}:{server_id}")
+
             status = str(server.get("instance_status") or "")
             if status == "Stopped":
                 try:
@@ -448,6 +475,86 @@ class Engine:
                     "traffic": server.get("traffic_used"),
                 }
             )
+        return results
+
+    # -- 超限停机（保活 / 闲散共用） ---------------------------------------
+    def _limit_stop_server(
+        self,
+        server_id: int,
+        server: dict[str, Any],
+        config: dict[str, str],
+        scope: str,
+    ) -> bool:
+        """单台机器超限：节省停机一次 + 打标记 + 推报告。返回是否真的发了指令。
+
+        标记 key 里带 scope，保活和闲散各记各的（同一台机器不会同时处于两种状态，
+        但分开写更清楚，也避免一种范围的清除误伤另一种）。
+        """
+        flag = f"limit_stop:{scope}:{server_id}"
+        if repo.get_flag(flag):
+            return False
+
+        # 已经物理停机（含不支持节省停机的 Not-applicable）就不重发指令
+        if not _is_stopped_any_mode(server):
+            try:
+                aliyun.stop_instance(server, "StopCharging", fallback=True)
+            except Exception as exc:  # noqa: BLE001
+                err = f"limit_stop_err:{scope}:{server_id}"
+                if not repo.get_flag(err):
+                    repo.set_flag(err)
+                    repo.add_event(
+                        "error",
+                        f"{server.get('label')}：超限停机失败",
+                        str(exc),
+                        level="error",
+                        server_id=server_id,
+                    )
+                return False
+            repo.clear_flag(f"limit_stop_err:{scope}:{server_id}")
+
+        repo.set_flag(flag)
+        event_id = repo.add_event(
+            "limit_stop",
+            f"{server.get('label')}：流量超限，已节省停机",
+            f"已用 {_used_gb(server):.2f} GB，阈值 {float(server.get('threshold_gb') or 0):g} GB",
+            level="warning",
+            server_id=server_id,
+        )
+        if config.get("notify_on_limit_stop") == "1":
+            results = notify.send_all(config, messages.over_limit(server, scope))
+            notify.note_notify(event_id, results)
+        return True
+
+    # ==================================================================
+    # 闲散机器超限停机
+    # ==================================================================
+    def reconcile_idle_limits(
+        self,
+        config: dict[str, str],
+        now: dt.datetime,
+        grouped: set[int],
+        keepalive_ids: set[int],
+    ) -> list[dict[str, Any]]:
+        """闲散机器（没进任何换班组、也没挂单机保活）也要超限停机。
+
+        这是 1.1.15 补上的：之前闲散机器完全没人巡检，超了阈值一直在跑。
+        """
+        results: list[dict[str, Any]] = []
+        for server in repo.list_servers(decrypt_secret=True):
+            server_id = int(server["id"])
+            if server_id in grouped or server_id in keepalive_ids:
+                continue
+            try:
+                _refresh(server)
+            except Exception:  # noqa: BLE001
+                # 读不到状态就当没这回事，别让一台机器把整轮拖垮
+                continue
+            if _over_threshold(server):
+                if self._limit_stop_server(server_id, server, config, messages.SCOPE_IDLE):
+                    results.append({"idle": server_id, "over_limit": True})
+            elif repo.get_flag(f"limit_stop:{messages.SCOPE_IDLE}:{server_id}"):
+                # 流量回落：清标记，之后这台机器再超限还能再停
+                repo.clear_flag(f"limit_stop:{messages.SCOPE_IDLE}:{server_id}")
         return results
 
     # ==================================================================
@@ -872,7 +979,9 @@ class Engine:
                 manual=manual_switch, shift_event_id=event_id,
             )
         elif recovered and config.get("notify_on_recovery") == "1":
-            results = notify.send_all(config, messages.recovery(duty, ddns_text))
+            results = notify.send_all(
+                config, messages.recovery(duty, ddns_text, group_name=name)
+            )
             # 通知是流程的最后一步，写在事件最后，点开就能确认报告到底发出去没有
             notify.note_notify(event_id, results)
 
@@ -1856,6 +1965,10 @@ def _over_threshold(server: dict[str, Any]) -> bool:
         return False
     threshold = float(server.get("threshold_gb") or 0)
     return threshold > 0 and float(used) >= threshold
+
+
+def _used_gb(server: dict[str, Any]) -> float:
+    return float(server.get("traffic_used") or 0)
 
 
 # 物理上已停机、可以不再下停机指令的 StoppedMode 取值。

@@ -177,7 +177,7 @@ SHOTS = [
     (
         "19-notify-recovery",
         "抢占恢复报告",
-        messages.recovery(MAIN, "✅ 已同步"),
+        messages.recovery(MAIN, "✅ 已同步", group_name=GROUP),
         "15:42",
     ),
     (

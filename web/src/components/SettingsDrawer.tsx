@@ -768,8 +768,8 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
                     }
                   />
                   <Switch
-                    label="全局熔断"
-                    hint="流量达到阈值被迫停机：当班无处可换只停一台，全部成员超限则全部停机"
+                    label="超限停机 / 全局熔断"
+                    hint="流量达到阈值被迫停机：换班组无处可换停一台、全员超限全停；单机保活与闲散机器超限也停"
                     checked={form.notify_on_limit_stop || form.notify_on_breaker}
                     onChange={(value) =>
                       patch((draft) => {

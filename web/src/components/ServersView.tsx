@@ -266,7 +266,7 @@ export default function ServersView({
                         <span className="owner-tag-text">{ownerText}</span>
                       </>
                     ) : (
-                      <>闲散 · 手动</>
+                      <>闲散手动</>
                     )}
                   </span>
                   {dnsRecords(server.dns_record).map((record) => (
@@ -424,7 +424,7 @@ function ServerTable({
                         <span className="owner-tag-text">{ownerText}</span>
                       </>
                     ) : (
-                      <>闲散 · 手动</>
+                      <>闲散手动</>
                     )}
                   </span>
                 </td>

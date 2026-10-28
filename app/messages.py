@@ -128,9 +128,71 @@ def _used(server: dict[str, Any]) -> float:
     return float(server.get("traffic_used") or 0)
 
 
+def _threshold_text(server: dict[str, Any]) -> str:
+    """阈值取这台机器自己在服务器设置里填的 threshold_gb，不是组里共用的那个。
+
+    每台机器的套餐和阈值可以不一样，用组阈值会张冠李戴。
+    没填（0 或缺失）时返回空串，调用方就别写括号 —— 「阈值 0 GB」比不写更糟。
+    """
+    try:
+        value = float(server.get("threshold_gb") or 0)
+    except (TypeError, ValueError):
+        return ""
+    if value <= 0:
+        return ""
+    return f"{value:.2f}".rstrip("0").rstrip(".")
+
+
+def _used_line(server: dict[str, Any]) -> str:
+    """「已用」行带上这台机器自己的阈值，一眼能看出超了多少。"""
+    line = f"┃ 📈 已用：{_used(server):.2f} GB"
+    threshold = _threshold_text(server)
+    return f"{line}（阈值 {threshold} GB）" if threshold else line
+
+
+# --------------------------------------------------------------------------
+# 标题：CDT {事件}报告（{范围}）
+# --------------------------------------------------------------------------
+# 三种托管范围，标题末尾永远带一个全角括号说明「这条报告属于谁」：
+#   换班组   → （换班组：港新联合保活）
+#   单机保活 → （单机保活）
+#   闲散手动 → （闲散手动）
+# 统一之后，推送列表里一眼能认出事件归属，不用去点开正文。
+SCOPE_GROUP = "换班组"
+SCOPE_KEEPALIVE = "单机保活"
+SCOPE_IDLE = "闲散手动"
+
+
+def scope_tag(group_name: str = "", scope: str = SCOPE_GROUP, note: str = "") -> str:
+    """标题末尾的范围括号。
+
+    note 是给同一事件补的修饰（目前只有「延迟恢复」），跟在范围后面共用
+    一个括号：`（换班组：X，延迟恢复）`。排两个括号看着像两件事。
+    """
+    inner = f"{SCOPE_GROUP}：{group_name}" if group_name else (scope or SCOPE_GROUP)
+    if note:
+        inner = f"{inner}，{note}"
+    return f"（{inner}）"
+
+
+def title_of(
+    event: str,
+    group_name: str = "",
+    scope: str = SCOPE_GROUP,
+    note: str = "",
+) -> str:
+    """统一拼标题。event 不带「报告」二字，例如「换班完成」「全局熔断」。"""
+    return f"CDT {event}报告{scope_tag(group_name, scope, note)}"
+
+
 def _message(kind: str, title_html: str, title: str, body: str) -> notify.Message:
     raw = f"{title_html}\n\n{body}"
     return notify.Message(kind=kind, title=title, html=raw, text=_TAG_RE.sub("", raw))
+
+
+def _titled(kind: str, emoji: str, title: str, body: str) -> notify.Message:
+    """标题只写一份：html 版加 emoji 与 <b>，text 版用纯文本，省得两处改漏。"""
+    return _message(kind, f"{emoji} <b>{title}</b>", title, body)
 
 
 # --------------------------------------------------------------------------
@@ -244,34 +306,25 @@ def shift_done(
     delayed: bool = False,
     manual: bool = False,
 ) -> notify.Message:
-    """✅ 换班完成 / 换班成功（延迟恢复）/ 换班完成（手动换班）。
+    """✅ 换班完成 / 换班成功（延迟恢复）/ 手动换班完成。
 
-    手动换班走完整流程（确认成员状态 → DDNS → 结算），报告照发，只在标题
-    加后缀区分来源，不让人误以为是自动换班或故障转移。
+    手动换班走完整流程（确认成员状态 → DDNS → 结算），报告照发，事件名改成
+    「手动换班完成」而不是加后缀 —— 标题统一为 `CDT {事件}报告（范围）` 之后，
+    后缀那一串只能塞进范围括号里，读起来像范围本身有毛病。
     """
-    prefix = f"{group_name} " if group_name else ""
-    if delayed:
-        return _message(
-            "shift_done",
-            f"✅ <b>CDT {prefix}换班成功报告 (延迟恢复)</b>",
-            f"CDT {prefix}换班成功报告 (延迟恢复)",
-            f"🕒 <b>当前班次</b>：{period}\n{SEP}\n"
-            + _join_blocks(
-                [running_block("运行账号", duty, ddns_status)]
-                + [stopped_block("停止账号", s, _status(s)) for s in stopped]
-            ),
-        )
-    title = f"CDT {prefix}换班完成报告(手动换班)" if manual else f"CDT {prefix}换班完成报告"
-    return _message(
-        "shift_done",
-        f"✅ <b>{title}</b>",
-        title,
-        f"🕒 <b>当前班次</b>：{period}\n{SEP}\n"
-        + _join_blocks(
-            [running_block("运行账号", duty, ddns_status)]
-            + [stopped_block("停止账号", s, _status(s)) for s in stopped]
-        ),
+    body = f"🕒 <b>当前班次</b>：{period}\n{SEP}\n" + _join_blocks(
+        [running_block("运行账号", duty, ddns_status)]
+        + [stopped_block("停止账号", s, _status(s)) for s in stopped]
     )
+    if delayed:
+        return _titled(
+            "shift_done",
+            "✅",
+            title_of("换班成功", group_name, note="延迟恢复"),
+            body,
+        )
+    event = "手动换班完成" if manual else "换班完成"
+    return _titled("shift_done", "✅", title_of(event, group_name), body)
 
 
 def shift_failover(
@@ -282,14 +335,13 @@ def shift_failover(
     group_name: str = "",
 ) -> notify.Message:
     """⚠️ 故障转移（原「临时换班」）。两块是脚本原样，三台以上才补「停止账号」。"""
-    prefix = f"{group_name} " if group_name else ""
     parts = [running_block("接替账号", duty, ddns_status)]
     parts += [stopped_block("超限账号", s, _status(s), used=_used(s)) for s in over]
     parts += [stopped_block("停止账号", s, _status(s)) for s in standby]
-    return _message(
+    return _titled(
         "shift_failover",
-        f"⚠️ <b>CDT {prefix}故障转移报告</b>",
-        f"CDT {prefix}故障转移报告",
+        "⚠️",
+        title_of("故障转移", group_name),
         f"📢 <b>故障转移</b>：当班实例流量超限，已启用备用实例。\n{SEP}\n" + _join_blocks(parts),
     )
 
@@ -305,7 +357,6 @@ def breaker(
     note 非空表示「不是因为全员超限、而是找不到替班」（其他成员状态读不到）：
     此时我们并不知道别人用了多少流量，不能照抄「N 台流量均已到达到阈值」。
     """
-    prefix = f"{group_name} " if group_name else ""
     count = "双实例" if len(servers) == 2 else f"{len(servers)} 台实例"
     if note:
         warn = f"当班流量已到达到阈值，{note}，按“全局熔断”处理，{stop_tail(servers)}。"
@@ -316,17 +367,18 @@ def breaker(
             [
                 f"🖥 {_label(s)}",
                 f"┃ 📦 实例：<code>{_instance(s)}</code>",
+                f"┃ 🌐 ＩＰ：{_ip(s)}",
                 f"┃ 📍 地域：{_region(s)}",
-                f"┃ 📈 已用：{_used(s):.2f} GB",
+                _used_line(s),
                 f"┃ 🚧 状态：{_status(s)}",
             ]
         )
         for s in servers
     ]
-    return _message(
+    return _titled(
         "breaker",
-        f"🚨 <b>CDT {prefix}全局熔断报告</b>",
-        f"CDT {prefix}全局熔断报告",
+        "🚨",
+        title_of("全局熔断", group_name),
         f"⚠ <b>警告：{warn}</b>\n\n" + _join_blocks(blocks),
     )
 
@@ -339,11 +391,10 @@ def limit_stop(server: dict[str, Any], group_name: str = "") -> notify.Message:
     只是范围不同（单台 / 全组），分两个标题在推送里只会让人以为是两件事。
     正文保留 ＩＰ 行，与其它通知的实例块字段顺序一致。
     """
-    prefix = f"{group_name} " if group_name else ""
-    return _message(
+    return _titled(
         "limit_stop",
-        f"🚨 <b>CDT {prefix}全局熔断报告</b>",
-        f"CDT {prefix}全局熔断报告",
+        "🚨",
+        title_of("全局熔断", group_name),
         "\n".join(
             [
                 "当班实例流量超限，已强制节省停机。",
@@ -352,6 +403,35 @@ def limit_stop(server: dict[str, Any], group_name: str = "") -> notify.Message:
                 f"┃ 📦 实例：<code>{_instance(server)}</code>",
                 f"┃ 🌐 ＩＰ：{_ip(server)}",
                 f"┃ 📍 地域：{_region(server)}",
+                _used_line(server),
+                f"┃ 🔴 状态：{_status(server)}",
+                SEP,
+            ]
+        ),
+    )
+
+
+def over_limit(server: dict[str, Any], scope: str) -> notify.Message:
+    """🚨 超限停机：单机保活 / 闲散手动的机器到阈值，被迫节省停机。
+
+    标题不叫「全局熔断」——那套说的是换班组里「没得换所以全停」，单机场景
+    底下没有「全局」可言，混用会让人以为换班组出了事。范围括号标明是谁被停了。
+    """
+    paused = "已暂停保活" if scope == SCOPE_KEEPALIVE else "已节省停机"
+    return _titled(
+        "limit_stop",
+        "🚨",
+        title_of("超限停机", scope=scope),
+        "\n".join(
+            [
+                f"流量已到阈值，{paused}，不再自动开机。",
+                "流量回落到阈值以下（流量包重置或调高阈值）后自动恢复。",
+                "",
+                f"🖥 {_label(server)}",
+                f"┃ 📦 实例：<code>{_instance(server)}</code>",
+                f"┃ 🌐 ＩＰ：{_ip(server)}",
+                f"┃ 📍 地域：{_region(server)}",
+                _used_line(server),
                 f"┃ 🔴 状态：{_status(server)}",
                 SEP,
             ]
@@ -364,15 +444,17 @@ def recovery(
     ddns_status: str,
     headline: str = "当班实例疑被抢占，已自动恢复运行。",
     kind: str = "recovery",
+    group_name: str = "",
 ) -> notify.Message:
     """🟢 抢占恢复。单机保活拉起也用这套版式（脚本里没有单独的保活通知）。
 
-    标题靠后缀区分来源，正文一致：单机保活「CDT 抢占恢复报告(单机保活)」、
-    联合换班「CDT 抢占恢复报告(联合换班)」。之前联合换班把组名塞在标题里、
-    单机保活没有前缀，两个标题长得太像，不好认。
+    范围靠标题括号区分：单机保活「（单机保活）」、换班组「（换班组：组名）」。
+    之前联合换班把组名塞在事件名前面、单机保活没有前缀，两个标题长得太像，不好认。
     """
-    scope = "单机保活" if kind == "keepalive" else "联合换班"
-    title = f"CDT 抢占恢复报告({scope})"
+    if kind == "keepalive":
+        title = title_of("抢占恢复", scope=SCOPE_KEEPALIVE)
+    else:
+        title = title_of("抢占恢复", group_name)
     lines = [
         headline,
         "",
@@ -384,7 +466,7 @@ def recovery(
         "┃ 🟢 状态：Running",
         SEP,
     ]
-    return _message(kind, f"🟢 <b>{title}</b>", title, "\n".join(lines))
+    return _titled(kind, "🟢", title, "\n".join(lines))
 
 
 def shift_error(
@@ -394,7 +476,6 @@ def shift_error(
     group_name: str = "",
 ) -> notify.Message:
     """⚠️ 换班异常（超时未就绪）。"""
-    prefix = f"{group_name} " if group_name else ""
     parts = [
         "\n".join(
             [
@@ -420,10 +501,10 @@ def shift_error(
                 ]
             )
         )
-    return _message(
+    return _titled(
         "shift_error",
-        f"⚠️ <b>CDT {prefix}换班异常报告</b>",
-        f"CDT {prefix}换班异常报告",
+        "⚠️",
+        title_of("换班异常", group_name),
         f"⏳ <b>换班超时：换班指令已执行 {minutes} 分钟，但状态未就绪。</b>\n\n"
         + _join_blocks(parts),
     )

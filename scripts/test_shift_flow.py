@@ -200,8 +200,8 @@ class ManualSwitch(unittest.TestCase):
         for _ in range(5):
             self._reconcile()
 
-        # 收尾推一条带「(手动换班)」后缀的报告，只推一次
-        self.assertEqual(self.sent, ["CDT 手换组 换班完成报告(手动换班)"], self.sent)
+        # 收尾推一条「手动换班完成」报告，只推一次
+        self.assertEqual(self.sent, ["CDT 手动换班完成报告（换班组：手换组）"], self.sent)
 
         events = repo.list_events(limit=50, group_id=self.group_id)
         manual = [e for e in events if e["kind"] == "manual"]
@@ -565,8 +565,8 @@ class ManualSwitchTimetable(unittest.TestCase):
         self.assertTrue(any("已下发停机" in t for t in texts), texts)
         self.assertEqual(texts[-2:], ["全部状态确认完毕", "报告已发送"], texts)
         self.assertFalse([e["title"] for e in events if e["title"].endswith("故障转移")], events)
-        # 报告标题带「(手动换班)」
-        self.assertEqual(self.sent, ["CDT 时刻表组 换班完成报告(手动换班)"], self.sent)
+        # 报告标题「手动换班完成」
+        self.assertEqual(self.sent, ["CDT 手动换班完成报告（换班组：时刻表组）"], self.sent)
 
 
 class Timezone(unittest.TestCase):

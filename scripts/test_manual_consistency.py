@@ -181,7 +181,7 @@ class ManualConsistency(unittest.TestCase):
 
         self.assertEqual(len(self.sent), 3, self.sent)
         for title in self.sent:
-            self.assertEqual(title, "CDT 一致性组 换班完成报告(手动换班)")
+            self.assertEqual(title, "CDT 手动换班完成报告（换班组：一致性组）")
 
         events = repo.list_events(limit=50, group_id=self.group_id)
         manual = [e for e in events if e["kind"] == "manual"]
