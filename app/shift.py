@@ -1797,6 +1797,18 @@ class Engine:
         target_status = "Running" if action == "start" else "Stopped"
         note = self._managed_note(server_id)
 
+        # 幂等：同一台机器同一目标状态已有进行中的手动事件，直接返回，不再重复
+        # 下发指令。否则快速连点会连发两次启停、产生多条转圈事件。
+        if repo.pending_manual_exists(server_id, target_status):
+            return {
+                "status": "pending",
+                "duplicate": True,
+                "target_status": target_status,
+                "managed_note": note,
+                "instance_status": server.get("instance_status") or "Unknown",
+                "stopped_mode": server.get("stopped_mode") or "",
+            }
+
         # 1) 下发指令。停机用节省停机，不支持则退化普通停机（不报错）。
         if action == "start":
             aliyun.start_instance(server)

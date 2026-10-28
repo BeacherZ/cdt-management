@@ -5,6 +5,7 @@ import {
   Gauge,
   Globe2,
   HeartPulse,
+  LoaderCircle,
   LogOut,
   Plus,
   RefreshCw,
@@ -123,6 +124,9 @@ export default function App() {
   const [confirmBusy, setConfirmBusy] = useState(false)
   const [busyDns, setBusyDns] = useState<string | null>(null)
   const [dnsSyncingAll, setDnsSyncingAll] = useState(false)
+  const [reconciling, setReconciling] = useState(false)
+  const [busyKeepalive, setBusyKeepalive] = useState<number | null>(null)
+  const [addingKeepalive, setAddingKeepalive] = useState(false)
   // 轮询连续失败两轮以上才置 true：偶发一次抖动静默跳过，别每分钟弹一次提示
   const [stale, setStale] = useState(false)
   const polling = useRef<number | null>(null)
@@ -165,6 +169,16 @@ export default function App() {
     }
     setPhase('ready')
   }, [])
+
+  /** 弹窗保存成功后统一刷新：刷新失败也要给用户一句提示，不能吞成 unhandled rejection */
+  async function refreshAfterSave(message: string) {
+    try {
+      await loadAll()
+      toast(message, 'success')
+    } catch (error) {
+      toast(`已保存，但刷新数据失败：${error instanceof Error ? error.message : '请稍后重试'}`, 'error')
+    }
+  }
 
   useEffect(() => {
     void (async () => {
@@ -220,12 +234,16 @@ export default function App() {
   }, [phase])
 
   async function reconcile() {
+    if (reconciling) return
+    setReconciling(true)
     try {
       await post('/api/v1/reconcile', undefined, SLOW_TIMEOUT_MS)
       await loadAll()
       toast('已触发一轮同步', 'success')
     } catch (error) {
       toast(error instanceof Error ? error.message : '同步失败', 'error')
+    } finally {
+      setReconciling(false)
     }
   }
 
@@ -345,6 +363,8 @@ export default function App() {
   }
 
   async function addKeepalive(serverId: number) {
+    if (addingKeepalive) return
+    setAddingKeepalive(true)
     try {
       await post('/api/v1/keepalives', { server_id: serverId })
       setKeepalivePicker(false)
@@ -352,15 +372,21 @@ export default function App() {
       toast('已加入单机保活', 'success')
     } catch (error) {
       toast(error instanceof Error ? error.message : '添加失败', 'error')
+    } finally {
+      setAddingKeepalive(false)
     }
   }
 
   async function toggleKeepalive(item: Keepalive, enabled: boolean) {
+    if (busyKeepalive !== null) return
+    setBusyKeepalive(item.id)
     try {
       await post(`/api/v1/keepalives/${item.id}/toggle`, { enabled })
       await loadAll()
     } catch (error) {
       toast(error instanceof Error ? error.message : '操作失败', 'error')
+    } finally {
+      setBusyKeepalive(null)
     }
   }
 
@@ -546,6 +572,7 @@ export default function App() {
       <Auth
         mode={phase}
         brand={meta.brand || 'CDT-Management'}
+        setupTokenRequired={meta.setup_token_required}
         onDone={() => {
           setPhase('loading')
           void loadAll().catch(() => setPhase('login'))
@@ -670,6 +697,7 @@ export default function App() {
             servers={overview.servers}
             groupedIds={groupedIds}
             busyId={busyServer}
+            togglingId={busyKeepalive}
             onAdd={() => setKeepalivePicker(true)}
             onToggle={toggleKeepalive}
             onRemove={removeKeepalive}
@@ -740,8 +768,8 @@ export default function App() {
             color: 'var(--muted-soft)',
           }}
         >
-          <button className="btn ghost sm" onClick={reconcile}>
-            <RefreshCw size={12} /> 立即同步
+          <button className="btn ghost sm" onClick={reconcile} disabled={reconciling}>
+            {reconciling ? <LoaderCircle size={12} className="spin" /> : <RefreshCw size={12} />} 立即同步
           </button>
           {stale && (
             <Badge tone="amber" dot>
@@ -761,10 +789,9 @@ export default function App() {
           server={serverDialog.server}
           defaultThresholdPercent={Number(settings.traffic_threshold_pct) || 90}
           onClose={() => setServerDialog({ open: false, server: null })}
-          onSaved={async (message) => {
+          onSaved={(message) => {
             setServerDialog({ open: false, server: null })
-            await loadAll()
-            toast(message, 'success')
+            void refreshAfterSave(message)
           }}
         />
       )}
@@ -775,10 +802,9 @@ export default function App() {
           servers={overview.servers}
           onClose={() => setGroupDialog({ open: false, group: null })}
           onKeepaliveCleared={() => void loadAll()}
-          onSaved={async (message) => {
+          onSaved={(message) => {
             setGroupDialog({ open: false, group: null })
-            await loadAll()
-            toast(message, 'success')
+            void refreshAfterSave(message)
           }}
         />
       )}
@@ -800,6 +826,7 @@ export default function App() {
                   key={server.id}
                   className="slot"
                   style={{ textAlign: 'left', cursor: 'pointer' }}
+                  disabled={addingKeepalive}
                   onClick={() => addKeepalive(server.id)}
                 >
                   <div className="slot-top">
@@ -823,10 +850,9 @@ export default function App() {
         <SettingsDrawer
           settings={settings}
           onClose={() => setSettingsOpen(false)}
-          onSaved={async (message) => {
+          onSaved={(message) => {
             setSettingsOpen(false)
-            await loadAll()
-            toast(message, 'success')
+            void refreshAfterSave(message)
           }}
         />
       )}

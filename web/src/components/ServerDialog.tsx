@@ -67,6 +67,22 @@ export default function ServerDialog({
       setError('新建服务器必须填写 AccessKey ID 与 Secret')
       return
     }
+    // 数值框 min 属性对「onClick 保存」不生效，清空会变成 Number('')=0 静默提交，
+    // 必须在提交前拦住，别把配额/阈值写成 0 污染换班引擎判定。
+    const quota = Number(form.quota_gb)
+    const threshold = Number(form.threshold_gb)
+    if (!Number.isFinite(quota) || quota <= 0) {
+      setError('总配额必须是大于 0 的数字')
+      return
+    }
+    if (!Number.isFinite(threshold) || threshold <= 0) {
+      setError('限流阈值必须是大于 0 的数字')
+      return
+    }
+    if (threshold > quota) {
+      setError('限流阈值不能超过总配额')
+      return
+    }
     setBusy(true)
     try {
       await post('/api/v1/servers', { ...form, access_key_id: form.access_key_id.trim() })

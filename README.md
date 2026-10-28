@@ -220,6 +220,13 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 
 备份就把整个目录拷走；换机器时两个文件一起搬。
 
+## 公网部署与安全
+
+面板默认监听 `0.0.0.0:8080`。如果把它直接暴露到公网（或通过端口映射），建议：
+
+- **套一层 HTTPS 反向代理**，并把会话 Cookie 设为只在加密连接下发送：`-e CDT_COOKIE_SECURE=1`（默认关，内网 HTTP 不用动）。
+- **首次初始化有令牌保护**：首次启动自动生成一个随机令牌，写到数据目录 `init.token` 并打印到启动日志；初始化向导里要填这个令牌，避免公网上被人抢先初始化接管。也可以用 `-e CDT_SETUP_TOKEN=xxx` 自己指定，或用 `-e CDT_ADMIN_USERNAME=... -e CDT_ADMIN_PASSWORD=...` 直接跳过向导。
+
 ## 常见问题
 
 **换班了但没收到通知？** 先看「设置 → 通知」里渠道是否启用、点测试能不能发出去；再看概览的「最近事件」有没有对应记录。通知失败只记事件，不会阻塞换班。

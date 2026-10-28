@@ -278,6 +278,7 @@ export default function DNSView({
                     id={`bind-${record.record}`}
                     className="select"
                     value={encode(record)}
+                    disabled={working}
                     onChange={(event) => {
                       const { kind, id } = decode(event.target.value)
                       onBind(record.record, kind, id)

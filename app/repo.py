@@ -213,12 +213,18 @@ def upsert_server(payload: dict[str, Any]) -> int:
     region = str(payload.get("region_id") or "").strip()
     site = normalize_site(payload.get("site"))
     instance = str(payload.get("instance_id") or "").strip()
-    quota = float(payload.get("quota_gb") or 200)
-    threshold = float(payload.get("threshold_gb") or 188)
+    quota_raw = payload.get("quota_gb")
+    quota = float(quota_raw) if quota_raw not in (None, "") else 200.0
+    threshold_raw = payload.get("threshold_gb")
+    threshold = float(threshold_raw) if threshold_raw not in (None, "") else 188.0
     remark = str(payload.get("remark") or "").strip()
 
     if not region:
         raise ValueError("地域不能为空")
+    # 显式区分「没传」与「传了 0/负数」：前端清空输入框会传 0 过来，之前被
+    # `or 200` 静默吞成默认值，导致用户以为改成了 0 实际还是 200。
+    if quota <= 0:
+        raise ValueError("总配额必须大于 0")
     if threshold <= 0 or threshold > quota:
         raise ValueError("阈值必须大于 0 且不超过总配额")
 
@@ -468,14 +474,16 @@ def keepalive_server_ids() -> set[int]:
 def add_keepalive(server_id: int, enabled: bool = True) -> int:
     if db.query_one("SELECT 1 FROM servers WHERE id=?", (server_id,)) is None:
         raise ValueError("服务器不存在")
-    existing = db.query_one("SELECT id FROM keepalives WHERE server_id=?", (server_id,))
-    if existing is not None:
-        db.execute("UPDATE keepalives SET enabled=? WHERE id=?", (1 if enabled else 0, existing["id"]))
-        return int(existing["id"])
-    return db.insert(
-        "INSERT INTO keepalives(server_id, enabled, created_at) VALUES(?,?,?)",
-        (server_id, 1 if enabled else 0, int(time.time())),
+    enabled_val = 1 if enabled else 0
+    # 原子 upsert：以前是「先查再插」，并发两个请求会同时撞上 server_id 的
+    # UNIQUE 约束报 500。ON CONFLICT 只覆盖 enabled，不动 created_at。
+    db.execute(
+        "INSERT INTO keepalives(server_id, enabled, created_at) VALUES(?,?,?) "
+        "ON CONFLICT(server_id) DO UPDATE SET enabled=excluded.enabled",
+        (server_id, enabled_val, int(time.time())),
     )
+    row = db.query_one("SELECT id FROM keepalives WHERE server_id=?", (server_id,))
+    return int(row["id"]) if row else 0
 
 
 def set_keepalive_enabled(keepalive_id: int, enabled: bool) -> None:
@@ -909,6 +917,20 @@ def list_pending_events() -> list[dict[str, Any]]:
     for event in events:
         event["progress"] = _parse_progress(event.get("progress"))
     return events
+
+
+def pending_manual_exists(server_id: int, target_status: str) -> bool:
+    """这台机器是否已有一条进行中、待确认到同一目标状态的手动开关机事件。
+
+    用于幂等：手动开关机是异步的（下发指令后由确认器轮询到位），快速连点会
+    重复下发启停指令并产生多条转圈事件，这里在下发前拦一道。
+    """
+    row = db.query_one(
+        "SELECT 1 FROM events WHERE server_id=? AND status='running' "
+        "AND pending_kind='manual' AND pending_status=?",
+        (server_id, target_status),
+    )
+    return row is not None
 
 
 # 单个事件最多保留的进度条数，超出丢弃最旧的，防止长期卡住的事件把进度撑爆

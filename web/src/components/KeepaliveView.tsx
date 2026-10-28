@@ -18,6 +18,7 @@ type Props = {
   servers: Server[]
   groupedIds: Set<number>
   busyId: number | null
+  togglingId: number | null
   onAdd: () => void
   onToggle: (item: Keepalive, enabled: boolean) => void
   onRemove: (item: Keepalive) => void
@@ -30,6 +31,7 @@ export default function KeepaliveView({
   servers,
   groupedIds,
   busyId,
+  togglingId,
   onAdd,
   onToggle,
   onRemove,
@@ -163,7 +165,7 @@ export default function KeepaliveView({
                     aria-checked={item.enabled}
                     aria-label="保活开关"
                     className={`switch${item.enabled ? ' on' : ''}`}
-                    disabled={groupedIds.has(item.server_id)}
+                    disabled={groupedIds.has(item.server_id) || togglingId === item.id}
                     onClick={() => onToggle(item, !item.enabled)}
                   />
                 </div>
