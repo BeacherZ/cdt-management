@@ -126,6 +126,10 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 浅克隆下 annotated tag 的 message 会丢，%(contents) 会退化返回 commit
+          # message。完整拉取才能读到真正的 tag 变更说明。
+          fetch-depth: 0
 
       - name: 读取标签变更说明
         id: notes
