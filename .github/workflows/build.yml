@@ -1,17 +1,25 @@
 name: build
 
+# 推 main → 只验证镜像能不能编出来，不推送（软件包里不留开发版）
+# 打 v* 标签 → 构建并推送，一个发行版对应软件包里一个版本
+# 手动触发 → 同 main，只构建不推送（想推就走打标签）
+#
+# **为什么 main 不推送**：以前每次提交都推一个 sha 镜像，结果软件包里堆了
+# 210 个版本、其中 180 个没 tag，和发行版完全对不上。现在只有发版才落盘，
+# 发行版数量和软件包版本数量就一一对应了。
+#
+# paths-ignore：只改文档不重跑构建。注意路径过滤对 tag 推送不生效
+# （官方文档："Path filters are not evaluated for pushes of tags."），
+# 所以打 v* 标签一定会构建，发版流程不受影响。
 on:
   push:
     branches: [main, dev]
     tags: ['v*']
-    # 只有会进镜像的文件（app/、web/、Dockerfile…）变了才值得重打一次多架构镜像。
-    # 规则是「本次推送的改动必须全部落在下面这些范围里」才会跳过，只要有一个文件
-    # 越界（比如改了 app/scheduler.py）就照常构建，不会漏掉真正的代码变更。
-    # 另：路径过滤对 tag 推送不生效，打 v* 标签永远会构建，发版流程不受影响。
     paths-ignore:
       - '**.md'
       - 'docs/**'
       - 'scripts/**'
+      - 'LICENSE'
       - '.gitignore'
       - '.github/workflows/**'
   workflow_dispatch:
@@ -28,38 +36,82 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 构建溯源全部取「确定性」的值：同一个提交无论谁触发、什么时候触发，
+      # 算出来的版本号/提交/时间都一样。这样同一个提交不会产出两个不同 digest
+      # 的镜像，软件包里一个发行版就只有一行。
+      # BUILT_AT 不用 github.event.repository.updated_at：那个值会随推送事件变，
+      # 正是它让同一版本出现两份镜像（1.1.11 和 sha-0b4fec0 各一行）。
+      - id: stamp
+        name: 读取版本与构建溯源
+        run: |
+          set -euo pipefail
+          ver="$(sed -n 's/^VERSION = "\(.*\)"$/\1/p' app/settings.py)"
+          echo "ver=$ver" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "date=$(git log -1 --format=%cI)" >> "$GITHUB_OUTPUT"
+          echo "版本 $ver，提交 $(git rev-parse --short HEAD)"
+
+      # 版本号只有两个真相来源：app/settings.py 和 web/package.json。
+      # tag 与它们不一致时直接失败，而不是默默发一个版本号对不上的镜像。
+      - name: 校验版本号
+        if: github.ref_type == 'tag'
+        run: |
+          set -euo pipefail
+          tag_ver="${GITHUB_REF_NAME#v}"
+          py_ver="${{ steps.stamp.outputs.ver }}"
+          pkg_ver="$(sed -n 's/^  "version": "\(.*\)",$/\1/p' web/package.json)"
+          echo "tag=$tag_ver  settings.py=$py_ver  package.json=$pkg_ver"
+          if [ "$tag_ver" != "$py_ver" ] || [ "$tag_ver" != "$pkg_ver" ]; then
+            echo "::error::版本号不一致。先把 app/settings.py 和 web/package.json 改成 ${tag_ver}，再打标签。"
+            exit 1
+          fi
+
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
       - uses: docker/login-action@v3
+        if: github.ref_type == 'tag'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # 只有发版才推送，所以这里产出的 tag 只服务发行版：
+      #   latest      最新发行版，给日常 pull 用
+      #   v1.1.12     与 GitHub 发行版同名，一眼能对上
+      #   1.1.12      语义版本，习惯写法
+      #   sha-26b1def 这次发版对应的提交
+      # flavor latest=false：关掉 metadata-action 给 semver 自动补 latest 的行为，
+      # 让 latest 只有「打 v* 标签」一个来源，不再有第二条路径抢它。
+      #
+      # 注意：tags 是块标量，在里面写 # 会被当成 tag 内容，注释只能放这里。
       - id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.IMAGE }}
+          flavor: |
+            latest=false
           tags: |
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=ref,event=tag
             type=sha,prefix=sha-
 
       - uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          push: true
+          # main / dev / 手动触发只验证能编出来，不落盘：软件包里不留开发版，
+          # 发行版与软件包版本才能一一对应。
+          push: ${{ github.ref_type == 'tag' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # 一键脚本靠 cn.cdt-management.version 这个 label 判断要不要升级，
-          # main 分支上每次构建都得不一样，否则永远显示「已是最新」
+          # 一键脚本靠 cn.cdt-management.version 这个 label 判断要不要升级。
+          # 版本号取自 app/settings.py，与镜像里 org.opencontainers.image.version、
+          # 关于页显示的版本完全同源，不会再出现 v1.1.12 与 1.1.12 两种写法。
           build-args: |
-            VERSION=${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
-            COMMIT=${{ github.sha }}
-            BUILT_AT=${{ github.event.repository.updated_at }}
+            VERSION=${{ steps.stamp.outputs.ver }}
+            COMMIT=${{ steps.stamp.outputs.sha }}
+            BUILT_AT=${{ steps.stamp.outputs.date }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
