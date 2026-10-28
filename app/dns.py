@@ -260,7 +260,16 @@ def sync_record(
     }
     result = ddns.sync(ip, scoped, force=force, record=record)
     if result.status in (ddns.STATUS_SYNCED, ddns.STATUS_UNCHANGED):
-        repo.set_dns_state(record, ip, result.status)
+        # IP 和状态都没变就别写库。last_at 的语义是「上次真正同步的时间」，
+        # 不是「上次检查的时间」：换班引擎每轮结算都会来问一次（IP 未变时
+        # ddns.sync 直接返回 UNCHANGED，一个请求都不发），无条件写库会让界面
+        # 永远显示「刚刚」，看着像解析被每分钟改写一遍，实际啥也没干。
+        # force=True（手动「立即同步」）例外：用户点了按钮，时间戳就得动。
+        unchanged = (row.get("last_ip") or "") == ip and (
+            row.get("last_status") or ""
+        ) == result.status
+        if force or not unchanged:
+            repo.set_dns_state(record, ip, result.status)
         # 成功后清掉失败去重标记（含手动「立即同步」这条路径），
         # 否则下一次真失败时会被历史标记压住，界面不再提醒
         repo.clear_flags_like(f"dns_fail:{record}:")

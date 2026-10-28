@@ -36,6 +36,16 @@ def _fake_sync_fail(ip, config, force=False, record=None):  # noqa: ANN001, ARG0
     return ddns.DDNSResult(ddns.STATUS_UPDATE_FAILED, "HTTP 500", ip=ip)
 
 
+def _fake_sync_real(ip, config, force=False, record=None):  # noqa: ANN001, ARG001
+    """照 ddns.sync 的真实逻辑打桩：IP 没变且上次是 ✅ 就返回 UNCHANGED（不发请求）。"""
+    CALLS.append((record or "", ip))
+    if not force and config.get("ddns_last_ip") == ip and str(
+        config.get("ddns_last_status") or ""
+    ).startswith("✅"):
+        return ddns.DDNSResult(ddns.STATUS_UNCHANGED, f"{record} 未变化", ip=ip)
+    return ddns.DDNSResult(ddns.STATUS_SYNCED, f"{record} → {ip}", changed=True, ip=ip)
+
+
 class Base(unittest.TestCase):
     def setUp(self) -> None:
         db.init_db()
@@ -247,6 +257,44 @@ class Sync(Base):
         self.assertEqual(len(CALLS), 1)
         dns.reconcile(self.config())
         self.assertEqual(len(CALLS), 1, "IP 没变还在打接口就是白烧配额")
+
+    # -- last_at 的语义：上次真正同步，不是上次检查 ----------------------
+    def _synced_an_hour_ago(self) -> int:
+        server_id = self.add_server("香港-主力", ip="47.243.10.10")
+        dns.bind("a.example.com", dns.TARGET_SERVER, server_id)
+        dns.sync_record("a.example.com", self.config())
+        old_at = int(time.time()) - 3600
+        repo.set_dns_state("a.example.com", "47.243.10.10", ddns.STATUS_SYNCED, at=old_at)
+        ddns.sync = _fake_sync_real
+        return old_at
+
+    def test_unchanged_sync_does_not_rewrite_last_at(self):
+        """换班引擎每轮结算都会来问一次（IP 没变，ddns.sync 返回 UNCHANGED 不发请求）。
+        这种「白问」不能刷新时间戳，否则界面永远显示「刚刚」，看着像每分钟在改解析。"""
+        old_at = self._synced_an_hour_ago()
+        result = dns.sync_record("a.example.com", self.config())
+        self.assertEqual(result.status, ddns.STATUS_UNCHANGED)
+        self.assertEqual(
+            repo.get_dns_record("a.example.com")["last_at"], old_at,
+            "IP 和状态都没变，时间戳不该动",
+        )
+
+    def test_ip_change_does_rewrite_last_at(self):
+        old_at = self._synced_an_hour_ago()
+        result = dns.sync_record("a.example.com", self.config(), ip="47.243.10.99")
+        self.assertEqual(result.status, ddns.STATUS_SYNCED)
+        row = repo.get_dns_record("a.example.com")
+        self.assertEqual(row["last_ip"], "47.243.10.99")
+        self.assertGreater(row["last_at"], old_at, "真同步了就得刷新时间")
+
+    def test_forced_sync_still_refreshes_last_at(self):
+        """手动「立即同步」即使 IP 没变也要动时间戳，否则点了按钮像没反应。"""
+        old_at = self._synced_an_hour_ago()
+        dns.sync_record("a.example.com", self.config(), force=True)
+        self.assertGreater(
+            repo.get_dns_record("a.example.com")["last_at"], old_at,
+            "用户点了按钮就该看到时间变化",
+        )
 
     def test_reconcile_follows_ip_change(self):
         server_id = self.add_server("香港-主力", ip="47.243.10.10")
