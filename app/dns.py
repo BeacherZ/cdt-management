@@ -301,6 +301,29 @@ def sync_target(
     return names, statuses
 
 
+def _shift_busy(kind: str, target_id: int) -> bool:
+    """这个目标是不是正处在一次换班里（换班事件自己会记 DDNS 那一步）。
+
+    换班过程中当班机的 IP 变了，巡检也会发现「解析对不上」并同步。这次同步的结果
+    不该再单开一条「xxx：解析已更新」事件 —— 用户点开换班事件时看到旁边还挂着
+    一条 DNS 事件，读不出两者是一次操作。此时交给换班事件在「DDNS：…」那一步里
+    写清楚旧 IP → 新 IP（快照存在 shift_runs.dns_before）。
+    """
+    if not target_id:
+        return False
+    from . import shift  # 延迟导入：shift 反过来要用本模块
+
+    if kind == TARGET_GROUP:
+        group_ids = [int(target_id)]
+    elif kind == TARGET_SERVER:
+        # 这台机器自己绑的域名，换班时也会被一起指过去
+        group_ids = shift.groups_of_server(int(target_id))
+    else:
+        return False
+    kinds = ("shift_done", "manual", "group_new")
+    return any(repo.running_events(group_id, kinds) for group_id in group_ids)
+
+
 def reconcile(config: dict[str, str], force: bool = False) -> list[dict[str, Any]]:
     """巡检所有绑定：目标在跑、但 IP 跟上次不一样时才真打接口。
 
@@ -339,7 +362,7 @@ def reconcile(config: dict[str, str], force: bool = False) -> list[dict[str, Any
             # 同一类失败第二次出现就不再提醒了。注意要在「IP 变了」分支之前清，
             # 否则恢复后的第一次成功走的正是那条路，标记留在原地。
             repo.clear_flags_like(f"dns_fail:{record}:")
-            if previous != live:
+            if previous != live and not _shift_busy(kind, int(row.get("target_id") or 0)):
                 repo.add_event(
                     "dns",
                     f"{record}：解析已更新",
@@ -363,7 +386,7 @@ def reconcile(config: dict[str, str], force: bool = False) -> list[dict[str, Any
 # 绑定
 # --------------------------------------------------------------------------
 
-def bind(record: str, kind: str, target_id: int) -> dict[str, Any]:
+def bind(record: str, kind: str, target_id: int, config: dict[str, str] | None = None) -> dict[str, Any]:
     record = normalize(record)
     if record == "":
         raise ValueError("域名不能为空")
@@ -388,11 +411,21 @@ def bind(record: str, kind: str, target_id: int) -> dict[str, Any]:
     target = target_info(kind, int(target_id))
     label = (target or {}).get("label") or f"#{target_id}"
     records = repo.dns_records_of(kind, int(target_id))
+    result: dict[str, Any] = {"record": record, "target": target, "records": records}
+
+    # 绑完立刻同步一次：用户刚把域名指到这台机器/这个换班组，不该等到下一轮
+    # 巡检（最长一分钟）才生效。目标没在跑就只写状态，不硬塞 IP。
+    if config is not None and config.get("ddns_enabled") == "1":
+        synced = sync_record(record, config)
+        result["sync"] = {"status": synced.status, "detail": synced.detail, "ip": synced.ip}
+
     detail = f"{record} → {label}"
     if len(records) > 1:
         detail += f"（该目标现有 {len(records)} 条记录）"
+    if result.get("sync"):
+        detail += f"\n绑定后立即同步：{result['sync']['status']}"
     repo.add_event("dns", "DNS 绑定已更新", detail)
-    return {"record": record, "target": target, "records": records}
+    return result
 
 
 # --------------------------------------------------------------------------

@@ -232,14 +232,8 @@ def _confirm_pending_events() -> None:
                                 kind="keepalive",
                             ),
                         )
-                        failed = [name for name, state in results.items() if state != "ok"]
-                        if failed:
-                            # send_all 内部吞掉渠道异常并返回 failed，别在这里写成「已推送」
-                            repo.add_event_progress(event_id, f"通知发送失败：{'、'.join(failed)}")
-                        elif not results:
-                            repo.add_event_progress(event_id, "未启用通知渠道，跳过推送")
-                        else:
-                            repo.add_event_progress(event_id, "已推送抢占恢复通知")
+                        # 通知是流程的最后一步，成败都如实写进事件（send_all 吞异常只回结果）
+                        notify.note_notify(event_id, results)
                     except Exception as exc:  # noqa: BLE001
                         repo.add_event_progress(event_id, f"通知发送失败：{exc}")
             elif pending == "Running" and info.public_ip:

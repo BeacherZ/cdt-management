@@ -86,8 +86,9 @@ class ShiftFlow(unittest.TestCase):
         )
 
     def test_1_single_event_and_ddns_last(self):
+        summary: dict = {}
         for _ in range(4):
-            self._reconcile()
+            summary = self._reconcile()
 
         events = repo.list_events(limit=50, group_id=self.group_id)
         # 一轮换班只留一条事件
@@ -108,6 +109,12 @@ class ShiftFlow(unittest.TestCase):
             next(i for i, t in enumerate(texts) if "已下发停机" in t),
             texts,
         )
+        # 换班事件的 DDNS 那一步要说清域名指到哪个 IP
+        ddns_step = next(t for t in texts if t.startswith("DDNS："))
+        self.assertTrue("首次指向" in ddns_step or "→" in ddns_step, ddns_step)
+        # 通知里的 DDNS 行照旧只有「已同步 / 未绑定」，不带 IP 详情
+        self.assertNotIn("→", str(summary.get("ddns") or ""), summary.get("ddns"))
+        self.assertNotIn("首次指向", str(summary.get("ddns") or ""), summary.get("ddns"))
         self.assertEqual(texts[-1], "全部状态确认完毕")
 
     def test_2_recovery_after_settle(self):
@@ -206,7 +213,8 @@ class ManualSwitch(unittest.TestCase):
         texts = [step["text"] for step in manual[0]["progress"]]
         self.assertTrue(any("已下发启动当班" in t for t in texts), texts)
         self.assertTrue(any("已下发停机" in t for t in texts), texts)
-        self.assertEqual(texts[-1], "全部状态确认完毕", texts)
+        # 全部确认后发报告，报告是详情里的最后一步
+        self.assertEqual(texts[-2:], ["全部状态确认完毕", "报告已发送"], texts)
         # 手动换班和故障转移无关
         self.assertFalse([e for e in events if e["title"].endswith("故障转移")], events)
 
@@ -555,7 +563,7 @@ class ManualSwitchTimetable(unittest.TestCase):
         texts = [step["text"] for step in manual[0]["progress"]]
         self.assertTrue(any("已下发启动当班" in t for t in texts), texts)
         self.assertTrue(any("已下发停机" in t for t in texts), texts)
-        self.assertEqual(texts[-1], "全部状态确认完毕", texts)
+        self.assertEqual(texts[-2:], ["全部状态确认完毕", "报告已发送"], texts)
         self.assertFalse([e["title"] for e in events if e["title"].endswith("故障转移")], events)
         # 报告标题带「(手动换班)」
         self.assertEqual(self.sent, ["CDT 时刻表组 换班完成报告(手动换班)"], self.sent)

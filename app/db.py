@@ -107,6 +107,10 @@ CREATE TABLE IF NOT EXISTS shift_runs (
     -- 本班次的由来：'' 按时刻表正常轮换 / 'new_group' 新建换班组后的首次对齐。
     -- 新建组那一次的事件标题要固定成「组名：新建换班组」，结算时不能改叫「换班完成」。
     origin              TEXT    NOT NULL DEFAULT '',
+    -- 换班开始时各条域名记录指向的 IP（JSON：{记录名: IP}）。
+    -- 换完班把域名指到新当班机之后，事件里的「DDNS：…」那一步要写清楚
+    -- 「旧 IP → 新 IP」；靠这里存的开班前快照算，否则中途巡检先同步掉就丢了旧值。
+    dns_before          TEXT    NOT NULL DEFAULT '',
     attempts            INTEGER NOT NULL DEFAULT 0,
     started_at          INTEGER NOT NULL DEFAULT 0,
     updated_at          INTEGER NOT NULL DEFAULT 0,
@@ -287,6 +291,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
             "event_id": "INTEGER NOT NULL DEFAULT 0",
             "manual": "INTEGER NOT NULL DEFAULT 0",
             "origin": "TEXT NOT NULL DEFAULT ''",
+            "dns_before": "TEXT NOT NULL DEFAULT ''",
         },
         "dns_records": {
             "sort_order": "INTEGER NOT NULL DEFAULT 0",

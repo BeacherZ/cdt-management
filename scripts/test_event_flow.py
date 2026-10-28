@@ -102,7 +102,7 @@ class EventFlow(unittest.TestCase):
         ) = self._orig
 
     def test_1_keepalive_notify_is_last(self):
-        """保活拉起：已确认 → DDNS → 已推送通知，通知在最后。"""
+        """保活拉起：已确认 → DDNS → 报告已发送，通知永远是最后一步。"""
         server_id = _make_server("测试机-保活", "i-test-event-01")
         event_id = repo.add_event(
             "start",
@@ -124,7 +124,7 @@ class EventFlow(unittest.TestCase):
                 "已下发启动指令（原状态 Stopped）",
                 "已确认 Running（运行中）",
                 "DDNS：✅ 已同步",
-                "已推送抢占恢复通知",
+                "报告已发送",
             ],
         )
         event = _event(event_id)

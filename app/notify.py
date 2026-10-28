@@ -67,6 +67,31 @@ def send_all(config: dict[str, str], message: Message) -> dict[str, str]:
     return results
 
 
+def result_text(results: dict[str, str], what: str = "报告") -> str:
+    """把 send_all 的返回值翻成一句写进事件进度的话。
+
+    事件详情里「通知」永远是最后一步，但只写「已发送」是不诚实的：
+    渠道失败、压根没配渠道都得说清楚，否则用户以为推送成功去等消息。
+    没启用任何渠道时返回空串 —— 什么都没发，不必在事件里占一行。
+    """
+    failed = [channel for channel, state in results.items() if state != "ok"]
+    if failed:
+        return f"{what}发送失败：{'、'.join(failed)}"
+    if not results:
+        return ""
+    return f"{what}已发送"
+
+
+def note_notify(event_id: int, results: dict[str, str], what: str = "报告") -> None:
+    """把发送结果写成事件的最后一条进度。没渠道 / 没有事件时不做任何事。"""
+    from . import repo  # 延迟导入，避免模块级循环依赖
+
+    text = result_text(results, what)
+    if not text or not event_id:
+        return
+    repo.add_event_progress(int(event_id), text)
+
+
 def send(config: dict[str, str], channel: str, message: Message) -> None:
     if channel == "telegram":
         _send_telegram(config, message)

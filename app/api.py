@@ -784,7 +784,8 @@ def register(app: FastAPI) -> None:
             raise ValueError("请选择绑定目标")
         config = repo.get_settings()
         dns.sync_registry(config)
-        return dns.bind(record, kind, target_id)
+        # 绑定完立刻同步一次：用户刚把域名指过去，不该等下一轮巡检才生效
+        return dns.bind(record, kind, target_id, config)
 
     @app.post("/api/v1/dns/records/{record}/sync")
     def sync_dns(request: Request, record: str, user: str = Depends(require_admin)):  # noqa: ANN202, ARG001

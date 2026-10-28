@@ -348,18 +348,20 @@ export default function App() {
   async function bindDns(record: string, kind: string, id: number) {
     setBusyDns(record)
     try {
-      const result = await post<{ records?: string[] }>(
-        `/api/v1/dns/records/${encodeURIComponent(record)}/bind`,
-        { kind, id },
-      )
+      const result = await post<{
+        records?: string[]
+        sync?: { status: string; detail?: string }
+      }>(`/api/v1/dns/records/${encodeURIComponent(record)}/bind`, { kind, id })
       await loadAll()
+      // 绑定会立刻同步一次解析，把这次同步的结果带上，省得用户再去点「立即同步」
+      const sync = result?.sync?.status ? `，解析${result.sync.status}` : ''
       if (!kind) {
         toast('已解绑，这条记录不再被动', 'success')
       } else if ((result?.records?.length ?? 0) > 1) {
         // 一个目标可以挂多条域名，链第二条时提醒一下总量，免得以为是重复绑定
-        toast(`已绑定，该目标现在有 ${result?.records?.length} 条域名`, 'success')
+        toast(`已绑定${sync}，该目标现在有 ${result?.records?.length} 条域名`, 'success')
       } else {
-        toast('已绑定', 'success')
+        toast(`已绑定${sync}`, 'success')
       }
     } catch (error) {
       toast(error instanceof Error ? error.message : '绑定失败', 'error')

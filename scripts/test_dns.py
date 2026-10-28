@@ -175,6 +175,30 @@ class Binding(Base):
         dns.bind("a.example.com", "", 0)
         self.assertEqual(repo.dns_record_of(dns.TARGET_SERVER, server_id), "")
 
+    def test_binding_syncs_immediately(self):
+        """绑完立刻同步一次，不用等下一轮巡检（最长一分钟才生效）。"""
+        server_id = self.add_server("香港-主力", ip="47.243.10.10")
+        result = dns.bind("a.example.com", dns.TARGET_SERVER, server_id, self.config())
+        self.assertEqual(CALLS, [("a.example.com", "47.243.10.10")])
+        self.assertEqual(result["sync"]["status"], ddns.STATUS_SYNCED)
+        self.assertEqual(repo.get_dns_record("a.example.com")["last_ip"], "47.243.10.10")
+        # 绑定事件里一并记下这次同步的结果
+        event = repo.list_events(limit=1, kind="dns")[0]
+        self.assertIn("绑定后立即同步", event["detail"])
+
+    def test_binding_does_not_sync_when_ddns_disabled(self):
+        repo.set_settings({"ddns_enabled": "0"})
+        server_id = self.add_server("香港-主力")
+        dns.bind("a.example.com", dns.TARGET_SERVER, server_id, self.config())
+        self.assertEqual(CALLS, [])
+
+    def test_binding_to_stopped_target_only_marks_idle(self):
+        """绑到停着的机器上：不硬塞 IP，只把状态写清楚。"""
+        server_id = self.add_server("香港-备用", status="Stopped", ip="47.243.10.11")
+        result = dns.bind("a.example.com", dns.TARGET_SERVER, server_id, self.config())
+        self.assertEqual(CALLS, [])
+        self.assertEqual(result["sync"]["status"], dns.STATUS_IDLE)
+
     def test_group_binding_follows_duty(self):
         a = self.add_server("香港-A", ip="47.243.10.21")
         b = self.add_server("香港-B", status="Stopped", ip="47.243.10.22")
@@ -265,6 +289,44 @@ class Sync(Base):
         self.assertEqual(state, dns.STATE_PENDING)
         dns.sync_record("a.example.com", self.config())
         self.assertEqual(dns.snapshot(self.config())["records"][0]["state"], dns.STATE_SYNCED)
+
+
+class ShiftQuiet(Base):
+    """换班过程中的解析变化不再单开事件，交给换班事件的那一步写清楚。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        repo.set_settings({"ddns_records": '["a.example.com","b.example.com"]'})
+        dns.sync_registry(self.config())
+
+    def _解析事件(self) -> list[str]:
+        return [
+            e["title"]
+            for e in repo.list_events(limit=50, kind="dns")
+            if "解析已更新" in e["title"]
+        ]
+
+    def test_shift_suppresses_standalone_dns_event(self):
+        a = self.add_server("香港-A", ip="47.243.10.21")
+        b = self.add_server("香港-B", status="Stopped", ip="47.243.10.22")
+        group_id = self.add_group("双机轮换", [a, b])
+        dns.bind("a.example.com", dns.TARGET_GROUP, group_id, self.config())
+        # 假装记录还指着上一台机器的 IP，巡检这会该改它
+        repo.set_dns_state("a.example.com", "1.1.1.1", ddns.STATUS_SYNCED)
+
+        event_id = repo.add_event(
+            "shift_done", "双机轮换：换班进行中", group_id=group_id, status="running"
+        )
+        dns.reconcile(self.config())
+        # 解析确实改了，但不该冒出独立事件
+        self.assertEqual(repo.get_dns_record("a.example.com")["last_ip"], "47.243.10.21")
+        self.assertEqual(self._解析事件(), [])
+
+        # 换班结束（事件不再是 running）之后再变，就该单独记一条
+        repo.finish_event(event_id, "done")
+        repo.set_dns_state("a.example.com", "1.1.1.1", ddns.STATUS_SYNCED)
+        dns.reconcile(self.config())
+        self.assertEqual(len(self._解析事件()), 1, self._解析事件())
 
 
 class Regression(Base):

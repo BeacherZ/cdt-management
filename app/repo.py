@@ -1002,6 +1002,23 @@ def list_events(
     return events
 
 
+def latest_event_id(kind: str, group_id: int = 0, max_age: int = 3600) -> int:
+    """最近一条某类事件的 ID，用来给「已经记过的事件」补一条收尾进度。
+
+    超限停机是两轮完成的：先记「已强制节省停机」，等实例真停稳了下一轮才发报告。
+    报告那一步要追加到前一轮那条事件上，这里按类型 + 换班组取最近一条；
+    加个时间窗，免得停用很久之后重新超限时写到一条陈年事件上。
+    """
+    sql = "SELECT id FROM events WHERE kind=? AND ts>=?"
+    params: list[Any] = [kind, int(time.time()) - max_age]
+    if group_id:
+        sql += " AND group_id=?"
+        params.append(group_id)
+    sql += " ORDER BY id DESC LIMIT 1"
+    row = db.query_one(sql, params)
+    return int(row["id"]) if row else 0
+
+
 def _parse_progress(raw: str) -> list[dict[str, Any]]:
     if not raw:
         return []

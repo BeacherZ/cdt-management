@@ -175,6 +175,57 @@ def actual_duty(group: dict[str, Any], now_ts: float) -> tuple[dict[str, Any], i
     return member, shift_start
 
 
+def groups_of_server(server_id: int) -> list[int]:
+    """这台机器被哪些**启用中**的换班组收着（DNS 巡检判断换班是否进行中用）。"""
+    groups: list[int] = []
+    for group in repo.list_groups():
+        if not group.get("enabled"):
+            continue
+        for member in group.get("members") or []:
+            if member.get("enabled") and int(member.get("server_id") or 0) == int(server_id):
+                groups.append(int(group["id"]))
+                break
+    return groups
+
+
+def dns_snapshot(group_id: int, duty_id: int) -> str:
+    """换班开始那一刻，相关域名各自指向哪个 IP（JSON）。
+
+    换完班要把域名指到新当班机，事件里那一步得写清楚「旧 IP → 新 IP」。
+    不能等同步完再读当前值：中途巡检（dns.reconcile）可能先一步把记录改掉，
+    那时 last_ip 已经是新值，旧地址就再也找不回来了。
+    """
+    names = list(repo.dns_records_of(dns.TARGET_GROUP, int(group_id)))
+    for name in repo.dns_records_of(dns.TARGET_SERVER, int(duty_id)):
+        if name not in names:
+            names.append(name)
+    snapshot: dict[str, str] = {}
+    for name in names:
+        row = repo.get_dns_record(name) or {}
+        snapshot[name] = str(row.get("last_ip") or "")
+    return json.dumps(snapshot, ensure_ascii=False)
+
+
+def dns_transitions(snapshot_raw: str, names: list[str]) -> list[str]:
+    """对比换班前的快照和记录当前值，返回「旧 → 新」描述（没变的不列）。"""
+    try:
+        before = json.loads(snapshot_raw or "{}")
+    except Exception:  # noqa: BLE001 - 脏数据当没快照处理
+        before = {}
+    if not isinstance(before, dict):
+        before = {}
+    changes: list[str] = []
+    for name in names:
+        row = repo.get_dns_record(name) or {}
+        new = str(row.get("last_ip") or "")
+        old = str(before.get(name) or "")
+        if new and old and old != new:
+            changes.append(f"{old} → {new}" if len(names) == 1 else f"{name} {old} → {new}")
+        elif new and not old:
+            changes.append(f"首次指向 {new}" if len(names) == 1 else f"{name} 首次指向 {new}")
+    return changes
+
+
 def next_switch_at(group: dict[str, Any], now_ts: float) -> float | None:
     members = active_members(group)
     if len(members) < 2:
@@ -574,7 +625,9 @@ class Engine:
                     group_id, slot_key, event_id=event_id, started_at=int(time.time())
                 )
             else:
-                event_id = self._shift_event(group_id, slot_key, name, duty.get("label") or "")
+                event_id = self._shift_event(
+                    group_id, slot_key, name, duty.get("label") or "", int(duty["id"])
+                )
 
             try:
                 aliyun.start_instance(duty)
@@ -610,7 +663,9 @@ class Engine:
                 return {"group_id": group_id, "error": str(exc)}
         elif not previously_settled:
             # 当班本来就在跑：先把本班次的换班事件建好，后续进度往里追加
-            event_id = self._shift_event(group_id, slot_key, name, duty.get("label") or "")
+            event_id = self._shift_event(
+                    group_id, slot_key, name, duty.get("label") or "", int(duty["id"])
+                )
 
         # 当班还在启动中（Starting/Pending），本轮不做任何停非当班的动作，等它 Running
         if duty_status in TRANSIENT_STATUS:
@@ -714,7 +769,21 @@ class Engine:
             if not previously_settled and (
                 manual_switch or (ddns_enabled and ddns_bound)
             ):
-                repo.add_event_progress(event_id, f"DDNS：{ddns_text}", once=True)
+                # 这一步要连「指到哪个 IP」一起写：域名从旧当班机换到新当班机，
+                # 光一句「已同步」看不出变化，而且巡检有可能抢先同步过，当时的
+                # 旧 IP 只能靠换班开始时存的快照还原。
+                names = list(repo.dns_records_of(dns.TARGET_GROUP, group_id))
+                for name in repo.dns_records_of(dns.TARGET_SERVER, int(duty["id"])):
+                    if name not in names:
+                        names.append(name)
+                before = str((repo.get_run(group_id, slot_key) or {}).get("dns_before") or "")
+                text = f"DDNS：{ddns_text}"
+                changes = dns_transitions(before, names)
+                if changes:
+                    text = f"{text} {'、'.join(changes)}"
+                # 跨轮可能先失败后成功，这里不用 once：文案变了就该补一条，
+                # 完全相同的相邻文案 add_event_progress 自己会吞掉。
+                repo.add_event_progress(event_id, text)
 
         ready = duty_status == "Running" and all_stopped and (has_ip or not ddns_enabled) and ddns_ok
 
@@ -803,7 +872,9 @@ class Engine:
                 manual=manual_switch, shift_event_id=event_id,
             )
         elif recovered and config.get("notify_on_recovery") == "1":
-            notify.send_all(config, messages.recovery(duty, ddns_text))
+            results = notify.send_all(config, messages.recovery(duty, ddns_text))
+            # 通知是流程的最后一步，写在事件最后，点开就能确认报告到底发出去没有
+            notify.note_notify(event_id, results)
 
         return summary
 
@@ -881,15 +952,18 @@ class Engine:
             # _all_stopped_any_mode 判定为 False，本轮不发，等下一轮 _refresh
             # 经 API 确认全部 Stopped 后再发，避免「指令下发≠状态到位」就误报。
             if _all_stopped_any_mode(everyone):
-                notify.send_all(config, messages.breaker(everyone, group_name=name, note=reason))
+                results = notify.send_all(
+                    config, messages.breaker(everyone, group_name=name, note=reason)
+                )
                 repo.set_flag(flag)
-                repo.add_event(
+                event_id = repo.add_event(
                     "breaker",
                     f"{name}：全局熔断",
                     f"{why}，{messages.stop_tail(everyone)}",
                     level="error",
                     group_id=group_id,
                 )
+                notify.note_notify(event_id, results)
 
         return {"group_id": group_id, "breaker": True}
 
@@ -968,8 +1042,10 @@ class Engine:
             ):
                 # duty 是 reconcile 开头 _refresh 实时拉过的状态，物理停机到位才发；
                 # 不再用 repo.get_server 的旧快照覆盖，确保「API 确认到位」后才报告。
-                notify.send_all(config, messages.limit_stop(duty, group_name=name))
+                results = notify.send_all(config, messages.limit_stop(duty, group_name=name))
                 repo.set_flag(flag)
+                # 报告算这条超限停机事件的最后一步（停机那条事件是上一轮记的）
+                notify.note_notify(repo.latest_event_id("limit_stop", group_id), results)
 
         repo.upsert_run(
             group_id,
@@ -1013,20 +1089,21 @@ class Engine:
         if repo.get_flag(flag):
             return
 
-        notify.send_all(
+        results = notify.send_all(
             config,
             messages.shift_error(
                 duty, others, settings.SHIFT_TIMEOUT_MINUTES, group_name=group.get("name") or ""
             ),
         )
         repo.set_flag(flag)
-        repo.add_event(
+        event_id = repo.add_event(
             "error",
             f"{group.get('name')}：换班超时",
             f"已等待 {elapsed:.0f} 分钟仍未就绪",
             level="error",
             group_id=int(group["id"]),
         )
+        notify.note_notify(event_id, results)
 
     # -- DDNS -------------------------------------------------------------
     def _sync_ddns(
@@ -1061,7 +1138,9 @@ class Engine:
         return dns.combine_status(statuses)
 
     # -- 换班进行中的事件（动态化）----------------------------------------
-    def _shift_event(self, group_id: int, slot_key: str, name: str, duty_label: str) -> int:
+    def _shift_event(
+        self, group_id: int, slot_key: str, name: str, duty_label: str, duty_id: int = 0
+    ) -> int:
         """取本班次「进行中」的换班事件 ID；没有就新建一条 running 事件。
 
         换班跨多轮 reconcile，这里用 shift_runs.event_id 记住事件，后续轮次
@@ -1079,7 +1158,13 @@ class Engine:
             group_id=group_id,
             status="running",
         )
-        repo.upsert_run(group_id, slot_key, event_id=event_id)
+        # 开工前先记下各域名此刻指向哪，结算那一步才能写出「旧 IP → 新 IP」
+        repo.upsert_run(
+            group_id,
+            slot_key,
+            event_id=event_id,
+            dns_before=dns_snapshot(group_id, int(duty_id or 0)),
+        )
         repo.add_event_progress(event_id, f"换班开始：当班 {duty_label}")
         return event_id
 
@@ -1148,7 +1233,7 @@ class Engine:
             if delayed:
                 repo.clear_flag(f"timeout:{group_id}:{slot_key}")
 
-        notify.send_all(config, message)
+        results = notify.send_all(config, message)
         repo.set_flag(flag)
         # 换班过程的那条 running 事件已经在 reconcile 里改题、finish 过了；
         # 这里只补一份结算摘要，不再另开一条 0 秒完成的 done 事件。
@@ -1159,16 +1244,19 @@ class Engine:
                 run_event_id,
                 detail=f"当班 {duty.get('label')} / 待机 {len(others)} 台 / {ddns_status}",
             )
+            # 报告是整条换班流程的最后一步：写进事件详情，事后能确认发没发出去
+            notify.note_notify(run_event_id, results)
         else:
             # 兜底：理论上不会走到（_shift_event 一定先建了 running 事件），
             # 万一 run 里丢了 event_id，仍补一条结果事件，别让通知发了却无迹可寻
-            repo.add_event(
+            event_id = repo.add_event(
                 kind,
                 f"{name}：{'故障转移' if is_failover else ('手动换班完成' if is_manual else '换班完成')}",
                 f"当班 {duty.get('label')} / 待机 {len(others)} 台 / {ddns_status}",
                 group_id=group_id,
                 server_id=int(duty["id"]),
             )
+            notify.note_notify(event_id, results)
 
     # ==================================================================
     # 换班组的建立与解散
@@ -1504,7 +1592,13 @@ class Engine:
             status="running",
         )
         repo.add_event_progress(event_id, f"手动换班：{from_label} → {to_label}")
-        repo.upsert_run(group_id, slot_key, event_id=event_id)
+        # 切之前先把各域名的当前指向记下来，DDNS 那一步要写「旧 IP → 新 IP」
+        repo.upsert_run(
+            group_id,
+            slot_key,
+            event_id=event_id,
+            dns_before=dns_snapshot(group_id, int(target.get("server_id") or 0)),
+        )
         return event_id
 
     def _manual_switch_timetable(
@@ -1653,9 +1747,10 @@ class Engine:
         message = messages.daily_report(
             servers, dt.datetime.now(tz).strftime("%Y-%m-%d %H:%M")
         )
-        notify.send_all(config, message)
+        results = notify.send_all(config, message)
         repo.set_flag(flag)
-        repo.add_event("daily_report", "每日流量报告已推送", f"{len(servers)} 台服务器")
+        event_id = repo.add_event("daily_report", "每日流量报告已推送", f"{len(servers)} 台服务器")
+        notify.note_notify(event_id, results)
         return True
 
 
