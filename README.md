@@ -167,9 +167,6 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 
 **目的**：不让任何一台实例烧穿流量包。
 
-> 优先按「节省停机」关掉。规格不支持节省停机时自动退化为普通停机（照常计规格费），
-> 通知里会按实际停机方式说，不会写成节省停机。
-
 ### DNS
 
 **说明**：一条记录绑一台实例或一个换班组，实例开机时自动指向新 IP。
