@@ -1889,7 +1889,8 @@ input[type='number']::-webkit-inner-spin-button {
   color: var(--muted);
 }
 
-.slot-top .duty-tag {
+.slot-top .duty-tag,
+.slot-side .duty-tag {
   display: inline-flex;
   align-items: center;
   padding: 1px 8px;
@@ -1911,16 +1912,20 @@ input[type='number']::-webkit-inner-spin-button {
    7 位数字就会触发，只剩 6px 余量）。190px 留 28px 余量，顺带把流量条拉长
    27%，右侧的 IP / 用量 / 阈值不用再挤在一起 */
 .slot-body {
+  /* 右列宽度与列间距抽成变量：下面的「当班」胶囊要靠它们把自己的右端
+     顶到卡片内容区右边缘，硬写字面量改一处就会失效 */
+  --side-col: 190px;
+  --side-gap: 14px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 190px;
-  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) var(--side-col);
+  gap: var(--side-gap);
 }
 
-/* 「当班」胶囊原本停在左列尽头，和右列的流量条之间还隔着 14px 的列间距，
-   看起来像悬在半空。往右顶出一个间距的宽度，让胶囊右端正好压在流量条起点上，
-   上下连成一条竖线。数值必须等于上面 .slot-body 的 gap，改一个要改两个。 */
-.slot-body .slot-top .duty-tag {
-  margin-right: -14px;
+/* 「当班」胶囊跟 IP、流量条、阈值数字一起排在右列，右端统一贴齐卡片内容区边缘。
+   以前它长在左列的标题行上，靠负边距往右顶，最后停在流量条起点附近、还比流量条
+   高一行，两个方向都没对齐，看着像悬在卡片中间。 */
+.slot-side .duty-tag {
+  align-self: flex-end;
 }
 
 .slot-main {
@@ -3073,11 +3078,7 @@ input[type='number']::-webkit-inner-spin-button {
     gap: 9px;
   }
 
-  /* 窄屏流量条在下一行、不再有右列，胶囊回到内容右边界，负边距必须撤掉，
-     否则会顶进卡片内边距 */
-  .slot-body .slot-top .duty-tag {
-    margin-right: 0;
-  }
+  /* 窄屏「当班」胶囊跟 IP 同一列、天然右对齐，不用再处理负边距 */
 
   /* IP 单独一行、进度条占满下方整宽；并排会把进度条挤成半截 */
   .slot-side {

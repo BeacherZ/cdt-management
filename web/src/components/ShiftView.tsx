@@ -202,7 +202,6 @@ export default function ShiftView({
                                   ? ` · ${slotPeriod(member.slot_name, member.start_time, member.end_time)}`
                                   : ` · ${member.hours} 小时`}
                             </span>
-                            {member.is_duty && <span className="duty-tag">当班</span>}
                             {!member.enabled && <Badge tone="gray">已禁用</Badge>}
                           </div>
                           <div className="slot-name">{server.label}</div>
@@ -214,6 +213,7 @@ export default function ShiftView({
                           </div>
                         </div>
                         <div className="slot-side">
+                          {member.is_duty && <span className="duty-tag">当班</span>}
                           <div className="slot-ip">{server.public_ip || '无公网 IP'}</div>
                           <Meter
                             used={server.traffic_used}
