@@ -13,6 +13,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import type { DnsRecord, DnsState, Keepalive, Server, ShiftGroup } from '../types'
+import { timeAgo } from '../time'
 import { Badge, Empty, type Tone } from './ui'
 
 type Props = {
@@ -51,13 +52,10 @@ function decode(value: string): { kind: string; id: number } {
   return { kind, id: Number(id) }
 }
 
-function timeAgo(ts: number): string {
+/** 上次同步时间：文案「还没有同步过」是本页特有的，时间基准仍走后端时钟 */
+function lastSyncText(ts: number): string {
   if (!ts) return '还没有同步过'
-  const diff = Math.floor(Date.now() / 1000) - ts
-  if (diff < 60) return '刚刚'
-  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`
-  if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`
-  return new Date(ts * 1000).toLocaleDateString('zh-CN')
+  return timeAgo(ts)
 }
 
 export default function DNSView({
@@ -347,7 +345,7 @@ export default function DNSView({
                       </>
                     )}
                   </span>
-                  <span className="dns-time">{timeAgo(record.last_at)}</span>
+                  <span className="dns-time">{lastSyncText(record.last_at)}</span>
                   {record.last_status && record.state === 'error' && (
                     <span className="dns-error">{record.last_status}</span>
                   )}

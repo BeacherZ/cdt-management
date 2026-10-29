@@ -36,6 +36,14 @@ STATE_PENDING = "pending"
 STATE_SYNCED = "synced"
 STATE_ERROR = "error"
 
+# 一条记录同步失败后，这么多秒内不再重试。
+# `ddns.sync` 内部本身就有多次重试，多条坏记录会让每分钟的对账被拖成几十秒；
+# 失败原因（❌/⚠️）已经写在记录上，冷却期内界面上照样看得见，不需要反复打接口。
+_RETRY_COOLDOWN = 120
+
+# 中间态：机器在动（正在起来/正在停），别急着判「没在跑」
+_TRANSIENT_STATUS = {"Starting", "Pending", "Stopping"}
+
 
 def normalize(name: str | None) -> str:
     return (name or "").strip()
@@ -208,6 +216,10 @@ def state_of(row: dict[str, Any], target: dict[str, Any] | None) -> str:
         return STATE_UNBOUND
     live = desired_ip(target)
     if not live:
+        # 「在跑但公网 IP 还没拿到」（EIP 还没绑上 / 刚启动）跟「没在跑」是两件事：
+        # 以前都判成 idle，界面写「目标未运行」，人看着像机器挂了，实际马上就绪。
+        if target.get("running") or str(target.get("status") or "") in _TRANSIENT_STATUS:
+            return STATE_PENDING
         return STATE_IDLE
     last = str(row.get("last_ip") or "")
     status = str(row.get("last_status") or "")
@@ -359,6 +371,12 @@ def reconcile(config: dict[str, str], force: bool = False) -> list[dict[str, Any
             continue
         if not force and live == (row.get("last_ip") or "") and (row.get("last_status") or "").startswith("✅"):
             continue
+        # 刚失败过的记录先冷静一会儿：坏记录（记录名被删、Token 过期）每轮都重试
+        # 只会把 60 秒的巡检拖长。手动「立即同步」force=True，不受此限。
+        if not force:
+            cooled = repo.flag_age(f"dns_retry:{record}")
+            if 0 <= cooled < _RETRY_COOLDOWN:
+                continue
 
         previous = row.get("last_ip") or ""
         result = sync_record(record, config, ip=live, force=force)
@@ -366,6 +384,7 @@ def reconcile(config: dict[str, str], force: bool = False) -> list[dict[str, Any
             {"record": record, "target": target.get("label"), "ip": live, "status": result.status}
         )
         if result.status in (ddns.STATUS_SYNCED, ddns.STATUS_UNCHANGED):
+            repo.clear_flag(f"dns_retry:{record}")
             # 这次成功了就把这条记录历史上所有失败标记清掉。
             # 以前只清「当前这种失败」的标记，换一种失败方式时旧的告警标记永远留着，
             # 同一类失败第二次出现就不再提醒了。注意要在「IP 变了」分支之前清，
@@ -388,6 +407,8 @@ def reconcile(config: dict[str, str], force: bool = False) -> list[dict[str, Any
                     result.detail or target.get("label") or "",
                     level="warning",
                 )
+            # 冷却计时从现在开始：这段时间内不再为这条记录打接口
+            repo.set_flag(f"dns_retry:{record}")
     return results
 
 

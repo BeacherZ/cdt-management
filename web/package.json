@@ -1,7 +1,7 @@
 {
   "name": "cdt-management-web",
   "private": true,
-  "version": "1.2.32",
+  "version": "1.2.34",
   "type": "module",
   "scripts": {
     "dev": "vite",

@@ -964,6 +964,11 @@ input[type='number']::-webkit-inner-spin-button {
   font-size: 11px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+  /* 用量和「百分比 / 阈值」各自是一句话，绝不能断成「12.06」/「GB」两行。
+     只靠 nowrap 不够：容器真放不下时文本会顶出右边界，所以换班槽位那一列
+     同时留了量好的余量（见上面 .slot-body）。overflow: hidden 不能加，
+     宁可露出来也不能把用量数字截掉 */
+  white-space: nowrap;
 }
 
 /* -------------------------------------------------------------- 开关 / 分段 */
@@ -1898,10 +1903,16 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 /* 槽位主体：左信息 / 右 IP+流量。列宽写在样式里而不是内联，
-   窄屏才能在不改 DOM 的前提下堆成一列 */
+   窄屏才能在不改 DOM 的前提下堆成一列。
+
+   右列 190px 是量出来的，不是拍脑袋：两行标签最宽的一种组合是
+   「123.45 GB」+「68.6% / 阈值 1024 GB」，11px 等宽数字下要吃掉 162px，
+   再加上中间 8px 间距，150px 那一档必然把「GB」挤到第二行（12.06 GB 那种
+   7 位数字就会触发，只剩 6px 余量）。190px 留 28px 余量，顺带把流量条拉长
+   27%，右侧的 IP / 用量 / 阈值不用再挤在一起 */
 .slot-body {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 150px;
+  grid-template-columns: minmax(0, 1fr) 190px;
   gap: 14px;
 }
 
@@ -2881,6 +2892,30 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 .member-time-sep {
+  font-size: 12px;
+  color: var(--muted-soft);
+}
+
+/* 一月一轮：起止日号，宽度和时刻框对齐，一眼能看出「几号到几号」 */
+.member-days {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+}
+
+.member-days .input {
+  width: 58px;
+  text-align: center;
+}
+
+.member-days .input[readonly] {
+  color: var(--muted);
+  background: var(--panel);
+}
+
+.member-days > span:last-child {
+  flex: none;
   font-size: 12px;
   color: var(--muted-soft);
 }

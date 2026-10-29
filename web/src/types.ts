@@ -105,6 +105,10 @@ export type ShiftMember = {
   server_id: number
   position: number
   hours: number
+  /** 一月一轮：本月该成员连上多少天（0 = 没排上，历史超额数据才会出现） */
+  days: number
+  /** 这一班怎么写：月模式「1–15 日」、时刻表「08:00–20:00」；空串＝按小时累加 */
+  span_label: string
   enabled: boolean
   is_duty: boolean
   /** 班次名称，如「白班」「夜班」 */
@@ -120,6 +124,8 @@ export type ShiftGroup = {
   name: string
   enabled: boolean
   failover_enabled: boolean
+  /** 排班周期：day = 一天一轮（按小时 / 固定时刻），month = 一月一轮（按天） */
+  cycle: 'day' | 'month'
   ddns_record: string
   anchor_at: number
   cycle_hours: number
@@ -129,6 +135,9 @@ export type ShiftGroup = {
   next_switch_at: number
   phase: string
   phase_label: string
+  /** 实时状态：按「实际状态 vs 排班表」判出来的，界面徽章用它而不是 phase */
+  state: string
+  state_label: string
   note: string
   updated_at: number
   current_index: number
@@ -154,6 +163,12 @@ export type EventItem = {
 export type Overview = {
   now: string
   now_ts: number
+  /** 后端时区下的「YYYY-MM-DD HH:MM」，页面头直接显示，不在前端二次格式化 */
+  now_label: string
+  /** 后端时区下的今天，YYYY-MM-DD */
+  today: string
+  /** 今天所在月份的天数：一月一轮的平摊、"本月 N 天" 都读它 */
+  month_days: number
   timezone: string
   version: string
   brand: string

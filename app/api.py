@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import calendar
 import datetime as dt
 import ipaddress
 import json
@@ -21,12 +22,14 @@ from .shift import (
     PHASE_MANUAL,
     PHASE_SETTLED,
     PHASE_SWITCHING,
+    TRANSIENT_STATUS,
     _hhmm_to_minutes,
     _timezone,
     active_members,
     actual_duty,
     current_member_index,
     engine,
+    member_span_label,
     next_switch_at,
 )
 
@@ -42,6 +45,78 @@ PHASE_LABELS = {
     "pending": "待执行",
 }
 
+# 换班组徽章：说「此刻真实状态」，而不是上一轮写进库的阶段。
+# 手动把当班关掉、换班还没落地、被抢占正在拉起，界面上都要如实显示。
+GROUP_STATES = {
+    "scheduled": "正常排班中",
+    "switching": "换班中",
+    "failover": "故障转移中",
+    "manual": "手动换班中",
+    "recovering": "恢复中",
+    "breaker": "已熔断停机",
+    "error": "换班异常",
+    "disabled": "已停用",
+    "idle": "待排班",
+    "unknown": "状态未知",
+}
+
+
+def group_state(
+    group: dict[str, Any],
+    run: dict[str, Any],
+    picked: tuple[dict[str, Any], int] | None,
+    members: list[dict[str, Any]],
+    servers: dict[int, dict[str, Any]],
+) -> str:
+    """按「实际状态 vs 排班表」判当前状态，供界面徽章使用。
+
+    优先级：停用 / 待排班 / 异常 / 熔断 → 状态未知 → 换班或恢复中 →
+    故障转移或手动换班（整段班次都算）→ 正常排班中。
+    下次正常换班会开新班次（新的 run），手动 / 故障转移的标记随之清零。
+    """
+    if not group.get("enabled"):
+        return "disabled"
+    if not picked or len(members) < 2:
+        return "idle"
+
+    phase = str(run.get("phase") or "")
+    if phase == PHASE_ERROR:
+        return "error"
+    if phase == PHASE_BREAKER:
+        return "breaker"
+
+    duty_id = int(picked[0]["server_id"])
+    duty = servers.get(duty_id) or {}
+    duty_status = str(duty.get("instance_status") or "")
+    if not duty_status:
+        return "unknown"
+
+    # 覆盖来源：故障转移 / 手动换班会在整段班次里换掉当班，颜色据此走
+    override = "failover" if run.get("failover") else "manual" if run.get("manual") else ""
+
+    if duty_status in TRANSIENT_STATUS:
+        return override or "switching"
+    if duty_status != "Running":
+        # 该跑却没跑：被抢占或被手动关机，引擎正拉起
+        return "recovering"
+    unknown_member = False
+    for member in members:
+        other_id = int(member["server_id"])
+        if other_id == duty_id:
+            continue
+        other = servers.get(other_id) or {}
+        other_status = str(other.get("instance_status") or "")
+        if other_status == "Running" or other_status in TRANSIENT_STATUS:
+            # 非当班还有在跑或正在停：换班还没到位
+            return override or "switching"
+        if not other_status:
+            unknown_member = True
+    if unknown_member:
+        # 有成员状态还没读到：不知道它停没停，不能报「正常排班中」
+        return "unknown"
+    return override or "scheduled"
+
+
 # 配置变更事件里给人看的字段名，避免把 ddns_cf_token 这种内部键直接甩到界面上
 SETTING_LABELS = {
     "timezone": "时区",
@@ -53,7 +128,7 @@ SETTING_LABELS = {
     "notify_on_failover": "故障转移通知",
     "notify_on_recovery": "抢占恢复通知",
     "notify_on_breaker": "全局熔断通知（全部成员）",
-    "notify_on_limit_stop": "全局熔断通知（单台）",
+    "notify_on_limit_stop": "超限停机通知（单台）",
     "notify_on_error": "异常通知",
     "notify_on_keepalive": "保活通知",
     "ddns_enabled": "DDNS 开关",
@@ -295,9 +370,14 @@ def _validate_timetable_coverage(members: list[dict[str, Any]]) -> None:
     owner = [-1] * 1440
     for index, (start, end) in enumerate(spans):
         if start == end:
+            raise ValueError(f"「{texts[index][0]}」的起止时刻不能相同")
+        # 排班表就是一天 0–24 点之内切分，不支持跨天：结束 00:00 是「到午夜」，
+        # 其余「结束早于开始」的写法（18:00–06:00）一律拒绝，免得同一份配置
+        # 在面板、通知、引擎三处含义不一致。
+        if end < start and end != 0:
             raise ValueError(
-                f"「{texts[index][0]}」的起止时刻不能相同；"
-                "跨天班次让结束时刻小于开始时刻即可，比如 18:00–06:00"
+                f"「{texts[index][0]}」{texts[index][1]}–{texts[index][2]} 的结束时刻早于"
+                "开始时刻；排班按一天 0–24 点分，到午夜请把结束填成 24:00"
             )
         ranges = [(start, 1440), (0, end)] if end < start else [(start, end)]
         for lo, hi in ranges:
@@ -441,6 +521,10 @@ def _group_payload(
                 "server_id": member["server_id"],
                 "position": member["position"],
                 "hours": member["hours"],
+                "days": member.get("days") or 0,
+                # 这一班在人眼里的写法：月模式「1–15 日」、时刻表「08:00–20:00」，
+                # 空串表示走老的小时累加模式，界面自己退回「N 小时」
+                "span_label": member_span_label(group, member, now_ts),
                 "slot_name": member.get("slot_name") or "",
                 "start_time": member.get("start_time") or "",
                 "end_time": member.get("end_time") or "",
@@ -452,11 +536,14 @@ def _group_payload(
             }
         )
 
+    state = group_state(group, run, picked, members, servers)
+
     return {
         "id": group["id"],
         "name": group.get("name") or "",
         "enabled": bool(group.get("enabled")),
         "failover_enabled": bool(group.get("failover_enabled")),
+        "cycle": str(group.get("cycle") or "day"),
         # 绑定关系在 DNS 页维护，这里只是读出来显示（可能有多条，顿号连接）
         "ddns_record": "、".join((books or {}).get("groups", {}).get(int(group["id"]), [])),
         "anchor_at": group.get("anchor_at") or 0,
@@ -467,6 +554,8 @@ def _group_payload(
         "next_switch_at": int(nxt) if nxt else 0,
         "phase": run.get("phase") or "pending",
         "phase_label": PHASE_LABELS.get(run.get("phase") or "pending", "待执行"),
+        "state": state,
+        "state_label": GROUP_STATES.get(state, "状态未知"),
         "note": run.get("note") or "",
         "updated_at": run.get("updated_at") or 0,
         "current_index": current_member_index(group, now_ts),
@@ -586,6 +675,12 @@ def register(app: FastAPI) -> None:
         return {
             "now": now.isoformat(),
             "now_ts": int(now.timestamp()),
+            # 界面上的日期 / 时刻一律以这里为准，前端不再用 new Date() 自己算：
+            # 用户可能在国外用浏览器打开，浏览器时区和排班时区差几个小时甚至一天，
+            # 自己算就会出现「排班表说今天换班、页面说还没到」这种自相矛盾。
+            "now_label": now.strftime("%Y-%m-%d %H:%M"),
+            "today": now.date().isoformat(),
+            "month_days": calendar.monthrange(now.year, now.month)[1],
             "timezone": config.get("timezone"),
             "version": settings.VERSION,
             "brand": settings.BRAND,
@@ -719,7 +814,9 @@ def register(app: FastAPI) -> None:
     @app.post("/api/v1/groups")
     def save_group(request: Request, payload: dict[str, Any], user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
         require_csrf(request)
-        _validate_group_timetable(payload)
+        # 一月一轮按天排，没有小时边界，时刻表校验（盖满一天）不适用
+        if str(payload.get("cycle") or "day") != "month":
+            _validate_group_timetable(payload)
         is_new = not int(payload.get("id") or 0)
         group_id = repo.upsert_group(payload)
         if not is_new:

@@ -623,7 +623,7 @@ def get_group(group_id: int) -> dict[str, Any] | None:
 def list_members(group_id: int) -> list[dict[str, Any]]:
     rows = db.query(
         "SELECT m.id, m.group_id, m.server_id, m.position, m.hours, m.enabled, "
-        "m.slot_name, m.start_time, m.end_time, "
+        "m.slot_name, m.start_time, m.end_time, m.days, "
         "s.label, s.instance_id, s.region_id, s.site, s.instance_status, s.stopped_mode, "
         "s.public_ip, s.traffic_used, s.quota_gb, s.threshold_gb, s.status_checked_at "
         "FROM shift_members m LEFT JOIN servers s ON s.id=m.server_id "
@@ -666,6 +666,14 @@ def upsert_group(payload: dict[str, Any]) -> int:
     name = str(payload.get("name") or "").strip() or "换班组"
     enabled = 1 if payload.get("enabled", True) else 0
     failover = 1 if payload.get("failover_enabled", True) else 0
+    # 排班周期：day = 一天一轮（按小时 / 固定时刻表），month = 一月一轮（按天）。
+    # 没传就沿用库里的旧值，别把一月一轮的组顺手改回一天一轮。
+    if "cycle" in payload:
+        cycle = "month" if str(payload.get("cycle") or "").strip() == "month" else "day"
+    else:
+        row = db.query_one("SELECT cycle FROM shift_groups WHERE id=?", (group_id,))
+        cycle = str((row["cycle"] if row else "") or "day")
+    month_cycle = cycle == "month"
     # 域名绑定已经挪到 DNS 页，这里只管老字段：没传就保持原值，别被整表提交清空
     if "ddns_record" in payload:
         ddns_record = str(payload.get("ddns_record") or "").strip()
@@ -684,11 +692,19 @@ def upsert_group(payload: dict[str, Any]) -> int:
             raise ValueError("同一台服务器不能在组里出现两次")
         seen.add(server_id)
         hours = float(item.get("hours") or 0)
-        if hours <= 0 or hours > 168:
+        days = int(item.get("days") or 0)
+        # 一月一轮按天数排，工时只是给界面看的估计值，不参与校验
+        if not month_cycle and (hours <= 0 or hours > 168):
             raise ValueError("每台的运行时长应在 0–168 小时之间")
+        if month_cycle and days < 0:
+            raise ValueError("每台的天数不能是负数")
         slot_name = str(item.get("slot_name") or "").strip()
         start_time = str(item.get("start_time") or "").strip()
         end_time = str(item.get("end_time") or "").strip()
+        if month_cycle:
+            # 按月轮换没有小时边界，起止时刻没有意义，直接清空免得存脏数据
+            start_time = ""
+            end_time = ""
         # 时刻要么都空（走老 hours 累加），要么都填且格式合法
         if (start_time and not end_time) or (end_time and not start_time):
             raise ValueError("班次起止时刻要成对填写")
@@ -701,6 +717,7 @@ def upsert_group(payload: dict[str, Any]) -> int:
                 "server_id": server_id,
                 "position": index,
                 "hours": hours,
+                "days": days,
                 "enabled": 1 if item.get("enabled", True) else 0,
                 "slot_name": slot_name,
                 "start_time": start_time,
@@ -710,7 +727,29 @@ def upsert_group(payload: dict[str, Any]) -> int:
 
     if len(members) < 2:
         raise ValueError("换班组至少需要两台服务器")
-    if sum(m["hours"] for m in members if m["enabled"]) <= 0:
+    if month_cycle:
+        # 一个月最多 31 天：合计超过就一定有人整月不上班，保存时就拦住。
+        # 天数全空时按 31 天平摊（除不尽的余数给最后一位），由这里补成具体值。
+        #
+        # 只算启用的成员：停用的成员引擎根本不会给他排日子（active_members 会过滤），
+        # 让他的天数参与校验，就会出现「界面上算出来 1–10 / 11–20 / 21–31，实际只排了
+        # 1–10 / 11–31」这种表里不一。
+        for member in members:
+            if not member["enabled"]:
+                member["days"] = 0
+        live = [m for m in members if m["enabled"]]
+        if any(m["days"] > 0 for m in live) and any(m["days"] <= 0 for m in live):
+            raise ValueError("一月一轮的组，每台启用的成员都要填天数")
+        if live and all(m["days"] <= 0 for m in live):
+            base = max(1, 31 // len(live))
+            for index, member in enumerate(live):
+                member["days"] = base if index < len(live) - 1 else max(1, 31 - base * (len(live) - 1))
+        total_days = sum(m["days"] for m in live)
+        if total_days > 31:
+            raise ValueError(f"合计 {total_days} 天，超过一个月最多 31 天")
+        if total_days <= 0:
+            raise ValueError("至少需要一台启用的成员，且天数大于 0")
+    elif sum(m["hours"] for m in members if m["enabled"]) <= 0:
         raise ValueError("至少需要一台启用的成员，且时长大于 0")
     if enabled:
         conflict = _group_conflict(members, group_id)
@@ -725,39 +764,61 @@ def upsert_group(payload: dict[str, Any]) -> int:
                 raise ValueError("换班组不存在")
             # 成员构成变了就重置轮换起点，避免时序错乱
             old = conn.execute(
-                "SELECT server_id, hours, slot_name, start_time, end_time "
+                "SELECT server_id, hours, days, slot_name, start_time, end_time "
                 "FROM shift_members WHERE group_id=? ORDER BY position",
                 (group_id,),
             ).fetchall()
+            old_cycle = str(
+                (
+                    conn.execute("SELECT cycle FROM shift_groups WHERE id=?", (group_id,)).fetchone()
+                    or {"cycle": "day"}
+                )["cycle"]
+                or "day"
+            )
             old_signature = [
-                (row["server_id"], row["hours"], row["slot_name"], row["start_time"], row["end_time"])
+                (
+                    row["server_id"],
+                    row["hours"],
+                    row["days"],
+                    row["slot_name"],
+                    row["start_time"],
+                    row["end_time"],
+                )
                 for row in old
             ]
             new_signature = [
-                (m["server_id"], m["hours"], m["slot_name"], m["start_time"], m["end_time"])
+                (
+                    m["server_id"],
+                    m["hours"],
+                    m["days"],
+                    m["slot_name"],
+                    m["start_time"],
+                    m["end_time"],
+                )
                 for m in members
             ]
             conn.execute(
-                "UPDATE shift_groups SET name=?, enabled=?, failover_enabled=?, ddns_record=? WHERE id=?",
-                (name, enabled, failover, ddns_record, group_id),
+                "UPDATE shift_groups SET name=?, enabled=?, failover_enabled=?, ddns_record=?, cycle=? "
+                "WHERE id=?",
+                (name, enabled, failover, ddns_record, cycle, group_id),
             )
-            if old_signature != new_signature:
+            if old_signature != new_signature or old_cycle != cycle:
                 conn.execute(
                     "UPDATE shift_groups SET anchor_at=? WHERE id=?", (int(time.time()), group_id)
                 )
             conn.execute("DELETE FROM shift_members WHERE group_id=?", (group_id,))
         else:
             cur = conn.execute(
-                "INSERT INTO shift_groups(name, enabled, failover_enabled, ddns_record, anchor_at, created_at) "
-                "VALUES(?,?,?,?,?,?)",
-                (name, enabled, failover, ddns_record, int(time.time()), int(time.time())),
+                "INSERT INTO shift_groups(name, enabled, failover_enabled, ddns_record, cycle, "
+                "anchor_at, created_at) VALUES(?,?,?,?,?,?,?)",
+                (name, enabled, failover, ddns_record, cycle, int(time.time()), int(time.time())),
             )
             group_id = int(cur.lastrowid or 0)
 
         for member in members:
             conn.execute(
                 "INSERT INTO shift_members(group_id, server_id, position, hours, enabled, "
-                "slot_name, start_time, end_time) VALUES(?,?,?,?,?,?,?,?)",
+                "slot_name, start_time, end_time, days) VALUES(?,?,?,?,?,?,?,?,?)",
                 (
                     group_id,
                     member["server_id"],
@@ -767,6 +828,7 @@ def upsert_group(payload: dict[str, Any]) -> int:
                     member["slot_name"],
                     member["start_time"],
                     member["end_time"],
+                    member["days"],
                 ),
             )
         conn.execute("COMMIT")

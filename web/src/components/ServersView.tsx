@@ -19,6 +19,7 @@ import {
 } from 'lucide-react'
 import { regionLabel } from '../regions'
 import { ownerBase, ownerLabel } from '../owners'
+import { clockText } from '../time'
 import type { Billing, Server } from '../types'
 import { Badge, Empty, Meter, statusLabel, statusTone, stoppedModeLabel } from './ui'
 
@@ -531,10 +532,7 @@ function CostRow({
   const hint = failed
     ? `费用查询失败：${billing.error}`
     : billing.updated_at
-      ? `更新于 ${new Date(billing.updated_at * 1000).toLocaleTimeString('zh-CN', {
-          hour: '2-digit',
-          minute: '2-digit',
-        })}`
+      ? `更新于 ${clockText(billing.updated_at)}`
       : '还没有查询过'
 
   if (compact) {

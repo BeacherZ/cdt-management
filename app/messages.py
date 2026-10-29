@@ -46,6 +46,16 @@ def mode_label(mode: str | None) -> str:
     return MODE_LABELS.get(mode, mode) if mode else ""
 
 
+def stop_phrase(mode: str | None, prefix: str = "已") -> str:
+    """「已节省停机 / 已普通停机」，模式读不到就退成「已停机」。
+
+    有规格不支持节省停机，`stop_instance` 会 fallback 成普通停机（照常收规格费）。
+    文案跟着**实际生效**的模式走，否则通知里说「已节省停机」而账单照扣，是骗人。
+    """
+    label = mode_label(mode)
+    return f"{prefix}{label}" if label else f"{prefix}停机"
+
+
 # 实例状态的中文说法，事件进度文案用（Running 到位 = 运行中；停机到位 = 真实停机模式）。
 STATUS_LABELS = {
     "Running": "运行中",
@@ -74,6 +84,27 @@ def status_suffix(status: str | None, stopped_mode: str | None) -> str:
         return f"（{label}）" if label else "（已停机）"
     label = STATUS_LABELS.get(status)
     return f"（{label}）" if label else ""
+
+
+def result_label(status: str | None, stopped_mode: str | None) -> str:
+    """事件概览首段的「结果」短语：只讲最后落在什么状态，不带过程。
+
+    - Running → 运行中
+    - Stopped → 已停止（节省停机 / 普通停机），无模式时「已停止」
+    - 其他 → 通用状态中文（启动中 / 停止中 …），未知值原样返回
+
+    和 status_suffix 的区别：后缀是给「已确认 Running（运行中）」这种过程句用的，
+    这里是概览摘要的主语，读起来要能独立成句。
+    """
+    status = str(status or "").strip()
+    if not status:
+        return "已完成"
+    if status == "Running":
+        return "运行中"
+    if status == "Stopped":
+        label = mode_label(stopped_mode)
+        return f"已停止（{label}）" if label else "已停止"
+    return STATUS_LABELS.get(status) or status
 
 
 def stop_tail(servers: list[dict[str, Any]]) -> str:
@@ -392,21 +423,27 @@ def breaker(
     )
 
 
-def limit_stop(server: dict[str, Any], group_name: str = "") -> notify.Message:
+def limit_stop(
+    server: dict[str, Any], group_name: str = "", mode: str | None = None
+) -> notify.Message:
     """🚨 全局熔断（单台场景）：当班超限，这台机器只停它自己。
 
     两种情况：组里关掉了「允许流量故障转移」，或当班自身状态都读不到、无从判断。
     和 breaker() 共用同一个标题「全局熔断报告」——两者都是「流量到阈值被迫停机」，
     只是范围不同（单台 / 全组），分两个标题在推送里只会让人以为是两件事。
     正文保留 ＩＰ 行，与其它通知的实例块字段顺序一致。
+
+    停机措辞按 mode（缺省取实例自己的 StoppedMode）：不支持节省停机的规格会
+    fallback 成普通停机，照常收规格费，不能一律写「已节省停机」。
     """
+    stopped = stop_phrase(mode if mode is not None else server.get("stopped_mode"), "已强制")
     return _titled(
         "limit_stop",
         "🚨",
         title_of("全局熔断", group_name),
         "\n".join(
             [
-                "当班实例流量超限，该换班组没有启用故障转移，已强制节省停机。",
+                f"当班实例流量超限，该换班组没有启用故障转移，{stopped}。",
                 "如有需要，请开启故障转移或者去管理后台手动点击“立即换班”。",
                 "",
                 f"🖥 {_label(server)}",
@@ -421,13 +458,18 @@ def limit_stop(server: dict[str, Any], group_name: str = "") -> notify.Message:
     )
 
 
-def over_limit(server: dict[str, Any], scope: str) -> notify.Message:
-    """🚨 超限停机：单机保活 / 闲散手动的机器到阈值，被迫节省停机。
+def over_limit(server: dict[str, Any], scope: str, mode: str | None = None) -> notify.Message:
+    """🚨 超限停机：单机保活 / 闲散手动的机器到阈值，被迫停机。
 
     标题不叫「全局熔断」——那套说的是换班组里「没得换所以全停」，单机场景
     底下没有「全局」可言，混用会让人以为换班组出了事。范围括号标明是谁被停了。
+
+    停机措辞同样按实际生效的模式走（见 limit_stop）。
     """
-    paused = "已暂停保活" if scope == SCOPE_KEEPALIVE else "已节省停机"
+    if scope == SCOPE_KEEPALIVE:
+        paused = "已暂停保活"
+    else:
+        paused = stop_phrase(mode if mode is not None else server.get("stopped_mode"))
     return _titled(
         "limit_stop",
         "🚨",
@@ -593,9 +635,11 @@ def shift_period(
     start: str,
     end: str,
 ) -> str:
-    """当前班次：班次名称（起–止）。跨天时结束标「次日」。
+    """当前班次：班次名称（起–止）。
 
     起止是 HH:MM 字符串（时刻表模式直接从成员字段拿）；没有名称时退回只写时间段。
+    结束 00:00 显示成 24:00（当天到午夜），不写「次日」—— 排班就是在一天
+    0–24 点之内切分，真正的跨天班次保存时会被拒绝。
     """
     slot_name = (slot_name or "").strip()
     start = (start or "").strip()
@@ -604,19 +648,9 @@ def shift_period(
         return slot_name or "—"
     if not end:
         return f"{slot_name}（{start}）" if slot_name else start
-    # 跨天：结束时刻 <= 开始时刻，标「次日」
-    tail = end
-    if _hhmm_minutes(end) <= _hhmm_minutes(start):
-        tail = f"次日 {end}"
-    span = f"{start}–{tail}"
+    # 结束 00:00 就是「当天到午夜」，写成 24:00 才不会读成第二天凌晨。
+    # 时刻表按一天 0–24 点切分，真正的跨天班次在保存时已被拒绝。
+    if end == "00:00" and start != "00:00":
+        end = "24:00"
+    span = f"{start}–{end}"
     return f"{slot_name}（{span}）" if slot_name else span
-
-
-def _hhmm_minutes(value: str) -> int:
-    parts = value.split(":")
-    if len(parts) != 2:
-        return -1
-    try:
-        return int(parts[0]) * 60 + int(parts[1])
-    except ValueError:
-        return -1

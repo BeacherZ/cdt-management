@@ -392,9 +392,9 @@ class TrafficBreaker(unittest.TestCase):
         aliyun.get_traffic_gb = self._orig_traffic
         aliyun.get_instance = self._orig_instance
 
-    def _fake_stop(self, account, mode="StopCharging"):  # noqa: ANN001, ARG002
+    def _fake_stop(self, account, mode="StopCharging", fallback=False):  # noqa: ANN001, ARG002
         self.stopped.append(str(account.get("label") or ""))
-        return self._orig_stop(account, mode)
+        return self._orig_stop(account, mode, fallback)
 
     def _fake_traffic(self, account):  # noqa: ANN001, ARG002
         # 阈值是 188 GB，默认两台都超；用例可以改 self.traffic 模拟降下来

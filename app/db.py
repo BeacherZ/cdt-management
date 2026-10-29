@@ -69,11 +69,14 @@ CREATE TABLE IF NOT EXISTS shift_groups (
     failover_enabled  INTEGER NOT NULL DEFAULT 1,
     ddns_record       TEXT    NOT NULL DEFAULT '',
     anchor_at         INTEGER NOT NULL DEFAULT 0,
-    created_at        INTEGER NOT NULL DEFAULT 0
+    created_at        INTEGER NOT NULL DEFAULT 0,
+    -- 排班周期：day = 一天一轮（按小时 / 固定时刻表），month = 一月一轮（按天）
+    cycle             TEXT    NOT NULL DEFAULT 'day'
 );
 
 -- 组成员：按 position 顺序轮换。老字段 hours 仍保留（兼容老组），
 -- 新版用「班次名称 + 固定起止时刻」：每天按真实时钟判定谁当班。
+-- cycle=month 的组用 days：本月该成员连上多少天，从 1 号 0 点依次铺开。
 CREATE TABLE IF NOT EXISTS shift_members (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     group_id   INTEGER NOT NULL,
@@ -84,6 +87,7 @@ CREATE TABLE IF NOT EXISTS shift_members (
     slot_name  TEXT    NOT NULL DEFAULT '',
     start_time TEXT    NOT NULL DEFAULT '',
     end_time   TEXT    NOT NULL DEFAULT '',
+    days       INTEGER NOT NULL DEFAULT 0,
     UNIQUE(group_id, position)
 );
 CREATE INDEX IF NOT EXISTS idx_members_group ON shift_members(group_id, position);
@@ -278,6 +282,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
             "slot_name": "TEXT NOT NULL DEFAULT ''",
             "start_time": "TEXT NOT NULL DEFAULT ''",
             "end_time": "TEXT NOT NULL DEFAULT ''",
+            "days": "INTEGER NOT NULL DEFAULT 0",
+        },
+        "shift_groups": {
+            "cycle": "TEXT NOT NULL DEFAULT 'day'",
         },
         "events": {
             "status": "TEXT NOT NULL DEFAULT 'done'",

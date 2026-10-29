@@ -38,7 +38,7 @@ os.environ["CDT_MOCK_OP_DELAY"] = "0"
 
 from starlette.requests import Request  # noqa: E402
 
-from app import aliyun, api, db, notify, repo, security, shift  # noqa: E402
+from app import aliyun, api, db, messages, notify, repo, security, shift  # noqa: E402
 
 TZ = dt.timezone(dt.timedelta(hours=8))
 
@@ -262,16 +262,26 @@ class TimetableCoverage(_Base):
         self.assertIn("重叠", str(ctx.exception))
 
     def test_gap_rejected(self):
-        payload = self._payload((self.a, "08:00", "20:00"), (self.b, "20:00", "04:00"))
+        # 只用一天内的写法：跨天（20:00–04:00）现在会被「结束早于开始」先拒掉
+        payload = self._payload((self.a, "08:00", "12:00"), (self.b, "14:00", "20:00"))
         with self.assertRaises(ValueError) as ctx:
             api._validate_group_timetable(payload)  # noqa: SLF001
         self.assertIn("没有安排当班", str(ctx.exception))
-        self.assertIn("04:00", str(ctx.exception))
+        self.assertIn("00:00–08:00", str(ctx.exception))
+    
+    def test_cross_day_rejected(self):
+        # 排班按一天 0–24 点分：18:00–06:00 这种写法一律拒绝，
+        # 否则面板、通知、引擎三处对「结束 06:00」的理解会不一致
+        payload = self._payload((self.a, "18:00", "06:00"), (self.b, "06:00", "18:00"))
+        with self.assertRaises(ValueError) as ctx:
+            api._validate_group_timetable(payload)  # noqa: SLF001
+        self.assertIn("结束时刻早于开始时刻", str(ctx.exception))
+        self.assertIn("24:00", str(ctx.exception))
 
     def test_exact_coverage_accepted(self):
         for slots in (
-            ((self.a, "08:00", "20:00"), (self.b, "20:00", "08:00")),
-            ((self.a, "06:00", "14:00"), (self.b, "14:00", "22:00"), (self.c, "22:00", "06:00")),
+            ((self.a, "00:00", "06:00"), (self.b, "06:00", "16:00"), (self.c, "16:00", "24:00")),
+            ((self.a, "00:00", "12:00"), (self.b, "12:00", "00:00")),
         ):
             db.execute("DELETE FROM shift_members")
             db.execute("DELETE FROM shift_groups")
@@ -288,7 +298,7 @@ class TimetableCoverage(_Base):
         self.assertEqual(group["members"][1]["end_time"], "00:00")
 
     def test_same_start_and_end_rejected(self):
-        payload = self._payload((self.a, "08:00", "08:00"), (self.b, "20:00", "08:00"))
+        payload = self._payload((self.a, "08:00", "08:00"), (self.b, "12:00", "20:00"))
         with self.assertRaises(ValueError) as ctx:
             api._validate_group_timetable(payload)  # noqa: SLF001
         self.assertIn("起止时刻不能相同", str(ctx.exception))
@@ -484,6 +494,179 @@ class LoginRateLimitClient(_Base):
         self.assertFalse(api._rate_limited("198.51.100.7"))  # noqa: SLF001
         self.assertNotIn("198.51.100.7", api._login_failures)  # noqa: SLF001
         api._login_failures.clear()  # noqa: SLF001
+
+
+class SingleActiveMemberGroup(_Base):
+    """只剩一台启用成员的组排不出当班，必须交还给闲散检查。
+
+    这条曾经有个大洞：`_grouped_server_ids()` 只按 enabled 认领，于是这台机器
+    被标成「已被换班组接管」，保活让位、闲散检查跳过，而 `reconcile_group` 在
+    `duty_at()` 返回 None（成员不足两台）时直接 return —— 三边都不管，
+    它超了阈值也照样跑，流量保护彻底失效。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.active = _make_server("唯一在岗", "Running", traffic=260.0)
+        self.disabled = _make_server("已停用成员", "Stopped")
+        self.group_id = repo.upsert_group(
+            {
+                "name": "单活组",
+                "enabled": True,
+                "members": [
+                    {"server_id": self.active, "hours": 12},
+                    {"server_id": self.disabled, "hours": 12, "enabled": False},
+                ],
+            }
+        )
+
+    def test_not_claimed_by_shift_group(self):
+        self.assertEqual(
+            shift.engine._grouped_server_ids(),  # noqa: SLF001
+            set(),
+            "启用成员不足两台，排不出当班，不能被换班组认领",
+        )
+
+    def test_reconcile_group_skips_but_idle_check_takes_over(self):
+        self.assertNotIn(
+            self.active, shift.engine._grouped_server_ids()  # noqa: SLF001
+        )
+        result = self._reconcile(self.group_id)
+        self.assertEqual(result.get("skipped"), "成员不足两台")
+
+        # dry-run 的 mock 会用自己的流量覆盖库里的值，这里钉住「在跑 + 已超限」
+        def _fake_refresh(server):  # noqa: ANN001
+            server.update(
+                traffic_used=260.0,
+                instance_status="Running",
+                stopped_mode="",
+                public_ip="47.0.0.9",
+            )
+
+        shift._refresh = _fake_refresh  # noqa: SLF001
+
+        # 走完整对账：闲散检查接手，超限停机照常发生
+        shift.engine.reconcile_all()
+
+        # 停机指令已下发 + 事件已记（库里状态要等下一轮 _refresh 才落地，不在这里断言）
+        self.assertTrue(
+            repo.get_flag(f"limit_stop:{messages.SCOPE_IDLE}:{self.active}"),
+            "闲散检查没接手这台机器",
+        )
+        titles = [e["title"] for e in self._events()]
+        self.assertTrue(any("流量超限" in t for t in titles), titles)
+
+
+class StopAlwaysFallsBack(_Base):
+    """三处主动停机都必须 fallback=True。
+
+    部分规格不支持「节省停机」（StopCharging 直接报 Not-applicable）。漏了
+    fallback，非当班就停不下来 → all_stopped 永远 False → 换班永不结算，
+    每班只发一条超时报告，两台机器一起烧流量。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.calls: list[dict] = []
+        orig = self._orig_stop
+
+        def _spy(server, mode="StopCharging", fallback=False):  # noqa: ANN001
+            self.calls.append(
+                {"id": int(server["id"]), "mode": mode, "fallback": fallback}
+            )
+            return orig(server, mode, fallback)
+
+        aliyun.stop_instance = _spy
+        self.duty = _make_server("当班机", "Running", traffic=10.0)
+        self.standby = _make_server("待机机", "Running", traffic=5.0)
+
+    def _group(self, failover: bool = True) -> int:
+        group_id = repo.upsert_group(
+            {
+                "name": "停机组",
+                "enabled": True,
+                "failover_enabled": failover,
+                "members": [
+                    {"server_id": self.duty, "hours": 12},
+                    {"server_id": self.standby, "hours": 12},
+                ],
+            }
+        )
+        db.execute(
+            "UPDATE shift_groups SET anchor_at=? WHERE id=?",
+            (int(time.time() - 3600), group_id),
+        )
+        return group_id
+
+    def test_stopping_standby_uses_fallback(self):
+        group_id = self._group()
+        traffic = {self.duty: 10.0, self.standby: 5.0}
+
+        def _fake_refresh(server):  # noqa: ANN001
+            sid = int(server["id"])
+            if sid == self.standby:
+                server.update(
+                    traffic_used=traffic[sid],
+                    instance_status="Running",
+                    stopped_mode="",
+                    public_ip="47.0.0.2",
+                )
+            else:
+                server.update(
+                    traffic_used=traffic[sid],
+                    instance_status="Running",
+                    stopped_mode="",
+                    public_ip="47.0.0.1",
+                )
+
+        shift._refresh = _fake_refresh  # noqa: SLF001
+        self._reconcile(group_id)
+
+        standby_calls = [c for c in self.calls if c["id"] == self.standby]
+        self.assertTrue(standby_calls, self.calls)
+        self.assertTrue(all(c["fallback"] for c in standby_calls), standby_calls)
+
+    def test_breaker_uses_fallback(self):
+        group_id = self._group(failover=True)
+
+        def _fake_refresh(server):  # noqa: ANN001
+            server.update(
+                traffic_used=260.0,
+                instance_status="Running",
+                stopped_mode="",
+                public_ip="47.0.0.1",
+            )
+
+        shift._refresh = _fake_refresh  # noqa: SLF001
+        self._reconcile(group_id)
+
+        self.assertTrue(self.calls, "全员超限应该触发熔断停机")
+        self.assertTrue(all(c["fallback"] for c in self.calls), self.calls)
+
+    def test_limit_stop_uses_fallback(self):
+        group_id = self._group(failover=False)
+
+        def _fake_refresh(server):  # noqa: ANN001
+            if int(server["id"]) == self.duty:
+                server.update(
+                    traffic_used=260.0,
+                    instance_status="Running",
+                    stopped_mode="",
+                    public_ip="47.0.0.1",
+                )
+            else:
+                server.update(
+                    traffic_used=0.0,
+                    instance_status="Stopped",
+                    stopped_mode="StopCharging",
+                    public_ip="",
+                )
+
+        shift._refresh = _fake_refresh  # noqa: SLF001
+        self._reconcile(group_id)
+
+        self.assertTrue(self.calls, "当班超限应触发超限停机")
+        self.assertTrue(all(c["fallback"] for c in self.calls), self.calls)
 
 
 if __name__ == "__main__":

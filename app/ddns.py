@@ -203,12 +203,17 @@ def sync(
         return DDNSResult(STATUS_ERROR, f"无法连接 Cloudflare：{exc}", ip=ip)
 
     last_error = ""
-    for attempt in range(1, 4):
+    # 最多试 3 次、每次间隔 1 秒（最后一次不再等）。以前每次都 sleep(2)、
+    # 异常路径还多睡一次，坏记录一条就能拖 6~8 秒，巡检一轮 60 秒根本不够用；
+    # Cloudflare 的瞬时抖动 1 秒足够过去，配置类错误重试再多也没用。
+    attempts = 3
+    for attempt in range(1, attempts + 1):
         try:
             record_id = _find_record_id(headers, zone_id, name)
             if not record_id:
                 last_error = "记录不存在或查询失败"
-                time.sleep(2)
+                if attempt < attempts:
+                    time.sleep(1)
                 continue
 
             response = requests.put(
@@ -232,7 +237,8 @@ def sync(
         except Exception as exc:  # noqa: BLE001
             last_error = str(exc)
             log.warning("DDNS 第 %s 次更新异常: %s", attempt, exc)
-        time.sleep(2)
+        if attempt < attempts:
+            time.sleep(1)
 
     if "Zone ID" in last_error:
         return DDNSResult(STATUS_ERROR, last_error, ip=ip)

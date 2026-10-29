@@ -27,6 +27,7 @@ import ConfirmDialog from './components/ConfirmDialog'
 import DNSView from './components/DNSView'
 import { Badge, Modal } from './components/ui'
 import { ownerLabel } from './owners'
+import { syncClock } from './time'
 
 type Phase = 'loading' | 'setup' | 'login' | 'ready' | 'fatal'
 type View = 'dashboard' | 'keepalive' | 'shift' | 'servers' | 'dns'
@@ -179,6 +180,12 @@ export default function App() {
       toast(`已保存，但刷新数据失败：${error instanceof Error ? error.message : '请稍后重试'}`, 'error')
     }
   }
+
+  // 界面上的时间显示全部以后端为准：每次拿到 overview 就把时区 / 今天 / 当前时刻
+  // 同步给时间模块，各组件不再自己 new Date()（跨国访问时浏览器时区会和排班错开）。
+  useEffect(() => {
+    if (overview) syncClock(overview)
+  }, [overview])
 
   useEffect(() => {
     void (async () => {
@@ -718,6 +725,7 @@ export default function App() {
           <ShiftView
             groups={overview.groups}
             serverCount={overview.servers.length}
+            monthDays={overview.month_days}
             busyId={busyGroup}
             onAdd={() => setGroupDialog({ open: true, group: null })}
             onEdit={(group) => setGroupDialog({ open: true, group })}
@@ -808,6 +816,7 @@ export default function App() {
         <GroupDialog
           group={groupDialog.group}
           servers={overview.servers}
+          monthDays={overview.month_days}
           onClose={() => setGroupDialog({ open: false, group: null })}
           onKeepaliveCleared={() => void loadAll()}
           onSaved={(message) => {

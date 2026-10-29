@@ -117,11 +117,16 @@ class ShiftDone(unittest.TestCase):
         self.assertEqual(messages.shift_period("白班", "06:00", "18:00"), "白班（06:00–18:00）")
         self.assertEqual(messages.shift_period("", "06:00", "18:00"), "06:00–18:00")
 
-    def test_period_marks_next_day(self):
-        # 跨天班次写「次日」，否则 22:00–06:00 看着像时间倒流
+    def test_period_shows_midnight_as_24(self):
+        # 结束 00:00 是「当天到午夜」，显示成 24:00 才不会读成第二天凌晨
         self.assertEqual(
-            messages.shift_period("夜班", "22:00", "06:00"),
-            "夜班（22:00–次日 06:00）",
+            messages.shift_period("白班", "12:00", "00:00"),
+            "白班（12:00–24:00）",
+        )
+        # 起始就是 0 点的那一段照常写 00:00
+        self.assertEqual(
+            messages.shift_period("凌晨班", "00:00", "06:00"),
+            "凌晨班（00:00–06:00）",
         )
 
     def test_stopped_block_uses_real_mode(self):

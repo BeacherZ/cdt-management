@@ -414,11 +414,14 @@ def start_instance(account: dict) -> None:
         raise AliyunError(f"启动实例失败: {message}") from exc
 
 
-def stop_instance(account: dict, mode: str = "StopCharging", fallback: bool = False) -> None:
+def stop_instance(account: dict, mode: str = "StopCharging", fallback: bool = False) -> str:
     """mode=StopCharging 为「节省停机」，不计实例规格费用。
 
     fallback=True 时，如果实例不支持节省停机（部分规格 / 包年包月按固定价），
     自动退化成普通停机，避免手动关机直接报错没法用。
+
+    返回**实际生效**的停机模式（走了 fallback 就是 "Stop"），调用方据此写文案 ——
+    退化成普通停机还报「已节省停机」是在骗人，那台机器照常收规格费。
     """
     if settings.DRY_RUN:
         log.info("[dry-run] stop %s mode=%s", account.get("instance_id"), mode)
@@ -435,20 +438,21 @@ def stop_instance(account: dict, mode: str = "StopCharging", fallback: bool = Fa
                 state["stopped_mode"] = mode
                 state["target_status"] = "Stopped"
                 state["pending_until"] = time.time() + delay
-        return
+        return mode
     client = _client(account)
     request = StopInstancesRequest.StopInstancesRequest()
     request.set_InstanceIds([account["instance_id"]])
     request.set_StoppedMode(mode)
     try:
         client.do_action_with_exception(request)
+        return mode
     except Exception as exc:
         if fallback and mode != "Stop":
             log.warning("节省停机失败，退化为普通停机: %s", exc)
             request.set_StoppedMode("Stop")
             try:
                 client.do_action_with_exception(request)
-                return
+                return "Stop"
             except Exception as retry_exc:  # noqa: BLE001
                 raise AliyunError(f"停止实例失败: {retry_exc}") from retry_exc
         raise AliyunError(f"停止实例失败: {exc}") from exc

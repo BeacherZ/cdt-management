@@ -50,7 +50,16 @@ class Base(unittest.TestCase):
     def setUp(self) -> None:
         db.init_db()
         CALLS.clear()
-        for table in ("dns_records", "servers", "keepalives", "shift_groups", "shift_members", "events"):
+        for table in (
+            "dns_records",
+            "servers",
+            "keepalives",
+            "shift_groups",
+            "shift_members",
+            "events",
+            # 失败冷却标记存在 flags 里，跨用例不清会把后面的同步一起冻住
+            "flags",
+        ):
             db.execute(f"DELETE FROM {table}")
         db.execute("DELETE FROM settings WHERE key LIKE 'ddns%'")
         repo.set_settings({"ddns_enabled": "1", "ddns_records": "[]", "ddns_record": ""})

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import calendar
 import datetime as dt
 import json
 import logging
@@ -37,6 +38,12 @@ TRANSIENT_STATUS = {"Starting", "Pending", "Stopping"}
 # 同一台机器在同一个班次里重复下发停机指令的最小间隔（秒）。
 # 只有在「状态读不到、库里看着还在跑」时才会重复触发，给它一个节流。
 _BREAKER_STOP_COOLDOWN = 120
+
+# 换了班但 DDNS 一直同步不上时，最多等这么久就照常结算（秒）。
+# 以前是无上限地等：绑定记录在 Cloudflare 侧被删/凭证过期时永远等不到 ✅，
+# 10 分钟一到只发一条「换班超时」，看着像机器出故障，实际机器早切好了。
+# 失败本身已经写进事件进度和结算报告，不阻塞才是对的。
+_DDNS_WAIT_SECONDS = 180
 
 
 # --------------------------------------------------------------------------
@@ -71,8 +78,10 @@ def _is_timetable_group(group: dict[str, Any]) -> bool:
 def _duty_at_timetable(group: dict[str, Any], now_ts: float) -> tuple[dict[str, Any], int]:
     """固定时刻表模式：按每天真实时钟判定当班。
 
-    每个成员占据一天内的 [start, end) 分钟区间；end <= start 表示跨天
-    （如 18:00–次日 06:00），区间要折成 [start, 1440) ∪ [0, end)。
+    每个成员占据一天内的 [start, end) 分钟区间，全组刚好把 0–24 点分完；
+    end == 0（保存时的 00:00 / 面板上的 24:00）表示这一段到午夜为止。
+    真正的跨天配置已在保存时拒绝，这里保留 [start, 1440) ∪ [0, end) 的写法
+    只为兼容历史数据。
 
     返回 (当班成员, 该班次开始时间戳)。开始时间戳用于 slot_key 去重与通知时间段显示。
     """
@@ -102,9 +111,10 @@ def _duty_at_timetable(group: dict[str, Any], now_ts: float) -> tuple[dict[str, 
 
 
 def _shift_start_ts(now: dt.datetime, start_minutes: int) -> int:
-    """今天 start_minutes 时刻的时间戳；跨天班次（start 已过且是昨天开始）要回退一天。
+    """今天 start_minutes 时刻的时间戳。
 
-    比如现在 02:00 属于「18:00–06:00」夜班，这个班次是从昨天 18:00 开始的。
+    班次都在一天 0–24 点内分完（结束 00:00 表示到午夜），命中的一定是今天开的班，
+    不需要回退；只有历史遗留的跨天配置（18:00–06:00）才走下面这层兜底。
     """
     start_minutes = max(0, start_minutes)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -114,13 +124,76 @@ def _shift_start_ts(now: dt.datetime, start_minutes: int) -> int:
     return int(candidate.timestamp())
 
 
+def is_month_cycle(group: dict[str, Any]) -> bool:
+    """排班周期是不是「一月一轮」（组员按天轮换）。
+
+    默认 day：一天一轮，按小时累加或按固定时刻表 —— 两种都在 24 小时内换完。
+    """
+    return str(group.get("cycle") or "day") == "month"
+
+
 def active_members(group: dict[str, Any]) -> list[dict[str, Any]]:
+    """启用的成员，按登记顺序。
+
+    一月一轮看天数，一天一轮看工时：两个字段各自代表「这台能上班」的凭据，
+    混着判会让月模式的成员（hours 可能是 0）整组消失。
+    """
+    month = is_month_cycle(group)
     members = [
         member
         for member in group.get("members") or []
-        if member.get("enabled") and float(member.get("hours") or 0) > 0
+        if member.get("enabled")
+        and (float(member.get("days") or 0) > 0 if month else float(member.get("hours") or 0) > 0)
     ]
     return sorted(members, key=lambda item: int(item.get("position") or 0))
+
+
+def _month_layout(
+    group: dict[str, Any], year: int, month: int
+) -> list[tuple[dict[str, Any], int, int]]:
+    """当月排班表：[(成员, 起始日, 结束日)]，日号从 1 开始、含首尾。
+
+    前面的人各上自己填的天数，最后一位一直排到月末 —— 28/29/30/31 天的月份
+    因此能自动伸缩，不用每月改配置。前面的人把整月排完了，后面的人这段就是
+    空的（不返回），历史数据填了超额天数时才可能出现。
+    """
+    members = active_members(group)
+    days_in_month = calendar.monthrange(year, month)[1]
+    layout: list[tuple[dict[str, Any], int, int]] = []
+    cursor = 1
+    for index, member in enumerate(members):
+        remaining = days_in_month - cursor + 1
+        if remaining <= 0:
+            break
+        span = remaining if index == len(members) - 1 else int(member.get("days") or 0)
+        span = min(max(span, 0), remaining)
+        if span <= 0:
+            continue
+        layout.append((member, cursor, cursor + span - 1))
+        cursor += span
+    return layout
+
+
+def _duty_at_month(group: dict[str, Any], now_ts: float) -> tuple[dict[str, Any], int] | None:
+    """一月一轮：按天排，从当月 1 号 0 点起依次铺开，不看小时边界。
+
+    slot 起点用「某人这段的第一天 0 点」，跨月自然产生新 slot，run 表不用改。
+    """
+    members = active_members(group)
+    if not members:
+        return None
+    now = dt.datetime.fromtimestamp(now_ts, _timezone(_group_timezone(group)))
+    layout = _month_layout(group, now.year, now.month)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    for member, start_day, end_day in layout:
+        if start_day <= now.day <= end_day:
+            return member, int((month_start + dt.timedelta(days=start_day - 1)).timestamp())
+    # 排班表没盖住今天（前面的人把整月排完、最后一位没位置）：让第一位兜底，
+    # 至少保证有一台在跑，不要出现「谁都不当班」
+    if not layout:
+        return None
+    member, start_day, _ = layout[0]
+    return member, int((month_start + dt.timedelta(days=start_day - 1)).timestamp())
 
 
 def duty_at(group: dict[str, Any], now_ts: float) -> tuple[dict[str, Any], int] | None:
@@ -128,6 +201,9 @@ def duty_at(group: dict[str, Any], now_ts: float) -> tuple[dict[str, Any], int] 
     members = active_members(group)
     if len(members) < 2:
         return None
+
+    if is_month_cycle(group):
+        return _duty_at_month(group, now_ts)
 
     if _is_timetable_group(group):
         return _duty_at_timetable(group, now_ts)
@@ -231,6 +307,9 @@ def next_switch_at(group: dict[str, Any], now_ts: float) -> float | None:
     if len(members) < 2:
         return None
 
+    if is_month_cycle(group):
+        return _next_switch_month(group, now_ts)
+
     if _is_timetable_group(group):
         return _next_switch_timetable(group, now_ts)
 
@@ -245,6 +324,22 @@ def next_switch_at(group: dict[str, Any], now_ts: float) -> float | None:
         if offset < accumulated:
             return anchor + cycle_index * total + accumulated
     return anchor + (cycle_index + 1) * total
+
+
+def _next_switch_month(group: dict[str, Any], now_ts: float) -> float:
+    """一月一轮：下一班开始 = 当前这段的最后一天结束（次日 0 点）。"""
+    tz_name = _group_timezone(group)
+    now = dt.datetime.fromtimestamp(now_ts, _timezone(tz_name))
+    layout = _month_layout(group, now.year, now.month)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    for _member, start_day, end_day in layout:
+        if start_day <= now.day <= end_day:
+            # end_day 是月末时，加一天正好落到下月 1 号 0 点
+            return int((month_start + dt.timedelta(days=end_day)).timestamp())
+    # 兜底：下个月 1 号 0 点
+    return int(
+        (month_start + dt.timedelta(days=calendar.monthrange(now.year, now.month)[1])).timestamp()
+    )
 
 
 def _next_switch_timetable(group: dict[str, Any], now_ts: float) -> float:
@@ -352,14 +447,21 @@ class Engine:
         只算**启用的**组：组停用后成员就该回到闲散状态，单机保活要能接手。
         以前漏了这个判断，停用组 + 组员挂保活 → 保活认为「已被换班组接管」直接
         让位，结果两边都不管，机器就躺着没人开机。
+
+        还要算**真能排出当班**的组（启用成员 ≥ 2）：只有一台的组排不出当班，
+        `reconcile_group` 会在 `duty_at` 为 None 时直接 return，根本走不到流量
+        判断。如果这里仍把它记成「已被接管」，那台机器既不被换班引擎管、又被
+        保活和闲散检查跳过 —— 在跑且超阈值也没人停。少一台就交还给闲散检查。
         """
         ids: set[int] = set()
         for group in repo.list_groups():
             if not group.get("enabled"):
                 continue
-            for member in group.get("members") or []:
-                if member.get("enabled"):
-                    ids.add(int(member["server_id"]))
+            members = active_members(group)
+            if len(members) < 2:
+                continue
+            for member in members:
+                ids.add(int(member["server_id"]))
         return ids
 
     # ==================================================================
@@ -439,7 +541,9 @@ class Engine:
                     event_id = repo.add_event(
                         "start",
                         f"{server.get('label')}：保活拉起",
-                        f"原状态 {status}",
+                        # 进行中的事件只说明「在等什么」；确认到位后整条 detail
+                        # 会被改写成结果（运行中 / ✅ 已同步），见 scheduler。
+                        "等待恢复运行",
                         level="warning",
                         server_id=server_id,
                         status="running",
@@ -495,9 +599,10 @@ class Engine:
             return False
 
         # 已经物理停机（含不支持节省停机的 Not-applicable）就不重发指令
+        mode = str(server.get("stopped_mode") or "")
         if not _is_stopped_any_mode(server):
             try:
-                aliyun.stop_instance(server, "StopCharging", fallback=True)
+                mode = aliyun.stop_instance(server, "StopCharging", fallback=True)
             except Exception as exc:  # noqa: BLE001
                 err = f"limit_stop_err:{scope}:{server_id}"
                 if not repo.get_flag(err):
@@ -515,13 +620,13 @@ class Engine:
         repo.set_flag(flag)
         event_id = repo.add_event(
             "limit_stop",
-            f"{server.get('label')}：流量超限，已节省停机",
-            f"已用 {_used_gb(server):.2f} GB，阈值 {float(server.get('threshold_gb') or 0):g} GB",
+            f"{server.get('label')}：流量超限，{messages.stop_phrase(mode)}",
+            f"已用 {_used_gb(server):.2f} GB / 阈值 {float(server.get('threshold_gb') or 0):g} GB",
             level="warning",
             server_id=server_id,
         )
         if config.get("notify_on_limit_stop") == "1":
-            results = notify.send_all(config, messages.over_limit(server, scope))
+            results = notify.send_all(config, messages.over_limit(server, scope, mode=mode))
             notify.note_notify(event_id, results)
         return True
 
@@ -719,7 +824,9 @@ class Engine:
                 event_id = repo.add_event(
                     "recovery",
                     f"{name}：当班未运行，已自动拉起",
-                    f"{duty.get('label')} 原状态 {duty_status or '未知'}",
+                    # 概览只写「在等什么」，和单机保活的运行中事件同一套说法；
+                    # 原来是什么状态放在展开的步骤里（检测到当班 X 未运行（Stopped））
+                    "等待恢复运行",
                     level="warning",
                     group_id=group_id,
                     server_id=int(duty["id"]),
@@ -832,7 +939,7 @@ class Engine:
                 all_stopped = False
                 continue
             try:
-                aliyun.stop_instance(server, "StopCharging")
+                aliyun.stop_instance(server, "StopCharging", fallback=True)
                 repo.clear_flag(f"stop_err:{server['id']}")
                 repo.add_event_progress(event_id, f"已下发停机 {server.get('label')}")
             except Exception as exc:  # noqa: BLE001
@@ -850,7 +957,7 @@ class Engine:
             all_stopped = False
 
         if all_stopped and not previously_settled:
-            repo.add_event_progress(event_id, "非当班均已节省停机", once=True)
+            repo.add_event_progress(event_id, f"非当班{messages.stop_tail(others)}", once=True)
 
         # 6) 全部实例状态确认到位之后才动 DDNS。
         #    以前是「当班一开机就同步」，非当班还在跑的时候域名已经指过去了；而且
@@ -869,6 +976,29 @@ class Engine:
             # 一台机器可能挂着好几条域名，汇总文案「✅ 已同步 / ❌ 更新失败」开头也是 ✅，
             # 单看前缀会把「有一条没指过去」当成全部成功，于是事件打完成、通知照发。
             ddns_ok = (not ddns_enabled) or (not ddns_bound) or dns.is_success(ddns_text)
+
+            # DDNS 失败不能无限期卡住结算：绑定记录被删、Token 过期这类配置问题
+            # 重试到天亮也不会好，而每轮都「不算就绪」→ 10 分钟超时报告，看着像
+            # 机器没切过去，实际早切好了。等满 _DDNS_WAIT_SECONDS 就照常往下走，
+            # 失败原因仍在进度和报告里（ddns_text 带 ❌）。
+            wait_key = f"ddns_wait:{group_id}:{slot_key}"
+            if ddns_ok:
+                repo.clear_flag(wait_key)
+            else:
+                waited = repo.flag_age(wait_key)
+                if waited < 0:
+                    repo.set_flag(wait_key)
+                elif waited >= _DDNS_WAIT_SECONDS:
+                    ddns_ok = True
+                    repo.clear_flag(wait_key)
+                    repo.add_event(
+                        "error",
+                        f"{name}：DDNS 未同步，换班照常结算",
+                        f"已等待 {_DDNS_WAIT_SECONDS // 60} 分钟仍未同步（{ddns_text}），"
+                        "实例状态已到位，不再阻塞。请检查记录名、Token 与 Zone。",
+                        level="warning",
+                        group_id=group_id,
+                    )
             # 自动换班只在「开了 DDNS 且确实挂了域名」时记这一步 —— 定时换班
             # 每分钟都可能来一轮，没绑域名时写「DDNS：⏸ 未绑定」纯噪音。
             # 手动换班例外：用户点了按钮，就想要一份完整的流程，
@@ -976,7 +1106,7 @@ class Engine:
         if first_settle or failover:
             self._notify_settled(
                 group, config, duty, others, ddns_text, failover_flag, slot_key,
-                manual=manual_switch, shift_event_id=event_id,
+                manual=manual_switch, shift_event_id=event_id, now_ts=now_ts,
             )
         elif recovered and config.get("notify_on_recovery") == "1":
             results = notify.send_all(
@@ -1025,7 +1155,7 @@ class Engine:
             if 0 <= age < _BREAKER_STOP_COOLDOWN:
                 continue
             try:
-                aliyun.stop_instance(server, "StopCharging")
+                aliyun.stop_instance(server, "StopCharging", fallback=True)
                 repo.clear_flag(f"breaker_stop_err:{group_id}:{slot_key}:{server_id}")
             except Exception as exc:  # noqa: BLE001
                 flag = f"breaker_stop_err:{group_id}:{slot_key}:{server_id}"
@@ -1068,7 +1198,7 @@ class Engine:
                 event_id = repo.add_event(
                     "breaker",
                     f"{name}：全局熔断",
-                    f"{why}，{messages.stop_tail(everyone)}",
+                    f"{why} / {messages.stop_tail(everyone)}",
                     level="error",
                     group_id=group_id,
                 )
@@ -1108,15 +1238,15 @@ class Engine:
                 age = repo.flag_age(stamp)
                 if not (0 <= age < _BREAKER_STOP_COOLDOWN):
                     try:
-                        aliyun.stop_instance(duty, "StopCharging")
+                        mode = aliyun.stop_instance(duty, "StopCharging", fallback=True)
                         repo.clear_flag(f"limit_stop_err:{group_id}:{slot_key}")
                         event_flag = f"limit_stop_evt:{group_id}:{slot_key}"
                         if not repo.get_flag(event_flag):
                             repo.set_flag(event_flag)
                             repo.add_event(
                                 "limit_stop",
-                                f"{name}：当班流量超限，已强制节省停机",
-                                f"{duty.get('label')} 原状态 {duty_status or '未知'}",
+                                f"{name}：当班流量超限，{messages.stop_phrase(mode, '已强制')}",
+                                f"已用 {_used_gb(duty):.2f} GB / 阈值 {float(duty.get('threshold_gb') or 0):g} GB",
                                 level="warning",
                                 group_id=group_id,
                                 server_id=int(duty["id"]),
@@ -1289,6 +1419,7 @@ class Engine:
         slot_key: str,
         manual: bool = False,
         shift_event_id: int = 0,
+        now_ts: float = 0.0,
     ) -> None:
         group_id = int(group["id"])
         name = group.get("name") or ""
@@ -1329,7 +1460,7 @@ class Engine:
             # 本班次如果先发过「换班异常」，成功时按脚本换标题；
             # 手动切班的报告标题带「(手动换班)」，与自动换班区分
             delayed = bool(repo.get_flag(f"timeout:{group_id}:{slot_key}"))
-            period = _shift_span(group, duty, config)
+            period = _shift_span(group, duty, config, now_ts or None)
             message = messages.shift_done(
                 duty,
                 others,
@@ -1540,7 +1671,7 @@ class Engine:
             event_id = repo.add_event(
                 "group_dissolve",
                 f"{name}：解散换班组",
-                f"组内 {len(member_ids)} 台服务器保持当前状态，未下发任何启停指令",
+                f"组内 {len(member_ids)} 台保持当前状态 / 未下发任何启停指令",
                 group_id=0,  # 组马上就没了，事件别再挂到不存在的组上
                 status="running",
             )
@@ -1591,9 +1722,9 @@ class Engine:
     def manual_switch(self, group_id: int) -> dict[str, Any]:
         """立即跳到下一台当班。
 
-        老 hours 累加模式：把轮换起点 anchor_at 平移到下一班的开头。
-        固定时刻表模式：当班由真实时钟决定，anchor 不起作用，改走
-        shift_runs 的 manual/duty_server_id 覆盖 —— reconcile_group 会沿用
+        一天一轮的 hours 模式：把轮换起点 anchor_at 平移到下一班的开头。
+        按真实时钟决定当班的模式（固定时刻表、一月一轮）：anchor 不起作用，
+        改走 shift_runs 的 manual/duty_server_id 覆盖 —— reconcile_group 会沿用
         这个手动指定，把下一台拉起来、停掉原当班，走完整流程后发报告。
 
         两种模式都只开一条「手动换班」事件，后续进度全部追加到这条上。
@@ -1613,7 +1744,7 @@ class Engine:
             if len(members) < 2:
                 raise ValueError("组内启用的成员不足两台")
 
-            if _is_timetable_group(group):
+            if is_month_cycle(group) or _is_timetable_group(group):
                 return self._finish_manual(
                     self._manual_switch_timetable(group, config, now, now_ts)
                 )
@@ -1728,7 +1859,8 @@ class Engine:
         now: dt.datetime,
         now_ts: float,
     ) -> dict[str, Any]:
-        """固定时刻表模式下的手动换班：把「下一台」写进本班次 run 的 duty_server_id，
+        """按真实时钟决定当班的模式（固定时刻表 / 一月一轮）下的手动换班：
+        把「下一台」写进本班次 run 的 duty_server_id，
         借 reconcile_group 的 manual 分支完成切换（开下一台 → 停原当班 → DDNS → 发报告）。"""
         group_id = int(group["id"])
         members = active_members(group)
@@ -1957,10 +2089,31 @@ def _member_of(group: dict[str, Any], server_id: int) -> dict[str, Any]:
     return {}
 
 
-def _shift_span(group: dict[str, Any], duty: dict[str, Any], config: dict[str, str]) -> str:
-    """当前班次文案：优先用「班次名称（起–止）」，时刻表没配就退回小时数。"""
+def _shift_span(
+    group: dict[str, Any],
+    duty: dict[str, Any],
+    config: dict[str, str],
+    now_ts: float | None = None,
+) -> str:
+    """当前班次文案：一月一轮写日期区间，一天一轮优先「班次名称（起–止）」。
+
+    一月一轮按「今天是哪一段」写，不看当班是谁：手动换班 / 故障转移会把别的
+    成员顶到这一段来，按当班成员去找他自己的排班段，10 月 5 号就会报出
+    「10 月 16–31 日」，与今天的日期自相矛盾。当班是谁正文里已经写清楚了。
+    """
     member = _member_of(group, int(duty.get("id") or 0))
     slot_name = member.get("slot_name") or ""
+    if is_month_cycle(group):
+        # 按月轮换没有小时边界，只报本段覆盖哪几天
+        stamp = int(now_ts if now_ts is not None else time.time())
+        now = dt.datetime.fromtimestamp(stamp, _timezone(_group_timezone(group)))
+        for item, start_day, end_day in _month_layout(group, now.year, now.month):
+            if start_day <= now.day <= end_day:
+                # 段的名字属于「这一段」，不是当班那个人
+                name = str(item.get("slot_name") or "").strip()
+                span = f"{now.month} 月 {start_day}–{end_day} 日"
+                return f"{name}（{span}）" if name else span
+        return slot_name
     start = member.get("start_time") or ""
     end = member.get("end_time") or ""
     if slot_name or start or end:
@@ -1969,6 +2122,31 @@ def _shift_span(group: dict[str, Any], duty: dict[str, Any], config: dict[str, s
     hours = float(member.get("hours") or _hours_of(group, duty))
     label = str(duty.get("label") or "")
     return f"{label}（{hours:g} 小时）"
+
+
+def member_span_label(group: dict[str, Any], member: dict[str, Any], now_ts: float) -> str:
+    """成员「这一班」在人眼里的写法，给界面用，不带班次名称。
+
+    - 一月一轮 → `1–15 日`（本月这一段覆盖哪几天）
+    - 固定时刻表 → `08:00–20:00`
+    - 其余（老 hours 累加）→ 空串，界面自己退回「N 小时」
+
+    界面三处（换班页成员行、轮换顺序、概览组卡片）都读这一个字段，
+    免得前端各算一套，跟引擎排出来的段对不上。
+    """
+    if is_month_cycle(group):
+        now = dt.datetime.fromtimestamp(now_ts, _timezone(_group_timezone(group)))
+        target = int(member.get("server_id") or 0)
+        for item, start_day, end_day in _month_layout(group, now.year, now.month):
+            if int(item.get("server_id") or 0) == target:
+                return f"{start_day}–{end_day} 日"
+        return ""
+    start = str(member.get("start_time") or "")
+    end = str(member.get("end_time") or "")
+    if start and end:
+        # 复用通知那套写法：结束 00:00 显示成 24:00，不写「次日」
+        return messages.shift_period("", start, end)
+    return ""
 
 
 def _over_threshold(server: dict[str, Any]) -> bool:

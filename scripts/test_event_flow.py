@@ -51,7 +51,8 @@ class _FakeDDNS:
 
 
 class _FakeSync:
-    status = "已同步"
+    # 跟真实 ddns.STATUS_SYNCED 一致：概览里同步结果就是这句，不带「DDNS：」前缀
+    status = "✅ 已同步"
 
 
 def _texts(event_id: int) -> list[str]:
@@ -131,11 +132,11 @@ class EventFlow(unittest.TestCase):
         )
         event = _event(event_id)
         self.assertEqual(event.get("status"), "done")
-        # 收起状态只显示 detail：必须把「原状态 → 已确认 → DDNS」串成一行，
-        # 否则概览里只看到「原状态 Stopped」，读不出这次到底成没成、域名跟没跟上。
+        # 收起状态只显示 detail：概览只讲结果，「原状态 Stopped」「已下发指令」
+        # 这些过程留给展开的步骤列表，摘要就是「最终状态 / 域名同步结果」。
         self.assertEqual(
             event.get("detail"),
-            "原状态 Stopped / 已确认 Running（运行中） / DDNS：✅ 已同步",
+            "运行中 / ✅ 已同步",
         )
         self.assertEqual(len(self.sent), 1)
 
@@ -165,13 +166,13 @@ class EventFlow(unittest.TestCase):
             [
                 "已下发开机指令",
                 "已确认 Running（运行中）",
-                "解析 demo.example.com 已同步",
+                "解析 demo.example.com ✅ 已同步",
             ],
         )
-        # 手动开机同样要把收尾动作串进 detail
+        # 手动开机同样只写结果：状态 + 同步结果，与保活、换班同一种写法
         self.assertEqual(
             _event(event_id).get("detail"),
-            "原状态 Stopped / 已确认 Running（运行中） / 解析 demo.example.com 已同步",
+            "运行中 / ✅ 已同步",
         )
 
     def test_3_ddns_off_writes_no_dns_step(self):
@@ -206,6 +207,8 @@ class EventFlow(unittest.TestCase):
             any("DDNS 未启用" in text for text in texts),
             f"DDNS 关闭时不该出现同步步骤：{texts}",
         )
+        # 没有域名同步这一步，摘要就只有结果状态，不留尾部分隔符
+        self.assertEqual(_event(event_id).get("detail"), "运行中")
 
 
 if __name__ == "__main__":

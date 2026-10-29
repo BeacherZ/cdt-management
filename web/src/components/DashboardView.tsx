@@ -20,7 +20,8 @@ import {
 } from 'lucide-react'
 import { useState } from 'react'
 import type { EventItem, Overview } from '../types'
-import { Badge, Meter, Ring, phaseTone, statusLabel, statusTone } from './ui'
+import { clockText, isBackendToday, monthDayTimeText, timeAgo } from '../time'
+import { Badge, Meter, Ring, groupStatePulse, groupStateTone, statusLabel, statusTone } from './ui'
 
 const EVENT_ICON: Record<string, typeof Info> = {
   shift_done: Zap,
@@ -38,24 +39,14 @@ const EVENT_ICON: Record<string, typeof Info> = {
   start: Cloud,
 }
 
-function timeAgo(ts: number): string {
-  if (!ts) return '—'
-  const diff = Math.floor(Date.now() / 1000) - ts
-  if (diff < 60) return '刚刚'
-  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`
-  if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`
-  return new Date(ts * 1000).toLocaleDateString('zh-CN')
-}
-
 /** 事件列表默认露这么多条，点一次「显示更多事件」再加这么多（后端最多给 20 条） */
 const RECENT_EVENT_PAGE = 8
 
-function clock(ts: number): string {
+/** 下次换班：今天之内只报时刻，跨天（一月一轮常见）补上日期，免得「下次 00:00」被读成今晚。
+ *  「今天」按后端时区算（time.isBackendToday），不看浏览器本地时区。 */
+function nextSwitch(ts: number): string {
   if (!ts) return '—'
-  return new Date(ts * 1000).toLocaleTimeString('zh-CN', {
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+  return isBackendToday(ts) ? clockText(ts) : monthDayTimeText(ts)
 }
 
 export default function DashboardView({
@@ -83,14 +74,7 @@ export default function DashboardView({
         <div>
           <h1>概览</h1>
           <p>
-            当前 {overview.timezone} ·{' '}
-            {new Date(overview.now).toLocaleString('zh-CN', {
-              year: 'numeric',
-              month: '2-digit',
-              day: '2-digit',
-              hour: '2-digit',
-              minute: '2-digit',
-            })}
+            当前 {overview.timezone} · {overview.now_label}
           </p>
         </div>
         <div className="page-actions">
@@ -226,14 +210,18 @@ export default function DashboardView({
                   <div className="group-head">
                     <Repeat size={15} style={{ color: 'var(--green)' }} />
                     <h3>{group.name}</h3>
-                    <Badge tone={phaseTone(group.phase)} pulse={group.phase === 'switching'}>
-                      {group.phase_label}
+                    <Badge tone={groupStateTone(group.state)} pulse={groupStatePulse(group.state)}>
+                      {group.state_label}
                     </Badge>
                   </div>
                   {duty?.server ? (
                     <div className="slot is-duty">
                       <div className="slot-top">
-                        <span>{duty.hours} 小时班</span>
+                        <span>
+                          {group.cycle === 'month'
+                            ? duty.span_label || `${duty.days} 天班`
+                            : duty.span_label || `${duty.hours} 小时班`}
+                        </span>
                         <span className="duty-tag">当班</span>
                       </div>
                       <div className="slot-name">{duty.server.label}</div>
@@ -261,10 +249,7 @@ export default function DashboardView({
                     </span>
                     {group.next_switch_at > 0 && (
                       <span style={{ marginLeft: 'auto' }}>
-                        下次 {new Date(group.next_switch_at * 1000).toLocaleTimeString('zh-CN', {
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })}
+                        下次 {nextSwitch(group.next_switch_at)}
                       </span>
                     )}
                   </div>
@@ -393,7 +378,7 @@ function EventRow({ event }: { event: EventItem }) {
             <ol className="event-progress">
               {steps.map((step, index) => (
                 <li key={index}>
-                  <span className="event-progress-time">{clock(step.ts)}</span>
+                  <span className="event-progress-time">{clockText(step.ts)}</span>
                   <span className="event-progress-dot" />
                   <span className="event-progress-text">{step.text}</span>
                 </li>
@@ -403,7 +388,7 @@ function EventRow({ event }: { event: EventItem }) {
 
           {!running && finishedAt > 0 && (
             <div className="event-finished">
-              {failed ? '失败于' : '完成于'} {clock(finishedAt)} · 全程{' '}
+              {failed ? '失败于' : '完成于'} {clockText(finishedAt)} · 全程{' '}
               {Math.max(0, finishedAt - event.ts) >= 60
                 ? `${Math.round((finishedAt - event.ts) / 60)} 分钟`
                 : `${Math.max(0, finishedAt - event.ts)} 秒`}

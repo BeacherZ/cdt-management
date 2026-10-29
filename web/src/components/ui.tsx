@@ -67,14 +67,21 @@ export function statusLabel(status: string, mode?: string | null) {
   return detail ? `${base} · ${detail}` : base
 }
 
-export function phaseTone(phase: string): Tone {
-  if (phase === 'settled') return 'green'
-  if (phase === 'failover') return 'amber'
-  if (phase === 'manual') return 'blue'
-  if (phase === 'breaker') return 'red'
-  if (phase === 'error') return 'red'
-  if (phase === 'switching') return 'blue'
+/** 换班组徽章配色：正常绿、故障转移黄、手动换班 / 换班中蓝、熔断与异常红、其余灰 */
+export function groupStateTone(state: string): Tone {
+  if (state === 'scheduled') return 'green'
+  if (state === 'failover') return 'amber'
+  if (state === 'recovering') return 'amber'
+  if (state === 'manual') return 'blue'
+  if (state === 'switching') return 'blue'
+  if (state === 'breaker') return 'red'
+  if (state === 'error') return 'red'
   return 'gray'
+}
+
+/** 只在「正在动」的状态上闪，静态状态闪起来像在报警 */
+export function groupStatePulse(state: string): boolean {
+  return state === 'switching' || state === 'recovering'
 }
 
 /* -------------------------------------------------------------- 环形进度 */
