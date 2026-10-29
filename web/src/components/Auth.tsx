@@ -54,7 +54,6 @@ export default function Auth({ mode, brand, onDone }: Props) {
           </div>
           <div className="brand-text">
             <strong>{brand}</strong>
-            <span>阿里云 CDT 抢占实例 · 换班保活</span>
           </div>
         </div>
 

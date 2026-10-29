@@ -345,10 +345,24 @@ button.nav-parent:hover svg,
 }
 
 .page-head h1 {
+  display: flex;
+  align-items: center;
+  gap: 11px;
   font-size: 25px;
   font-weight: 660;
   letter-spacing: -0.032em;
   line-height: 1.2;
+}
+
+/* 标题前一根品牌渐变竖条，给每个页面标题一个统一的识别锚点 */
+.page-head h1::before {
+  content: '';
+  width: 4px;
+  height: 22px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  background: var(--accent-grad);
+  box-shadow: 0 0 14px -2px color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
 .page-head p {

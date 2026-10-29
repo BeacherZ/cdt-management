@@ -110,6 +110,39 @@
     --shadow-3: 0 2px 6px rgba(0, 0, 0, 0.5), 0 28px 56px -30px rgba(0, 0, 0, 0.9);
     --shadow-pop: 0 10px 20px -10px rgba(0, 0, 0, 0.6), 0 48px 96px -36px rgba(0, 0, 0, 0.95);
   }
+
+  /* 登录 / 注册页固定亮色：作为品牌门面不跟随系统深色模式，始终是同一套浅色外观 */
+  .auth {
+    color-scheme: light;
+    --bg: #eceff3;
+    --panel: rgba(255, 255, 255, 0.72);
+    --panel-solid: #ffffff;
+    --panel-soft: rgba(244, 246, 248, 0.9);
+    --panel-inset: rgba(16, 24, 40, 0.028);
+    --ink: #101318;
+    --ink-soft: #343b45;
+    --muted: #666e7a;
+    --muted-soft: #8b929c;
+    --line: rgba(19, 28, 41, 0.1);
+    --line-strong: rgba(19, 28, 41, 0.17);
+    --hairline: rgba(255, 255, 255, 0.7);
+    --accent: #0b7a58;
+    --accent-2: #0e7490;
+    --accent-grad: linear-gradient(135deg, #0f8b63 0%, #0b7a58 46%, #0a6d6b 100%);
+    --accent-soft: rgba(11, 122, 88, 0.1);
+    --accent-ring: rgba(11, 122, 88, 0.22);
+    --green: #0b7a58;
+    --green-soft: rgba(11, 122, 88, 0.1);
+    --red: #bd3645;
+    --red-soft: rgba(189, 54, 69, 0.1);
+    --amber: #a06408;
+    --amber-soft: rgba(168, 102, 8, 0.12);
+    --shadow-1: 0 1px 1px rgba(16, 24, 40, 0.04), 0 2px 6px -2px rgba(16, 24, 40, 0.07);
+    --shadow-2: 0 1px 2px rgba(16, 24, 40, 0.05), 0 8px 20px -12px rgba(16, 24, 40, 0.16);
+    --shadow-3: 0 2px 4px rgba(16, 24, 40, 0.06), 0 24px 48px -28px rgba(16, 24, 40, 0.28);
+    --shadow-pop: 0 8px 16px -8px rgba(16, 24, 40, 0.14), 0 40px 80px -32px rgba(16, 24, 40, 0.32);
+    background: var(--bg);
+  }
 }
 
 /* -------------------------------------------------------------- 基础 */
@@ -272,12 +305,32 @@ a:hover {
   --btn-bg: var(--accent-grad);
   --btn-border: transparent;
   color: #fff;
+  position: relative;
+  overflow: hidden;
   /* 顶部内高光 + 外层色晕，比纯色块显得有厚度 */
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.26),
     inset 0 -1px 0 rgba(0, 0, 0, 0.12),
     0 1px 2px rgba(11, 122, 88, 0.28),
     0 10px 20px -12px rgba(11, 122, 88, 0.5);
+}
+
+/* hover 时一道光从左扫到右，给主按钮一点「活」的质感 */
+.btn.primary::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -130%;
+  width: 55%;
+  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+  transform: skewX(-20deg);
+  transition: left 520ms var(--ease);
+  pointer-events: none;
+}
+
+.btn.primary:hover:not(:disabled)::after {
+  left: 135%;
 }
 
 .btn.primary:hover:not(:disabled) {
@@ -381,6 +434,18 @@ label {
 .section-head h2 svg {
   vertical-align: -2px;
   color: var(--accent);
+}
+
+/* 纯文字区块标题前加一个品牌小圆点，和带图标的标题对齐成同一套节奏 */
+.section-head h2:not(:has(svg))::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  margin-right: 7px;
+  vertical-align: 1px;
 }
 
 /* 账号区：一块带浅底的分组卡片 */
@@ -1130,6 +1195,7 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 .stat {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 14px;
@@ -1146,9 +1212,22 @@ input[type='number']::-webkit-inner-spin-button {
     border-color var(--t-base) var(--ease);
 }
 
+/* 指标卡顶部一道高光，与 .card 同源，让数字卡也有「被光打到」的厚度 */
+.stat::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  background: linear-gradient(90deg, transparent, var(--hairline) 22%, var(--hairline) 78%, transparent);
+  pointer-events: none;
+}
+
 .stat:hover {
   transform: translateY(-2px);
-  box-shadow: var(--shadow-3);
+  box-shadow:
+    var(--shadow-3),
+    0 -10px 28px -14px color-mix(in srgb, var(--accent) 34%, transparent);
   border-color: color-mix(in srgb, var(--accent) 26%, var(--line));
 }
 
@@ -1206,6 +1285,11 @@ input[type='number']::-webkit-inner-spin-button {
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--muted-soft);
+}
+
+/* 指标卡标签里的小图标统一上品牌色，让四个卡一眼有主次 */
+.stat .label svg {
+  color: var(--accent);
 }
 
 .stat .value {
@@ -2697,17 +2781,35 @@ input[type='number']::-webkit-inner-spin-button {
   position: relative;
 }
 
-/* 卡片背后一团很淡的品牌色光晕，让登录页和概览页的环境光一个气质 */
+/* 卡片背后一团很淡的品牌色光晕，让登录页和概览页的环境光一个气质；
+   双色：主绿为主、右上角补一点青色，层次比单色光晕更立体 */
 .auth::before {
   content: '';
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 640px;
-  height: 640px;
+  width: 680px;
+  height: 680px;
   transform: translate(-50%, -52%);
   border-radius: 50%;
-  background: radial-gradient(closest-side, var(--accent-soft), transparent 72%);
+  background:
+    radial-gradient(closest-side, var(--accent-soft), transparent 68%),
+    radial-gradient(closest-side at 68% 30%, color-mix(in srgb, var(--accent-2) 16%, transparent), transparent 56%);
+  pointer-events: none;
+}
+
+/* 极淡的网格，让登录页背景有结构感，不再是大片纯色；中心亮、四周隐去 */
+.auth::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(to right, var(--line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--line) 1px, transparent 1px);
+  background-size: 52px 52px;
+  opacity: 0.55;
+  -webkit-mask-image: radial-gradient(ellipse 78% 68% at 50% 42%, #000 22%, transparent 74%);
+  mask-image: radial-gradient(ellipse 78% 68% at 50% 42%, #000 22%, transparent 74%);
   pointer-events: none;
 }
 
@@ -2721,6 +2823,18 @@ input[type='number']::-webkit-inner-spin-button {
   gap: 20px;
   box-shadow: var(--shadow-pop);
   background: var(--panel-solid);
+  /* 渐变描边：主绿 → 中性 → 青色只落在边框一圈，内部仍是纯色面板；
+     color-mix 不识别时整条失效，掉回上一行 .card 的素色边框 */
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--panel-solid), var(--panel-solid)) padding-box,
+    linear-gradient(
+        165deg,
+        color-mix(in srgb, var(--accent) 42%, var(--line)),
+        var(--line) 44%,
+        color-mix(in srgb, var(--accent-2) 30%, var(--line))
+      )
+      border-box;
 }
 
 .auth-brand {
@@ -2739,8 +2853,8 @@ input[type='number']::-webkit-inner-spin-button {
 
 .auth-brand .brand-text strong {
   display: block;
-  font-size: 15px;
-  font-weight: 680;
+  font-size: 17px;
+  font-weight: 700;
   letter-spacing: -0.02em;
   color: var(--ink);
 }
