@@ -107,6 +107,9 @@ class EventFlow(unittest.TestCase):
     def test_1_keepalive_notify_is_last(self):
         """保活拉起：已确认 → DDNS → 报告已发送，通知永远是最后一步。"""
         server_id = _make_server("测试机-保活", "i-test-event-01")
+        # 保活事件只可能出现在「这台还在保活名单里」的时候；确认器发现它被移出
+        # 保活会直接把事件收尾，所以这里要把它登记进保活，模拟真实状态。
+        repo.add_keepalive(server_id, enabled=True)
         # 这台机器挂了域名：没绑域名的机器不该有 DDNS 这一步（见 test_4）
         dns.add_record("keep.example.com", repo.get_settings())
         dns.bind("keep.example.com", dns.TARGET_SERVER, server_id)
@@ -220,6 +223,8 @@ class EventFlow(unittest.TestCase):
         两条路径两种样子；这里锁死两边一致。
         """
         server_id = _make_server("测试机-未绑定", "i-test-event-04")
+        # 同上：保活事件出现的先决条件是这台还在保活名单里
+        repo.add_keepalive(server_id, enabled=True)
         event_id = repo.add_event(
             "start",
             "测试机-未绑定：保活拉起",

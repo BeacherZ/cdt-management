@@ -177,7 +177,10 @@ CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts DESC);
 
 CREATE TABLE IF NOT EXISTS flags (
     key        TEXT PRIMARY KEY,
-    created_at INTEGER NOT NULL DEFAULT 0
+    created_at INTEGER NOT NULL DEFAULT 0,
+    -- 一次性标记的附带数值。目前只有保活重试用它记「这是第几次尝试」：
+    -- 一台机器躺一整天，事件只有一条，界面上那句「已重试 N 次」就靠它累加。
+    value      INTEGER NOT NULL DEFAULT 0
 );
 
 -- 已注销的会话票据（只存票据签名的 SHA-256 前 16 字节，不存票据本身）。
@@ -316,6 +319,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
         },
         "dns_records": {
             "sort_order": "INTEGER NOT NULL DEFAULT 0",
+        },
+        "flags": {
+            "value": "INTEGER NOT NULL DEFAULT 0",
         },
     }
     for table, columns in additions.items():

@@ -45,6 +45,12 @@ _BREAKER_STOP_COOLDOWN = 120
 # 失败本身已经写进事件进度和结算报告，不阻塞才是对的。
 _DDNS_WAIT_SECONDS = 180
 
+# 保活重试的里程碑：一台机器一天都起不来时，事件只有一条（可以横跨一整天），
+# 进度里只在这几个「已尝试次数」上补一行，其余轮次只改事件概要那句
+# 「已尝试拉起 N 次」—— 每分钟一行同义句会把展开的事件糊成一片。
+_KEEPALIVE_RETRY_MARK = "仍未运行（"
+_KEEPALIVE_MILESTONES = (3, 10, 30, 100, 300, 1000, 3000)
+
 
 # --------------------------------------------------------------------------
 # 轮换计算
@@ -603,10 +609,7 @@ class Engine:
             if _over_threshold(server):
                 if self._limit_stop_server(server_id, server, config, messages.SCOPE_KEEPALIVE):
                     results.append({"keepalive": server_id, "over_limit": True})
-                # 超限停机的机器不再走「停了就拉」：清掉等待标记，别让残留状态
-                # 干扰下一轮判断（流量回落前它就该保持停机）。
-                if repo.get_flag(f"keepalive_wait:{server_id}"):
-                    repo.clear_flag(f"keepalive_wait:{server_id}")
+                # 超限停机的机器不再走「停了就拉」：流量回落前它就该保持停机。
                 continue
             # 流量回落到阈值以下（流量包重置 / 调高阈值）：清掉超限标记，
             # 恢复正常的「停了就拉」。否则标记会永久钉住这台机器。
@@ -615,36 +618,42 @@ class Engine:
 
             status = str(server.get("instance_status") or "")
             if status == "Stopped":
-                wait_flag = f"keepalive_wait:{server_id}"
-                waited = repo.flag_age(wait_flag)
-                if 0 <= waited < settings.KEEPALIVE_RETRY_SECONDS:
-                    # 已经下发过开机、正在等实例起来（确认器每 5 秒盯着）。
-                    # 等待窗口内不再重复下发：以前这里完全不看标记，一台始终起不来
-                    # 的机器会每分钟被开一次，还每分钟多一条新的「保活拉起」转圈事件。
-                    results.append(
-                        {
-                            "keepalive": server_id,
-                            "label": server.get("label"),
-                            "status": status,
-                            "waiting": True,
-                        }
-                    )
-                    continue
+                # 保活就是「一分钟一轮」：这一轮看到它还是 Stopped，就说明上一轮没成，
+                # 立刻再下发一次开机，不做退避。只有在 Stopped 才下发，Starting 之类的
+                # 中间态不进这个分支，正在启动的实例不会被重复开。
+                # 事件只保留一条：一台机器一直起不来，重试次数续写进同一条事件的进度，
+                # 不再每次重试新开一条「保活拉起」。
                 try:
                     aliyun.start_instance(server)
                     # 保活拉起是异步的：建 running 事件，交给确认器轮询到 Running 后
                     # 补发「抢占恢复」通知并打完成标志，不在这里同步等状态。
+                    #
+                    # 一直起不来时：事件始终是那一条（可以横跨一整天），只把
+                    # 「试了多少次」累加进标记，概要行跟着改 —— 收起的事件列表里
+                    # 一眼就能看到「这台今天试了几百次还是没起来」，不用点开。
+                    tries_key = f"keepalive_tries:{server_id}"
+                    state_label = messages.STATUS_LABELS.get(status, status or "未知")
                     pending = repo.pending_event(server_id, "keepalive")
                     if pending:
-                        # 窗口到期还没起来：补一次指令，进度追加到同一条事件上，
-                        # 不另开一条 —— 事件列表里一件事就该只有一条记录。
                         event_id = int(pending["id"])
-                        repo.add_event_progress(
+                        tries = repo.bump_flag(tries_key)
+                        repo.update_event(
                             event_id,
-                            f"仍未运行（{status}），已重新下发启动指令",
-                            once=True,
+                            detail=f"已尝试拉起 {tries} 次，仍未运行（{state_label}）",
                         )
+                        # 进度只留里程碑：一天 1440 轮，每分钟一行同义句会把事件
+                        # 点开就糊成一片。挑几个数量级记一次，既看出在持续重试，
+                        # 也不会把 PROGRESS_MAX_STEPS 撑爆、把开头那条挤掉。
+                        if tries in _KEEPALIVE_MILESTONES:
+                            repo.add_event_progress(
+                                event_id,
+                                f"{_KEEPALIVE_RETRY_MARK}{state_label}），"
+                                f"已尝试拉起 {tries} 次",
+                            )
                     else:
+                        # 新的一次中断：计数从 1 重来，别接着上次中断的次数往下数
+                        repo.clear_flag(tries_key)
+                        repo.bump_flag(tries_key)
                         event_id = repo.add_event(
                             "start",
                             f"{server.get('label')}：保活拉起",
@@ -658,10 +667,6 @@ class Engine:
                             pending_kind="keepalive",
                         )
                         repo.add_event_progress(event_id, f"已下发启动指令（原状态 {status}）")
-                    # 重置等待窗口。set_flag 是 ON CONFLICT DO NOTHING，只清再置
-                    # 才会真的把计时推到此刻。
-                    repo.clear_flag(wait_flag)
-                    repo.set_flag(wait_flag)
                     if repo.get_flag(f"keepalive_fail:{server_id}"):
                         repo.clear_flag(f"keepalive_fail:{server_id}")
                 except Exception as exc:  # noqa: BLE001
@@ -676,11 +681,11 @@ class Engine:
                             level="error",
                             server_id=server_id,
                         )
-            elif status == "Running" and repo.get_flag(f"keepalive_wait:{server_id}"):
-                # 拉起成功、状态已 Running：清理等待标记。抢占恢复通知由确认器
-                # 在「Running 到位」时统一发出（见 scheduler._confirm_pending_events）。
-                repo.clear_flag(f"keepalive_wait:{server_id}")
-
+                # 已经 Running 时不再下发：抢占恢复的通知由确认器在「Running 到位」
+                # 那一刻统一发出（scheduler._confirm_pending_events）。
+            elif repo.get_flag(f"keepalive_tries:{server_id}"):
+                # 起来了（或被人手动开起来）：计数归零，下一次中断从 1 重新数。
+                repo.clear_flag(f"keepalive_tries:{server_id}")
             results.append(
                 {
                     "keepalive": server_id,

@@ -203,6 +203,40 @@ class StallEscalates(_Base):
         self.assertEqual(int(run.get("failover") or 0), 0, "计时刚开始，不该记故障转移")
         self.assertTrue(repo.get_flag(f"duty_stall:{self.group_id}:{self._slot()}"))
 
+    def test_three_attempts_before_failover(self):
+        """一分钟试一次，试满 3 次还起不来才换人（口径：试 3 次，不是试 3 秒）。"""
+        # 每次拉起都原地回到 Stopped：模拟「指令发了但机器根本起不来」，
+        # 这样每分钟那一轮都会再试一次，才数得出真实的尝试次数。
+        self._wire(start_to="Stopped")
+        self.status[self.a] = "Stopped"
+        self.started.clear()
+        stall = f"duty_stall:{self.group_id}:{self._slot()}"
+
+        self._reconcile(self.group_id)  # 第 1 分钟：记时 + 第 1 次拉起
+        self.assertEqual(
+            [s for s in self.started if s == self.a], [self.a], self.started
+        )
+
+        for minutes, expected in ((60, 2), (120, 3)):
+            self._age_flag(stall, minutes)
+            self._reconcile(self.group_id)
+            self.assertEqual(
+                len([s for s in self.started if s == self.a]),
+                expected,
+                f"第 {minutes // 60 + 1} 分钟该再试一次：{self.started}",
+            )
+            self.assertEqual(self._duty(), self.a, "还没试满 3 次，不许换人")
+
+        # 第 4 分钟：3 次都试过了，当班还是起不来 → 换人
+        self._age_flag(stall, STALL + 5)
+        self._reconcile(self.group_id)
+        self.assertEqual(
+            int((repo.get_run(self.group_id, self._slot()) or {}).get("duty_server_id") or 0),
+            self.b,
+            self._titles(),
+        )
+        self.assertIn(self.b, self.started, "试满 3 次仍起不来，该换 B 顶这一班")
+
     def test_escalates_after_stall_timeout(self):
         """超过容忍时间仍未运行 → 转给另一台，原因记 stall。"""
         self.status[self.a] = "Stopped"

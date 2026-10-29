@@ -91,6 +91,22 @@ def clear_flag(key: str) -> None:
     db.execute("DELETE FROM flags WHERE key=?", (key,))
 
 
+def bump_flag(key: str) -> int:
+    """把标记的计数 +1 并返回新值；标记不存在就从 1 开始（created_at 同时置为此刻）。
+
+    只服务「同一条事件里累计了多少次」这类场景（目前是单机保活的重试次数）：
+    机器躺一整天也只有一个事件，次数得有个地方存，不能靠数进度行 ——
+    进度有上限、会被裁掉最旧的。
+    """
+    db.execute(
+        "INSERT INTO flags(key, created_at, value) VALUES(?, ?, 1) "
+        "ON CONFLICT(key) DO UPDATE SET value = value + 1",
+        (key, int(time.time())),
+    )
+    row = db.query_one("SELECT value FROM flags WHERE key=?", (key,))
+    return int(row["value"]) if row is not None else 1
+
+
 def flag_age(key: str) -> float:
     """这个标记是多久以前设的（秒）；不存在返回 -1，表示「可以立刻执行」。"""
     row = db.query_one("SELECT created_at FROM flags WHERE key=?", (key,))
@@ -318,11 +334,13 @@ def delete_server(server_id: int) -> None:
     # 这台机器专属的一次性标记一并清掉。SQLite 的 AUTOINCREMENT 不复用 id，
     # 留着不会被新机器撞上，但也没人再去清 —— 只能等 90 天的兜底清理，白占表。
     db.execute(
-        "DELETE FROM flags WHERE key IN (?,?,?)",
+        "DELETE FROM flags WHERE key IN (?,?,?,?)",
         (
-            f"keepalive_wait:{server_id}",
             f"keepalive_err:{server_id}",
             f"keepalive_fail:{server_id}",
+            f"keepalive_tries:{server_id}",
+            # 1.2.36 及以前用过的等待标记，已不再写入，顺手把残留扫掉
+            f"keepalive_wait:{server_id}",
         ),
     )
     # 目标没了，DNS 绑定必须一并松掉，否则记录还挂在已经不存在的机器上

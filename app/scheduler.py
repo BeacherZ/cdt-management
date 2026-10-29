@@ -156,9 +156,18 @@ def _confirm_pending_events() -> None:
             repo.finish_event(event_id, "error", "缺少待确认目标，已终止")
             continue
 
-        # 超时兜底：别让一个卡住的事件永远占着转圈
+        # 单机保活是「一直试到起来为止」，不设超时：一台机器躺一整天也只有这一条
+        # 记录，概要里写着已经试了多少次，点开能看到里程碑。只有它被移出保活或
+        # 停用保活时才收尾，否则会留一条永远不会结束的转圈。
+        if pending_kind == "keepalive" and server_id not in repo.keepalive_server_ids():
+            repo.finish_event(event_id, "error", "已移出单机保活，停止拉起")
+            repo.clear_flag(f"keepalive_tries:{server_id}")
+            continue
+
+        # 超时兜底：别让一个卡住的事件永远占着转圈。保活除外 —— 它本来就该
+        # 一直等到实例起来（见上面的注释），超时会把一条长长的中断切成一堆。
         elapsed = now - int(event.get("ts") or now)
-        if elapsed > EVENT_CONFIRM_TIMEOUT:
+        if elapsed > EVENT_CONFIRM_TIMEOUT and pending_kind != "keepalive":
             repo.add_event_progress(event_id, "等待状态超时，未确认到位")
             repo.finish_event(event_id, "error", "超时未确认")
             continue
@@ -248,6 +257,8 @@ def _confirm_pending_events() -> None:
                 repo.update_event(
                     event_id, title=f"{server.get('label')}：保活拉起完成"
                 )
+                # 这次中断结束了，重试计数归零，下一次从 1 重新数
+                repo.clear_flag(f"keepalive_tries:{server_id}")
                 if config.get("notify_on_keepalive") == "1":
                     try:
                         results = notify.send_all(
@@ -285,6 +296,10 @@ def _confirm_pending_events() -> None:
             # 收起时这一行就是事件的全部可见信息：只讲结果，段与段之间统一用「 / 」
             repo.finish_event(event_id, "done", " / ".join(steps))
         else:
+            # 单机保活等的是「一直试到起来」，中间态不往进度里刷状态：
+            # 概要行由巡检每分钟更新成「已尝试拉起 N 次」，这里再插一句就重复了。
+            if pending_kind == "keepalive":
+                continue
             # 还没到位：记录一次当前状态，方便用户在进度里看到中间态
             suffix = messages.status_suffix(info.status, info.stopped_mode)
             repo.add_event_progress(
