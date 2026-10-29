@@ -394,7 +394,8 @@ class OtherReports(unittest.TestCase):
             **B,
             "site": "international",
             "monthly_cost": 3.21,
-            "balance_amount": None,
+            # 国际站后付费账号 AvailableAmount 恒 0，直接显示 $0.00，不再写「后付费」
+            "balance_amount": 0.0,
             "billing_currency": "USD",
         }
         message = messages.daily_report([a, b], "2026-10-26 23:58")
@@ -416,7 +417,7 @@ class OtherReports(unittest.TestCase):
             "┃ 🌐 ＩＰ：198.51.100.2\n"
             "┃ 📍 地域：中国香港\n"
             "┃ 💰 费用：$3.21\n"
-            "┃ 💳 余额：后付费\n"
+            "┃ 💳 余额：$0.00\n"
             "┃ 📈 流量：190.00 GB\n"
             "┃ 💾 剩余：10.00 GB\n"
             "┃ 🔥 使用率：95.00%  🔴 危险\n"

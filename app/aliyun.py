@@ -153,7 +153,7 @@ def _bss_with_site_fallback(
 
 
 def get_account_balance(account: dict, force: bool = False) -> dict[str, Any]:
-    """账户可用额度。返回 {"amount": float, "currency": "CNY", "site": str}。
+    """账户余额（可用额度 AvailableAmount）。返回 {"amount": float, "currency": "CNY", "site": str}。
 
     同一 AK + 站点 6 小时内复用缓存：余额变动慢，没必要每次对账都问一遍。
     """

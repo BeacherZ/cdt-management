@@ -244,7 +244,6 @@ export default function ServersView({
 
                 <CostRow
                   billing={server.billing}
-                  site={server.site}
                   busy={billingId === server.id}
                   onRefresh={() => onBilling(server)}
                 />
@@ -409,7 +408,6 @@ function ServerTable({
                 <td className="server-table-cost" data-label="费用">
                   <CostRow
                     billing={server.billing}
-                    site={server.site}
                     busy={billingId === server.id}
                     onRefresh={() => onBilling(server)}
                     compact
@@ -512,22 +510,19 @@ function money(value: number | null, currency: string): string {
   return `${sign}${value.toFixed(2)}`
 }
 
-/** 国际站后付费没有「余额」概念，显示「后付费」而不是误导人的 ¥0.00。 */
-function balanceText(billing: Billing, site: Server['site']): string {
-  if (site === 'international') return '后付费'
+/** 余额直接显示 BSS 返回的 AvailableAmount（国际站后付费恒 0，代理商预付费有真实余额）。 */
+function balanceText(billing: Billing): string {
   return money(billing.balance, billing.currency)
 }
 
 /** 本月账单 + 账户余额。数据来自 BSS，后台每 30 分钟刷一次，这里只负责展示。 */
 function CostRow({
   billing,
-  site,
   busy,
   onRefresh,
   compact = false,
 }: {
   billing: Billing
-  site: Server['site']
   busy: boolean
   onRefresh: () => void
   compact?: boolean
@@ -553,8 +548,8 @@ function CostRow({
         </span>
         <span className="cost-item">
           <span className="cost-key">余额</span>
-          <b className={site !== 'international' && billing.balance === null ? 'dim' : ''}>
-            {balanceText(billing, site)}
+          <b className={billing.balance === null ? 'dim' : ''}>
+            {balanceText(billing)}
           </b>
         </span>
         {failed && (
@@ -588,8 +583,8 @@ function CostRow({
       </span>
       <span className="cost-item" title={hint}>
         <span className="cost-key">余额</span>
-        <b className={site !== 'international' && billing.balance === null ? 'dim' : ''}>
-          {balanceText(billing, site)}
+        <b className={billing.balance === null ? 'dim' : ''}>
+          {balanceText(billing)}
         </b>
       </span>
       {failed && (

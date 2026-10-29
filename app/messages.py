@@ -548,9 +548,11 @@ def _money(value: Any, currency: str | None) -> str:
 
 
 def _balance_text(server: dict[str, Any]) -> str:
-    """余额：国际站后付费没有余额概念，写「后付费」；国内站写金额。"""
-    if str(server.get("site") or "") == "international":
-        return "后付费"
+    """余额：直接显示 BSS 返回的 AvailableAmount。
+
+    国际站后付费账号恒为 0（显示 $0.00），代理商注册的预付费账号有真实余额，
+    按站点一刀切写「后付费」会把预付费的真实余额也抹掉，所以统一显示真值。
+    """
     return _money(server.get("balance_amount"), server.get("billing_currency"))
 
 
