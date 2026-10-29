@@ -12,7 +12,7 @@
 
 没编进任何流程的**闲散服务器**照旧可以手动开关机。
 
-实例不限抢占式，**按量付费 / 包年包月**的机器同样适用，只是用不到「抢占恢复」。
+**实例不限抢占式，按量付费 / 包年包月的机器同样适用，只是用不到「抢占恢复」。**
 
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 ![python](https://img.shields.io/badge/python-3.13-blue)
