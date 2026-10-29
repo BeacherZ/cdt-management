@@ -164,6 +164,24 @@ class KeepaliveRetry(unittest.TestCase):
         self.assertEqual(len(self.started), 1, "中间态不该再下发开机")
         self.assertEqual(len(self._events()), 1)
 
+    def test_middle_state_does_not_reset_counter(self):
+        """停→启动中→又被抢（仍停）：计数只增不清，里程碑不会被吞。
+
+        中间态（Starting）不能把 keepalive_tries 清掉，否则这台机器反复
+        「启动到一半又被抢」会让「已尝试拉起 N 次」永远停在很小的数，
+        3/10/30… 这些里程碑一辈子到不了。只有真跑起来（Running）才归零。
+        """
+        self._tick()  # R1: Stopped → 下发，tries=1
+        self.state = "Starting"
+        self._tick()  # R2: 中间态，不重发、不清计数
+        self.state = "Stopped"
+        self._tick()  # R3: 又停 → 再下发，tries 应累加到 2
+
+        self.assertEqual(len(self.started), 2, "Stopped 两轮都该下发")
+        self.assertEqual(
+            self._events()[0]["detail"], "已尝试拉起 2 次，仍未运行（已停机）"
+        )
+
     def test_recovers_stops_retrying(self):
         """起来了就不再下发，计数归零。"""
         for _ in range(3):

@@ -683,8 +683,10 @@ class Engine:
                         )
                 # 已经 Running 时不再下发：抢占恢复的通知由确认器在「Running 到位」
                 # 那一刻统一发出（scheduler._confirm_pending_events）。
-            elif repo.get_flag(f"keepalive_tries:{server_id}"):
-                # 起来了（或被人手动开起来）：计数归零，下一次中断从 1 重新数。
+            elif status == "Running" and repo.get_flag(f"keepalive_tries:{server_id}"):
+                # 真的跑起来了：计数归零，下一次中断从 1 重新数。
+                # 注意只认 Running——Starting / Pending 这类中间态不动计数，
+                # 否则「停→启动中→又被抢→停」会来回清零，里程碑永远到不了。
                 repo.clear_flag(f"keepalive_tries:{server_id}")
             results.append(
                 {
