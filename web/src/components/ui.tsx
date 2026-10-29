@@ -130,11 +130,38 @@ export function Meter({ used, quota, threshold }: { used: number | null; quota: 
   const percent = used === null ? 0 : Math.min(100, (used / (quota || 1)) * 100)
   const thresholdPercent = Math.min(100, (threshold / (quota || 1)) * 100)
   const tone = percent >= thresholdPercent ? 'danger' : percent >= thresholdPercent * 0.9 ? 'warn' : ''
+  const trackRef = useRef<HTMLDivElement>(null)
+  const markRef = useRef<HTMLElement>(null)
+
+  // 阈值刻度线必须落在整像素上：百分比定位落在亚像素位置时，浏览器按设备像素
+  // 对齐后有的卡片只压住 1 列像素、有的压住 2 列，看起来就是「一边细一边粗」。
+  // 轨道宽度差零点几像素就会触发（415px 与 416px 的 90% 落在不同相位），所以
+  // 这里量出轨道的绝对位置，把刻度线的**页面坐标**取整，再减去轨道自身的小数偏移
+  // ——只按轨道内部取整还不够，轨道本身起点在小数像素上时照样会糊。
+  useEffect(() => {
+    const track = trackRef.current
+    const mark = markRef.current
+    if (!track || !mark) return
+    const snap = () => {
+      const rect = track.getBoundingClientRect()
+      if (!rect.width) return
+      const target = rect.left + (thresholdPercent / 100) * rect.width
+      const snapped = Math.round(target)
+      // CSS 里 margin-left: -1px 让 2px 宽的线以 left 为中心，这里补回那 1px
+      mark.style.left = `${snapped - rect.left + 1}px`
+    }
+    snap()
+    const observer = new ResizeObserver(snap)
+    observer.observe(track)
+    return () => observer.disconnect()
+  }, [thresholdPercent])
+
   return (
     <div className="meter">
-      <div className="meter-track" title={`阈值线 ${thresholdPercent.toFixed(0)}%`}>
+      <div className="meter-track" ref={trackRef} title={`阈值线 ${thresholdPercent.toFixed(0)}%`}>
         <div className={`meter-fill ${tone}`} style={{ width: `${percent}%` }} />
-        <i className="meter-mark" style={{ left: `${thresholdPercent}%` }} />
+        {/* 内联百分比只是首帧兜底，挂载后由上面那段 effect 改成整像素 */}
+        <i className="meter-mark" ref={markRef} style={{ left: `${thresholdPercent}%` }} />
       </div>
       <div className="meter-labels">
         <span>{used === null ? '未读取' : `${used.toFixed(2)} GB`}</span>

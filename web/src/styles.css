@@ -946,8 +946,10 @@ input[type='number']::-webkit-inner-spin-button {
   position: absolute;
   top: 0;
   bottom: 0;
-  width: 1.5px;
-  margin-left: -0.75px;
+  /* 整数宽度 + 组件里把 left 取整到整像素，三者配合才能保证每张卡片都是 2px 实心；
+     用 1.5px 时亚像素对齐会让有的卡片渲染成 1px、有的 2px（粗细不一） */
+  width: 2px;
+  margin-left: -1px;
   /* 老浏览器兜底：这条阈值线消失就看不出「用到哪就该换班」 */
   background: var(--muted-soft);
   background: color-mix(in srgb, var(--ink) 46%, transparent);

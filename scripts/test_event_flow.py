@@ -131,6 +131,12 @@ class EventFlow(unittest.TestCase):
         )
         event = _event(event_id)
         self.assertEqual(event.get("status"), "done")
+        # 收起状态只显示 detail：必须把「原状态 → 已确认 → DDNS」串成一行，
+        # 否则概览里只看到「原状态 Stopped」，读不出这次到底成没成、域名跟没跟上。
+        self.assertEqual(
+            event.get("detail"),
+            "原状态 Stopped / 已确认 Running（运行中） / DDNS：✅ 已同步",
+        )
         self.assertEqual(len(self.sent), 1)
 
     def test_2_manual_start_dns_after_confirm(self):
@@ -161,6 +167,11 @@ class EventFlow(unittest.TestCase):
                 "已确认 Running（运行中）",
                 "解析 demo.example.com 已同步",
             ],
+        )
+        # 手动开机同样要把收尾动作串进 detail
+        self.assertEqual(
+            _event(event_id).get("detail"),
+            "原状态 Stopped / 已确认 Running（运行中） / 解析 demo.example.com 已同步",
         )
 
     def test_3_ddns_off_writes_no_dns_step(self):

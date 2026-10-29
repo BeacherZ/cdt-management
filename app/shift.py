@@ -1445,7 +1445,7 @@ class Engine:
                 status="running",
             )
             repo.add_event_progress(
-                event_id, f"按排班表核对组员状态：{when} · 当班 {duty.get('label')}"
+                event_id, f"按排班表核对组员状态：{when} / 当班 {duty.get('label')}"
             )
             # 事件先挂进 run：这一轮之后的巡检沿用同一条事件追加进度，
             # origin 让结算时把标题固定成「新建换班组」，不改叫「换班完成」
@@ -1820,7 +1820,7 @@ class Engine:
         if action == "stop":
             detail += "（节省停机）"
         if note:
-            detail += f" · 由{note}托管，下一轮同步会按流程纠正"
+            detail += f" / 由{note}托管，下一轮同步会按流程纠正"
 
         event_id = repo.add_event(
             "manual",

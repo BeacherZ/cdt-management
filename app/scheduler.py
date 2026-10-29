@@ -199,9 +199,20 @@ def _confirm_pending_events() -> None:
                 "region_id": info.region_id or server.get("region_id") or "",
             }
 
+            # 收尾各步骤既写进进度，也攒成一条摘要：事件收起时只显示 detail 那一行，
+            # 只留「原状态 Stopped」看不出这台机器最后成没成、域名跟没跟上。
+            steps: list[str] = []
+            head = str(event.get("detail") or "").strip()
+            if head:
+                steps.append(head)
+
+            def record(text: str) -> None:
+                repo.add_event_progress(event_id, text)
+                steps.append(text)
+
             # 先落「已确认」：事件进度里状态确认一定在最前面，之后的 DDNS、
             # 解析、通知都是确认到位后的收尾动作，通知永远排在最后一步。
-            repo.add_event_progress(event_id, f"已确认 {info.status}{suffix}")
+            record(f"已确认 {info.status}{suffix}")
 
             # 到位后的收尾动作按事件类型区分
             if pending_kind == "keepalive":
@@ -223,7 +234,7 @@ def _confirm_pending_events() -> None:
                 # DDNS 关着时这一步什么也没做（返回「⏸ DDNS 未启用」），
                 # 不必在进度里占一行；通知那边照旧带上，让用户知道域名没跟着走。
                 if config.get("ddns_enabled") == "1":
-                    repo.add_event_progress(event_id, f"DDNS：{ddns_status}")
+                    record(f"DDNS：{ddns_status}")
                 if config.get("notify_on_keepalive") == "1":
                     try:
                         results = notify.send_all(
@@ -238,7 +249,7 @@ def _confirm_pending_events() -> None:
                         # 通知是流程的最后一步，成败都如实写进事件（send_all 吞异常只回结果）
                         notify.note_notify(event_id, results)
                     except Exception as exc:  # noqa: BLE001
-                        repo.add_event_progress(event_id, f"通知发送失败：{exc}")
+                        record(f"通知发送失败：{exc}")
             elif pending == "Running" and info.public_ip and config.get("ddns_enabled") == "1":
                 # 手动开机到位后，把这台机器绑的域名全指过来（一台可以挂好几条）。
                 # DDNS 关着的时候一步都别走：sync_record 会返回「⏸ DDNS 未启用」，
@@ -251,13 +262,13 @@ def _confirm_pending_events() -> None:
                     if names:
                         # 单条就报域名，多条把清单列出来，一眼看出这台机器挂了几个域名
                         label = names[0] if len(names) == 1 else "、".join(names)
-                        repo.add_event_progress(
-                            event_id, f"解析 {label} {dns.combine_status(statuses)}"
-                        )
+                        record(f"解析 {label} {dns.combine_status(statuses)}")
                 except Exception as exc:  # noqa: BLE001
-                    repo.add_event_progress(event_id, f"解析同步失败：{exc}")
+                    record(f"解析同步失败：{exc}")
 
-            repo.finish_event(event_id, "done")
+            # 收尾摘要写进 detail：收起状态下也能一眼看清「原状态 → 已确认 → DDNS」。
+            # 分隔符用「 / 」，跟换班事件概览（当班 X / 待机 N 台 / 已同步）保持一致。
+            repo.finish_event(event_id, "done", " / ".join(steps))
         else:
             # 还没到位：记录一次当前状态，方便用户在进度里看到中间态
             suffix = messages.status_suffix(info.status, info.stopped_mode)
