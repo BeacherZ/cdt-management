@@ -225,6 +225,29 @@ class ManualConsistency(unittest.TestCase):
             f"解析应该指向当班 {server.get('label')} 的 IP",
         )
 
+    # -- 6. 手动开机不能绕开流量阈值 -------------------------------------
+    def test_manual_start_blocked_when_over_threshold(self):
+        """已到阈值的机器不许手动点着：点着了巡检下一轮才停，中间白烧的流量补不回来。"""
+        server = repo.get_server(self.a, decrypt_secret=True)
+        aliyun._mock_set(server, traffic="200.00", status="Stopped", stopped_mode="StopCharging")
+
+        with self.assertRaises(ValueError) as ctx:
+            shift.engine.manual_action(self.a, "start")
+        self.assertIn("阈值", str(ctx.exception))
+        self.assertFalse(
+            [e for e in repo.list_events(limit=20) if e["kind"] == "manual"],
+            "被拒绝时不该留下开机事件",
+        )
+
+    def test_manual_start_under_threshold_still_works(self):
+        server = repo.get_server(self.a, decrypt_secret=True)
+        aliyun._mock_set(server, traffic="12.00", status="Stopped", stopped_mode="StopCharging")
+
+        result = shift.engine.manual_action(self.a, "start")
+
+        self.assertEqual(result.get("status"), "pending")
+        self.assertEqual(result.get("target_status"), "Running")
+
 
 def tearDownModule() -> None:
     import shutil

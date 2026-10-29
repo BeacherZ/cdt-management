@@ -995,6 +995,20 @@ def pending_manual_exists(server_id: int, target_status: str) -> bool:
     return row is not None
 
 
+def pending_event(server_id: int, pending_kind: str) -> dict[str, Any] | None:
+    """这台机器还在等确认的那条事件（按类型取最新一条），没有返回 None。
+
+    单机保活重试开机时用它复用同一条事件追加进度：一台机器一直起不来，
+    不该每次重试都新开一条「保活拉起」。
+    """
+    row = db.query_one(
+        "SELECT * FROM events WHERE server_id=? AND status='running' "
+        "AND pending_kind=? ORDER BY id DESC LIMIT 1",
+        (server_id, pending_kind),
+    )
+    return dict(row) if row else None
+
+
 # 单个事件最多保留的进度条数，超出丢弃最旧的，防止长期卡住的事件把进度撑爆
 PROGRESS_MAX_STEPS = 50
 
@@ -1028,6 +1042,18 @@ def add_event_progress(event_id: int, text: str, *, once: bool = False) -> None:
         "UPDATE events SET progress=? WHERE id=?",
         (json.dumps(progress, ensure_ascii=False), event_id),
     )
+
+
+def get_event(event_id: int) -> dict[str, Any] | None:
+    """取单条事件（含 progress）。查不到返回 None。"""
+    if not event_id:
+        return None
+    row = db.query_one("SELECT * FROM events WHERE id=?", (int(event_id),))
+    if row is None:
+        return None
+    event = dict(row)
+    event["progress"] = _parse_progress(event.get("progress"))
+    return event
 
 
 def finish_event(event_id: int, status: str = "done", detail: str = "") -> None:

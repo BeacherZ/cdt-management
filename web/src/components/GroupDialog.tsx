@@ -663,8 +663,8 @@ export default function GroupDialog({
       <div>
         <Switch label="启用该换班组" checked={enabled} onChange={setEnabled} />
         <Switch
-          label="允许流量故障转移"
-          hint="当班流量达标时自动切到下一台没超的成员；找不到没超的成员（含状态读不到）就全局熔断停机"
+          label="允许故障转移"
+          hint="当班流量达标，或当班被抢占后一直起不来，自动切到另一台成员；流量全超且无人可接时全局熔断停机。一月一轮按天代班：每天 0 点重新尝试原当班，恢复了就交回排班"
           checked={failover}
           onChange={setFailover}
         />

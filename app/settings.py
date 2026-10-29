@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 APP_NAME = "cdt-management"
-VERSION = "1.2.34"
+VERSION = "1.2.36"
 
 DATA_DIR = Path(os.environ.get("CDT_DATA_DIR", "./data")).resolve()
 DB_PATH = DATA_DIR / "cdt-management.db"
@@ -36,6 +36,16 @@ EVENT_RETAIN_DAYS = max(1, int(os.environ.get("CDT_EVENT_RETAIN_DAYS", "14")))
 
 # 换班超时（分钟）：超时仍未就绪判定为换班异常
 SHIFT_TIMEOUT_MINUTES = max(2, int(os.environ.get("CDT_SHIFT_TIMEOUT_MINUTES", "10")))
+
+# 当班迟迟起不来（被抢占后拉不动、或启动指令一直卡在中间态）的容忍秒数。
+# 超过就按流量超限那套做故障转移，换一台顶这一班。
+# 不能设太短：竞价实例冷启动本身就要几十秒，太短会把「慢」当成「死」。
+DUTY_STALL_SECONDS = max(60, int(os.environ.get("CDT_DUTY_STALL_SECONDS", "180")))
+
+# 单机保活：开机指令下发后，等实例起来的复查间隔（秒）。
+# 在等待窗口内不再重复下发（否则一台一直起不来的机器会每分钟被开一次、
+# 每分钟多一条「保活拉起」事件）；窗口到期才补一次，直到它真的起来。
+KEEPALIVE_RETRY_SECONDS = max(60, int(os.environ.get("CDT_KEEPALIVE_RETRY_SECONDS", "300")))
 
 # dry-run：不调真实阿里云接口，用于本地 UI 调试
 DRY_RUN = os.environ.get("CDT_DRY_RUN", "0") == "1"

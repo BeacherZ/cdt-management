@@ -302,6 +302,87 @@ def dns_transitions(snapshot_raw: str, names: list[str]) -> list[str]:
     return changes
 
 
+def _day_key(group: dict[str, Any], now_ts: float) -> str:
+    """组时区下的自然日（YYYY-MM-DD）。"""
+    return dt.datetime.fromtimestamp(
+        now_ts, _timezone(_group_timezone(group))
+    ).strftime("%Y-%m-%d")
+
+
+def _reset_month_day_failover(
+    group: dict[str, Any], group_id: int, now_ts: float
+) -> dict[str, Any] | None:
+    """一月一轮：隔天 0 点把「起不来代班」清掉，重新请排班表上的当班上线。
+
+    为什么只对一月一轮做：一天一轮（含 0–24 点时刻表）一段只有几小时，代班顶满
+    一段也就几个小时，下一个换班点自然复位；一月一轮一段是几天甚至整月，一次代班
+    就把这几天的机器费全压到顶班那台上 —— 用户排班的目的是「每台都摊一点、谁都
+    不超月费上限」，顶班吃掉整段等于这个目的作废。
+
+    复位时机是**组时区的自然日 0 点**，不是「转移后满 24 小时」：后者会跟着第一次
+    转移的时刻往后漂，越滚越偏离排班的日界。
+
+    只清 stall（起不来）。traffic（当班流量超限）不清：原当班已经烧到阈值，
+    整段都不该再让它跑，代班必须顶满这一段。
+    """
+    if not is_month_cycle(group):
+        return None
+    scheduled = duty_at(group, now_ts)
+    if scheduled is None:
+        return None
+    slot_key = str(scheduled[1])
+    run = repo.get_run(group_id, slot_key) or {}
+    if not run.get("failover") or str(run.get("failover_reason") or "") != "stall":
+        return None
+    if run.get("manual"):
+        # 人指定了这一班由谁顶，隔天也不替人改回去
+        return None
+
+    today = _day_key(group, now_ts)
+    done_day = str(run.get("duty_day") or "")
+    if done_day == today:
+        return None
+    if not done_day:
+        # 升级前发生的转移没有这个字段（老库刚补的列）。补成今天，
+        # 免得升级那一瞬间把正在代班、跑得好好的机器换下来。
+        return repo.upsert_run(group_id, slot_key, duty_day=today)
+
+    # 跨日了：把代班状态和黑白名单一起清掉，本轮从「排班表当班」重新走一遍。
+    # 不当代班、原当班恢复不了，180 秒后会按今天的流量重新挑一台顶 —— 每天重挑，
+    # 三台以上的组会自然轮换，不会认死同一台。
+    #
+    # 复位等于「这一节重新开始」：上一节那条还在转圈的事件必须就地收尾，否则
+    # 界面永远转圈，事件列表还会同时挂着两条「换班进行中」。
+    old_event_id = int(run.get("event_id") or 0)
+    old_event = repo.get_event(old_event_id) if old_event_id else None
+    if old_event and str(old_event.get("status")) == "running":
+        repo.add_event_progress(old_event_id, "跨日复位，本节重新尝试原当班")
+        repo.finish_event(old_event_id, "done", "跨日复位，本节重新尝试原当班")
+    for prefix in (
+        f"duty_stall:{group_id}:{slot_key}",
+        f"stall_nocand:{group_id}:{slot_key}",
+        f"stall_disabled:{group_id}:{slot_key}",
+        f"failover_tried:{group_id}:{slot_key}:",
+        f"recovery:{group_id}:{slot_key}",
+        f"start_err:{group_id}:{slot_key}",
+    ):
+        repo.clear_flags_like(prefix)
+    log.info("一月一轮按天复位代班：组 %s 班次 %s 回到排班表当班", group_id, slot_key)
+    return repo.upsert_run(
+        group_id,
+        slot_key,
+        failover=0,
+        failover_from=0,
+        failover_reason="",
+        duty_day="",
+        duty_server_id=0,
+        phase=PHASE_SWITCHING,
+        stage="",
+        event_id=0,
+        started_at=int(now_ts),
+    )
+
+
 def next_switch_at(group: dict[str, Any], now_ts: float) -> float | None:
     members = active_members(group)
     if len(members) < 2:
@@ -534,24 +615,53 @@ class Engine:
 
             status = str(server.get("instance_status") or "")
             if status == "Stopped":
+                wait_flag = f"keepalive_wait:{server_id}"
+                waited = repo.flag_age(wait_flag)
+                if 0 <= waited < settings.KEEPALIVE_RETRY_SECONDS:
+                    # 已经下发过开机、正在等实例起来（确认器每 5 秒盯着）。
+                    # 等待窗口内不再重复下发：以前这里完全不看标记，一台始终起不来
+                    # 的机器会每分钟被开一次，还每分钟多一条新的「保活拉起」转圈事件。
+                    results.append(
+                        {
+                            "keepalive": server_id,
+                            "label": server.get("label"),
+                            "status": status,
+                            "waiting": True,
+                        }
+                    )
+                    continue
                 try:
                     aliyun.start_instance(server)
                     # 保活拉起是异步的：建 running 事件，交给确认器轮询到 Running 后
                     # 补发「抢占恢复」通知并打完成标志，不在这里同步等状态。
-                    event_id = repo.add_event(
-                        "start",
-                        f"{server.get('label')}：保活拉起",
-                        # 进行中的事件只说明「在等什么」；确认到位后整条 detail
-                        # 会被改写成结果（运行中 / ✅ 已同步），见 scheduler。
-                        "等待恢复运行",
-                        level="warning",
-                        server_id=server_id,
-                        status="running",
-                        pending_status="Running",
-                        pending_kind="keepalive",
-                    )
-                    repo.add_event_progress(event_id, f"已下发启动指令（原状态 {status}）")
-                    repo.set_flag(f"keepalive_wait:{server_id}")
+                    pending = repo.pending_event(server_id, "keepalive")
+                    if pending:
+                        # 窗口到期还没起来：补一次指令，进度追加到同一条事件上，
+                        # 不另开一条 —— 事件列表里一件事就该只有一条记录。
+                        event_id = int(pending["id"])
+                        repo.add_event_progress(
+                            event_id,
+                            f"仍未运行（{status}），已重新下发启动指令",
+                            once=True,
+                        )
+                    else:
+                        event_id = repo.add_event(
+                            "start",
+                            f"{server.get('label')}：保活拉起",
+                            # 进行中的事件只说明「在等什么」；确认到位后整条 detail
+                            # 会被改写成结果（运行中 / ✅ 已同步），见 scheduler。
+                            "等待恢复运行",
+                            level="warning",
+                            server_id=server_id,
+                            status="running",
+                            pending_status="Running",
+                            pending_kind="keepalive",
+                        )
+                        repo.add_event_progress(event_id, f"已下发启动指令（原状态 {status}）")
+                    # 重置等待窗口。set_flag 是 ON CONFLICT DO NOTHING，只清再置
+                    # 才会真的把计时推到此刻。
+                    repo.clear_flag(wait_flag)
+                    repo.set_flag(wait_flag)
                     if repo.get_flag(f"keepalive_fail:{server_id}"):
                         repo.clear_flag(f"keepalive_fail:{server_id}")
                 except Exception as exc:  # noqa: BLE001
@@ -682,6 +792,10 @@ class Engine:
         # 时刻表模式需要知道时区
         group["_timezone"] = config.get("timezone") or "Asia/Shanghai"
 
+        # 一月一轮：隔天 0 点先把「起不来代班」复位，再算当班。
+        # 顺序不能反 —— actual_duty 会读 run.failover 覆盖当班，先算就还是代班那台。
+        _reset_month_day_failover(group, group_id, now_ts)
+
         picked = actual_duty(group, now_ts)
         if picked is None:
             return {"group_id": group_id, "skipped": "成员不足两台"}
@@ -694,6 +808,10 @@ class Engine:
         # 决定后续怎么描述这次换班（事件标题 / 报告标题 / 阶段）。
         manual_switch = bool(run.get("manual"))
         failed_over = bool(run.get("failover"))
+        # 上一轮如果已经因「起不来」转过，这两项要从库里接着用：
+        # 结算通知里「被接管账号」靠 failover_from 取，原因靠 failover_reason 说。
+        failover_from = int(run.get("failover_from") or 0)
+        failover_reason = str(run.get("failover_reason") or "")
 
         duty = repo.get_server(int(duty_member["server_id"]), decrypt_secret=True)
         if duty is None:
@@ -765,18 +883,52 @@ class Engine:
             candidates = [s for s in healthy_others if not _over_threshold(s)]
             if candidates:
                 replacement = min(candidates, key=lambda s: float(s.get("traffic_used") or 0))
-                repo.add_event(
+                # 决策和结果写进同一条事件：这条先以「进行中」建出来，后续启动、
+                # 停待机、DDNS 的每一步都往它里面追加，结算时改成「故障转移」。
+                # 以前这里建的是一条 0 秒完成的决策事件，结算再建一条结果事件，
+                # 一次转移在事件列表里留下两条标题几乎一样的记录。
+                decision_event = repo.add_event(
                     "failover",
                     f"{name}：当班流量超限，故障转移",
                     f"{duty.get('label')} → {replacement.get('label')}",
                     level="warning",
                     group_id=group_id,
                     server_id=int(replacement["id"]),
+                    status="running",
+                )
+                # 摘要结算时会被改写成结论（当班 B / 待机 N 台），「谁烧超了、换给谁」
+                # 这件事必须留在展开的步骤里，否则事件点开就只剩结果、没有原因。
+                repo.add_event_progress(
+                    decision_event,
+                    f"当班 {duty.get('label')} 流量超限（{_used_gb(duty):.2f} GB / "
+                    f"阈值 {float(duty.get('threshold_gb') or 0):g} GB），改由 "
+                    f"{replacement.get('label')} 接班",
                 )
                 others = [s for s in others if int(s["id"]) != int(replacement["id"])]
                 others.append(duty)
+                failover_from = int(duty["id"])
+                failover_reason = "traffic"
                 duty = replacement
                 failover = True
+                # 和被接管者一起落库：结算通知里「被接管账号」按它取，
+                # 多台都超限时才不会挑错人。
+                #
+                # 同时把这班次当成「开始切换」：新当班要开机、要等 IP、要停别人，
+                # 这是一段新的换班过程，10 分钟超时也该从新当班重新算。
+                repo.upsert_run(
+                    group_id,
+                    slot_key,
+                    phase=PHASE_SWITCHING,
+                    stage="",
+                    event_id=decision_event,
+                    started_at=int(time.time()),
+                    failover_from=failover_from,
+                    failover_reason=failover_reason,
+                )
+                # 本地 run 快照同步过来：下面 previously_settled 按它判断，
+                # 还拿着旧的 settled 会把这次转移当成「已结算班次的恢复」，
+                # 又开一条「当班未运行，已自动拉起」。
+                run = repo.get_run(group_id, slot_key) or {}
             else:
                 # 找不到替班的两种情形：其他成员都超了，或者其他成员状态读不到。
                 # 两种都不该让已经超限的当班继续跑 —— 早先「读不到就保守维持当班」，
@@ -798,6 +950,138 @@ class Engine:
         if _over_threshold(duty) and not failover:
             return self._handle_limit_stop(group, config, now, slot_key, duty, others, notify_enabled)
 
+        # 抢占恢复跨多轮，用 flag 记住「这次是恢复而不是换班」（本地变量活不过一轮）；
+        # event_id 是本班次正在进行的那条事件，后面「起不来」要复用它改成故障转移结论。
+        recovery_flag = f"recovery:{group_id}:{slot_key}"
+        event_id = int(run.get("event_id") or 0)
+
+        # 2.5) 当班起不来 → 和「当班流量超限」走同一套故障转移。
+        #      被抢占后拉不起来、或启动指令一直卡在中间态，超过 DUTY_STALL_SECONDS
+        #      就换一台顶这一班；否则整班空着只能等人工，与「只留一台在线」的目的相悖。
+        #
+        #      计时用独立 flag 而不是 run.started_at：后者的语义是「本班次从什么时候
+        #      开始处理」（换班超时按它算），正常换班里它不等同于「这次拉起多久了」。
+        stall_flag = f"duty_stall:{group_id}:{slot_key}"
+        stall = False
+        if not failover and not manual_switch and str(duty.get("instance_status") or "") != "Running":
+            if repo.flag_age(stall_flag) < 0:
+                # 第一次发现当班没在跑：先记时，本轮照常尝试拉起（第 3 步）。
+                repo.set_flag(stall_flag)
+            elif repo.flag_age(stall_flag) >= settings.DUTY_STALL_SECONDS:
+                stall = True
+        else:
+            # 当班已经在跑，或者这次是人手动切的（人盯着界面，系统别自作主张）
+            repo.clear_flag(stall_flag)
+
+        if stall:
+            if not group.get("failover_enabled"):
+                # 组里关了「允许流量故障转移」：不替人做决定，但要留一条痕迹，
+                # 否则用户只会看到「这台一直起不来」而不知道系统其实动过手。
+                flag = f"stall_disabled:{group_id}:{slot_key}"
+                if not repo.get_flag(flag):
+                    repo.set_flag(flag)
+                    repo.add_event(
+                        "warning",
+                        f"{name}：当班起不来",
+                        f"{duty.get('label')} 已等待 {settings.DUTY_STALL_SECONDS} 秒仍未运行，"
+                        "该组未启用故障转移，保持等待",
+                        level="warning",
+                        group_id=group_id,
+                        server_id=int(duty["id"]),
+                    )
+            else:
+                # 同一个班次里已经顶过班的不再重复挑，否则几台都起不来时会来回踢皮球。
+                tried = {
+                    int(s["id"])
+                    for s in healthy_others
+                    if repo.get_flag(f"failover_tried:{group_id}:{slot_key}:{int(s['id'])}")
+                }
+                candidates = [
+                    s
+                    for s in healthy_others
+                    if int(s["id"]) not in tried and not _over_threshold(s)
+                ]
+                status_text = messages.STATUS_LABELS.get(
+                    str(duty.get("instance_status") or ""), str(duty.get("instance_status") or "未知")
+                )
+                if candidates:
+                    # 和流量超限挑人一致：优先流量用得最少的，接着省流量额度
+                    replacement = min(candidates, key=lambda s: float(s.get("traffic_used") or 0))
+                    repo.set_flag(f"failover_tried:{group_id}:{slot_key}:{int(duty['id'])}")
+                    title = f"{name}：当班疑被抢占，保活超时，故障转移"
+                    detail = (
+                        f"{duty.get('label')}（{status_text} {settings.DUTY_STALL_SECONDS} 秒未就绪）"
+                        f" → {replacement.get('label')}"
+                    )
+                    if event_id:
+                        # 本班次已经有一条在进行的事件（抢占恢复的「已自动拉起」，
+                        # 或跨日复位后新建的「换班进行中」）。当班换人不是另开一件事，
+                        # 而是同一件事的下一段：就地改题、继续往里记，结算时再统一
+                        # 改成「故障转移（保活超时）」。—— 以前在这里 finish 掉、
+                        # 另开一条，一次转移在事件列表里留下两条标题相近的记录。
+                        repo.update_event(
+                            event_id, title=title, detail=detail, kind="shift_failover"
+                        )
+                        repo.add_event_progress(
+                            event_id, f"{duty.get('label')} 超时未就绪，改由 {replacement.get('label')} 接班"
+                        )
+                    else:
+                        event_id = repo.add_event(
+                            "shift_failover",
+                            title,
+                            detail,
+                            level="warning",
+                            group_id=group_id,
+                            server_id=int(replacement["id"]),
+                            status="running",
+                        )
+                    repo.clear_flag(recovery_flag)
+                    others = [s for s in others if int(s["id"]) != int(replacement["id"])]
+                    others.append(duty)
+                    failover_from = int(duty["id"])
+                    failover_reason = "stall"
+                    duty = replacement
+                    failover = True
+                    repo.clear_flag(stall_flag)
+                    # 当班换人等于开了一段新的换班过程：阶段回到切换中、计时与
+                    # 10 分钟超时都从新当班重新算，但事件还是同一条（继续往下记）。
+                    # 一月一轮额外记下「今天是哪一天代班的」，隔天 0 点靠它判断
+                    # 该不该把班交回排班表；一天一轮段本来就短，用不到这个字段。
+                    day_fields = (
+                        {"duty_day": _day_key(group, now_ts)}
+                        if is_month_cycle(group)
+                        else {}
+                    )
+                    repo.upsert_run(
+                        group_id,
+                        slot_key,
+                        phase=PHASE_SWITCHING,
+                        stage="",
+                        event_id=event_id,
+                        started_at=int(time.time()),
+                        failover=1,
+                        failover_from=failover_from,
+                        failover_reason=failover_reason,
+                        **day_fields,
+                    )
+                    # 把本地的 run 快照同步过来：后面「previously_settled」按它判断，
+                    # 还拿着旧的 settled 会再走一遍「恢复」分支，多记一条事件。
+                    run = repo.get_run(group_id, slot_key) or {}
+                    event_id = 0
+                else:
+                    flag = f"stall_nocand:{group_id}:{slot_key}"
+                    if not repo.get_flag(flag):
+                        repo.set_flag(flag)
+                        repo.add_event(
+                            "error",
+                            f"{name}：当班起不来，也没有可接替的成员",
+                            f"{duty.get('label')}（{status_text}）等待 {settings.DUTY_STALL_SECONDS} 秒仍未运行，"
+                            "其余成员要么流量也已超限，要么状态读取失败",
+                            level="error",
+                            group_id=group_id,
+                            server_id=int(duty["id"]),
+                        )
+
         # 故障转移标志要在「启动当班」之前就确定并持久化，否则转移后下一轮会
         # 因为 run.failover 没写进去而重新判定超限、重复记「故障转移」事件。
         failover_flag = 1 if (failover or failed_over) else 0
@@ -812,9 +1096,6 @@ class Engine:
         )
         duty_status = str(duty.get("instance_status") or "")
         duty_not_running = duty_status not in ("Running",) and duty_status not in TRANSIENT_STATUS
-        # 抢占恢复跨多轮，用 flag 记住「这次是恢复而不是换班」（本地变量活不过一轮）
-        recovery_flag = f"recovery:{group_id}:{slot_key}"
-        event_id = int(run.get("event_id") or 0)
 
         if duty_not_running:
             if previously_settled:
@@ -935,9 +1216,15 @@ class Engine:
             if _is_stopped_any_mode(server):
                 continue
             if server.get("instance_status") in TRANSIENT_STATUS:
-                # 已在停机过程中，等它落地
-                all_stopped = False
-                continue
+                # 已在停机过程中，等它落地。
+                # 例外：本班次里「起不来被换掉」的那台，卡在启动中不能再等 ——
+                # 它已经不是当班了，等下去它真跑起来就是两台同时在线。
+                stalled_out = (
+                    failover_reason == "stall" and int(server["id"]) == failover_from
+                )
+                if not stalled_out:
+                    all_stopped = False
+                    continue
             try:
                 aliyun.stop_instance(server, "StopCharging", fallback=True)
                 repo.clear_flag(f"stop_err:{server['id']}")
@@ -1072,7 +1359,10 @@ class Engine:
             # 手动切班的事件从「手动换班进行中」一路走到「手动换班完成」，
             # 新建组的事件从头到尾都叫「新建换班组」，点进去能看到完整过程。
             if failover_flag:
-                label, kind = "故障转移", "shift_failover"
+                # 起不来那种在标题里带上原因：否则事件列表里跟「流量超限」长得一模一样，
+                # 事后分不清这台是被抢了还是烧超了。
+                label = "故障转移（保活超时）" if failover_reason == "stall" else "故障转移"
+                kind = "shift_failover"
             elif manual_switch:
                 label, kind = "手动换班完成", "manual"
             elif str(run.get("origin") or "") == ORIGIN_NEW_GROUP:
@@ -1081,6 +1371,15 @@ class Engine:
                 label, kind = "换班完成", "shift_done"
             repo.update_event(event_id, title=f"{name}：{label}", kind=kind)
             repo.finish_event(event_id, "done")
+            # 本班次的临时标记到此作废：粘性计时、候选黑名单、告警去重都只在这一班里有效，
+            # 不清掉会随着班次累积（下一班 slot 不同本来就用不上，留着只是堆垃圾）。
+            for prefix in (
+                f"duty_stall:{group_id}:{slot_key}",
+                f"stall_nocand:{group_id}:{slot_key}",
+                f"stall_disabled:{group_id}:{slot_key}",
+                f"failover_tried:{group_id}:{slot_key}:",
+            ):
+                repo.clear_flags_like(prefix)
 
         # 抢占恢复：当班被拉起并重新就绪，收掉那条恢复事件。
         # flag 跨轮持久化，所以「这轮才拉起、下一轮才就绪」也能收尾。
@@ -1435,6 +1734,12 @@ class Engine:
         scope = "failover" if is_failover else ("manual" if is_manual else "settled")
         if is_manual and shift_event_id:
             flag = f"notify:{group_id}:manual:{shift_event_id}"
+        elif is_failover and is_month_cycle(group):
+            # 一月一轮按天代班：同一个段（slot）里每天都可能转移一次，去重键必须带上
+            # 日期。否则 1 号那条发完，后面几天全被当成重复静默吞掉 —— 用户明确要的
+            # 是「每天起不来都要有一条」，事件有、通知也得有。
+            day = _day_key(group, float(now_ts or time.time()))
+            flag = f"notify:{group_id}:{slot_key}:failover:{day}"
         else:
             flag = f"notify:{group_id}:{slot_key}:{scope}"
         if repo.get_flag(flag):
@@ -1442,19 +1747,40 @@ class Engine:
 
         enabled_key = "notify_on_failover" if is_failover else "notify_on_shift"
         if config.get(enabled_key) != "1":
+            # 通知开关只决定「发不发」，不决定「记不记」。以前这里直接 return，
+            # 关掉通知后那条 running 事件就永远停在「正在启动当班 X」：界面看着像
+            # 系统卡死，其实班早就换完了。
             repo.set_flag(flag)
+            repo.clear_flag(f"timeout:{group_id}:{slot_key}")
+            self._record_settled(
+                group_id,
+                slot_key,
+                kind,
+                name,
+                duty,
+                others,
+                str(ddns_status),
+                is_failover=is_failover,
+                is_manual=is_manual,
+            )
             return
 
         if is_failover:
-            # 引擎里被接管的那台一定在 others 里；流量读数缺失时退化成「第一台」，
-            # 免得报告只剩「接替账号」一块
-            over = [server for server in others if _over_threshold(server)]
+            # 被接管的那台按 run.failover_from 精确取。以前靠「谁超限」反推，
+            # 保活超时场景下原当班根本没超限，会退化成「第一台」，
+            # 把一台无关的成员写成被接管（通知里就是错的信息）。
+            run = repo.get_run(group_id, slot_key) or {}
+            from_id = int(run.get("failover_from") or 0)
+            reason = str(run.get("failover_reason") or "")
+            over = [server for server in others if int(server["id"]) == from_id] if from_id else []
+            if not over:
+                over = [server for server in others if _over_threshold(server)]
             if not over and others:
                 over = [others[0]]
             taken = {id(server) for server in over}
             standby = [server for server in others if id(server) not in taken]
             message = messages.shift_failover(
-                duty, over, standby, str(ddns_status), group_name=name
+                duty, over, standby, str(ddns_status), group_name=name, reason=reason
             )
         else:
             # 本班次如果先发过「换班异常」，成功时按脚本换标题；
@@ -1475,28 +1801,61 @@ class Engine:
 
         results = notify.send_all(config, message)
         repo.set_flag(flag)
-        # 换班过程的那条 running 事件已经在 reconcile 里改题、finish 过了；
-        # 这里只补一份结算摘要，不再另开一条 0 秒完成的 done 事件。
+        self._record_settled(
+            group_id,
+            slot_key,
+            kind,
+            name,
+            duty,
+            others,
+            str(ddns_status),
+            is_failover=is_failover,
+            is_manual=is_manual,
+            results=results,
+        )
+
+    def _record_settled(
+        self,
+        group_id: int,
+        slot_key: str,
+        kind: str,
+        name: str,
+        duty: dict[str, Any],
+        others: list[dict[str, Any]],
+        ddns_status: str,
+        *,
+        is_failover: bool,
+        is_manual: bool,
+        results: list[Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """把结算结论写进本班次那条事件：改写概览摘要，并把通知结果追加到最后一步。
+
+        换班过程的那条 running 事件已经在 reconcile 里改题、finish 过了，这里只补
+        摘要，不再另开一条 0 秒完成的 done 事件。results 为 None 表示这次没发通知
+        （通知开关关着或调用方没发）—— 摘要照样写，事件是系统自己的流水。
+        """
+        detail = f"当班 {duty.get('label')} / 待机 {len(others)} 台 / {ddns_status}"
         run = repo.get_run(group_id, slot_key) or {}
         run_event_id = int(run.get("event_id") or 0)
         if run_event_id:
-            repo.update_event(
-                run_event_id,
-                detail=f"当班 {duty.get('label')} / 待机 {len(others)} 台 / {ddns_status}",
-            )
+            repo.update_event(run_event_id, detail=detail)
             # 报告是整条换班流程的最后一步：写进事件详情，事后能确认发没发出去
-            notify.note_notify(run_event_id, results)
-        else:
-            # 兜底：理论上不会走到（_shift_event 一定先建了 running 事件），
-            # 万一 run 里丢了 event_id，仍补一条结果事件，别让通知发了却无迹可寻
-            event_id = repo.add_event(
-                kind,
-                f"{name}：{'故障转移' if is_failover else ('手动换班完成' if is_manual else '换班完成')}",
-                f"当班 {duty.get('label')} / 待机 {len(others)} 台 / {ddns_status}",
-                group_id=group_id,
-                server_id=int(duty["id"]),
-            )
+            if results is not None:
+                notify.note_notify(run_event_id, results)
+            return None
+
+        # 兜底：理论上不会走到（_shift_event 一定先建了 running 事件），
+        # 万一 run 里丢了 event_id，仍补一条结果事件，别让这次换班无迹可寻
+        event_id = repo.add_event(
+            kind,
+            f"{name}：{'故障转移' if is_failover else ('手动换班完成' if is_manual else '换班完成')}",
+            detail,
+            group_id=group_id,
+            server_id=int(duty["id"]),
+        )
+        if results is not None:
             notify.note_notify(event_id, results)
+        return event_id
 
     # ==================================================================
     # 换班组的建立与解散
@@ -1943,6 +2302,20 @@ class Engine:
 
         # 1) 下发指令。停机用节省停机，不支持则退化普通停机（不报错）。
         if action == "start":
+            # 手动开机也不能绕过流量阈值：以前这里不判断，点一下就把一台已经到
+            # 阈值的机器点起来，下一轮巡检才把它停掉 —— 中间那几十秒白烧的流量
+            # 补不回来。先拉一次实时流量再判，库里的快照最多可能旧一分钟。
+            try:
+                _refresh(server)
+            except Exception:  # noqa: BLE001
+                # 读不到就按库里的旧值判断：宁可少拦一次，也别把人挡在门外
+                pass
+            if _over_threshold(server):
+                raise ValueError(
+                    f"已用 {_used_gb(server):.2f} GB，已达阈值 "
+                    f"{float(server.get('threshold_gb') or 0):g} GB，不能开机；"
+                    "请先调高阈值，或等流量包重置后再试"
+                )
             aliyun.start_instance(server)
         else:
             aliyun.stop_instance(server, "StopCharging", fallback=True)

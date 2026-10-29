@@ -1916,6 +1916,13 @@ input[type='number']::-webkit-inner-spin-button {
   gap: 14px;
 }
 
+/* 「当班」胶囊原本停在左列尽头，和右列的流量条之间还隔着 14px 的列间距，
+   看起来像悬在半空。往右顶出一个间距的宽度，让胶囊右端正好压在流量条起点上，
+   上下连成一条竖线。数值必须等于上面 .slot-body 的 gap，改一个要改两个。 */
+.slot-body .slot-top .duty-tag {
+  margin-right: -14px;
+}
+
 .slot-main {
   display: flex;
   flex-direction: column;
@@ -3064,6 +3071,12 @@ input[type='number']::-webkit-inner-spin-button {
   .slot-body {
     grid-template-columns: minmax(0, 1fr);
     gap: 9px;
+  }
+
+  /* 窄屏流量条在下一行、不再有右列，胶囊回到内容右边界，负边距必须撤掉，
+     否则会顶进卡片内边距 */
+  .slot-body .slot-top .duty-tag {
+    margin-right: 0;
   }
 
   /* IP 单独一行、进度条占满下方整宽；并排会把进度条挤成半截 */

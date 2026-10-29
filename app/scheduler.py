@@ -234,13 +234,20 @@ def _confirm_pending_events() -> None:
                     )
                 except Exception as exc:  # noqa: BLE001
                     ddns_status = f"❌ DDNS 异常：{exc}"
-                # DDNS 关着时这一步什么也没做（返回「⏸ DDNS 未启用」），
-                # 不必在进度里占一行；通知那边照旧带上，让用户知道域名没跟着走。
-                if config.get("ddns_enabled") == "1":
+                # 只在「开了 DDNS 且这台确实挂了域名」时记这一步：换班那边是同一套
+                # 判断，没绑域名时两边都不该多一行「DDNS：⏸ 未绑定」的噪音。
+                # 通知里照旧带 ddns_status，让用户知道域名没跟着走。
+                bound = bool(repo.dns_records_of(dns.TARGET_SERVER, server_id))
+                if config.get("ddns_enabled") == "1" and bound:
                     # 进度里写「DDNS：…」有上下文，概览只要状态本身（✅ 已同步），
                     # 与换班结算的尾段同一种写法；异常只留短结论，堆栈太占地方。
                     brief = "❌ DDNS 异常" if ddns_status.startswith("❌") else ddns_status
                     record(f"DDNS：{ddns_status}", brief)
+                # 标题从进行时的「保活拉起」改成完成态：事件列表里一条已经完成的事
+                # 还写着「拉起」，读起来像还在进行（换班那边收尾也会改题）。
+                repo.update_event(
+                    event_id, title=f"{server.get('label')}：保活拉起完成"
+                )
                 if config.get("notify_on_keepalive") == "1":
                     try:
                         results = notify.send_all(

@@ -143,6 +143,8 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 
 **说明**：一台实例自己管自己，掉了就拉起来，不换班、不碰别的实例。
 
+开机指令下发后等 5 分钟（`CDT_KEEPALIVE_RETRY_SECONDS`）再补一次，不每分钟重复开；一直起不来就按这个节奏重试，事件只有一条，进度续写，不会刷屏。
+
 **目的**：失联第一时间拉起来，保证在线率。
 
 ### 联合换班
@@ -158,6 +160,8 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 ### 流量保护
 
 **说明**：每台单独配阈值，超限自动停机；换班组会先尝试故障转移，全超才熔断。
+
+**故障转移**两种触发：当班流量到阈值，或当班被抢占后 3 分钟仍起不来。一天一轮只在本班次内换人，下个换班点照常回到原排班；一月一轮按天代班——每天 0 点重新尝试原当班，起来了就交回，起不来再由当天重新挑一台，不会让一台顶掉整段。
 
 **目的**：不让任何一台实例烧穿流量包。
 

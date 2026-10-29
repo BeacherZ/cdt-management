@@ -752,7 +752,7 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
                   />
                   <Switch
                     label="故障转移"
-                    hint="当班实例流量超限，启用备用实例接替时提醒"
+                    hint="当班实例流量超限，或疑被抢占、保活超时，启用备用实例接替时提醒"
                     checked={form.notify_on_failover}
                     onChange={(value) => patch((draft) => (draft.notify_on_failover = value))}
                   />

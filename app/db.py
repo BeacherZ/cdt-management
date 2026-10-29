@@ -105,6 +105,16 @@ CREATE TABLE IF NOT EXISTS shift_runs (
     duty_server_id      INTEGER NOT NULL DEFAULT 0,
     standby_server_ids  TEXT    NOT NULL DEFAULT '',
     failover            INTEGER NOT NULL DEFAULT 0,
+    -- 故障转移的原因：'traffic'（当班流量超限）/ 'stall'（当班起不来，保活超时）。
+    -- 两者共用同一套状态机，只是事件与通知里的说法不同。
+    failover_reason     TEXT    NOT NULL DEFAULT '',
+    -- 被接管的那台（原当班）的 server_id。结算通知里「被接管账号」那一块靠它取，
+    -- 不能再靠「谁超限」反推 —— 保活超时的原当班根本没超限。
+    failover_from       INTEGER NOT NULL DEFAULT 0,
+    -- 这次「起不来代班」是哪一天生效的（组时区 YYYY-MM-DD）。
+    -- 一月一轮的段长可达整月，代班者一顶就是一整段，把别人的天全吃掉；
+    -- 引擎据此在隔天 0 点把代班清掉、重新请原当班上线（一天一轮不用这个）。
+    duty_day            TEXT    NOT NULL DEFAULT '',
     -- 手动换班标记：1 表示这次当班切换是用户手动触发的，不是流量超限故障转移。
     -- 手动换班界面已反馈，不应再发「流量超限临时换班」的误导通知。
     manual              INTEGER NOT NULL DEFAULT 0,
@@ -300,6 +310,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
             "manual": "INTEGER NOT NULL DEFAULT 0",
             "origin": "TEXT NOT NULL DEFAULT ''",
             "dns_before": "TEXT NOT NULL DEFAULT ''",
+            "failover_reason": "TEXT NOT NULL DEFAULT ''",
+            "failover_from": "INTEGER NOT NULL DEFAULT 0",
+            "duty_day": "TEXT NOT NULL DEFAULT ''",
         },
         "dns_records": {
             "sort_order": "INTEGER NOT NULL DEFAULT 0",

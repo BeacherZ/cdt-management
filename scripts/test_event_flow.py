@@ -107,6 +107,9 @@ class EventFlow(unittest.TestCase):
     def test_1_keepalive_notify_is_last(self):
         """保活拉起：已确认 → DDNS → 报告已发送，通知永远是最后一步。"""
         server_id = _make_server("测试机-保活", "i-test-event-01")
+        # 这台机器挂了域名：没绑域名的机器不该有 DDNS 这一步（见 test_4）
+        dns.add_record("keep.example.com", repo.get_settings())
+        dns.bind("keep.example.com", dns.TARGET_SERVER, server_id)
         event_id = repo.add_event(
             "start",
             "测试机-保活：保活拉起",
@@ -209,6 +212,38 @@ class EventFlow(unittest.TestCase):
         )
         # 没有域名同步这一步，摘要就只有结果状态，不留尾部分隔符
         self.assertEqual(_event(event_id).get("detail"), "运行中")
+
+    def test_4_keepalive_without_binding_writes_no_dns_step(self):
+        """DDNS 开着但这台没绑域名：保活事件里不该冒出「DDNS：⏸ 未绑定」。
+
+        换班那边一直是「没绑域名就不写这一步」，保活这边以前照写，同一个功能
+        两条路径两种样子；这里锁死两边一致。
+        """
+        server_id = _make_server("测试机-未绑定", "i-test-event-04")
+        event_id = repo.add_event(
+            "start",
+            "测试机-未绑定：保活拉起",
+            "原状态 Stopped",
+            level="warning",
+            server_id=server_id,
+            status="running",
+            pending_status="Running",
+            pending_kind="keepalive",
+        )
+        repo.add_event_progress(event_id, "已下发启动指令（原状态 Stopped）")
+
+        scheduler._confirm_pending_events()
+
+        texts = _texts(event_id)
+        self.assertFalse(
+            any("未绑定" in text for text in texts),
+            f"没绑域名不该写 DDNS 步骤：{texts}",
+        )
+        self.assertEqual(_event(event_id).get("detail"), "运行中")
+        # 通知里照样告诉用户域名没跟着走（报告是另一回事，不因事件省略而省略）
+        self.assertEqual(len(self.sent), 1)
+        # 完成态标题：不能还留着进行时的「保活拉起」
+        self.assertEqual(_event(event_id).get("title"), "测试机-未绑定：保活拉起完成")
 
 
 if __name__ == "__main__":

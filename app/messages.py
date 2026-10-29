@@ -373,16 +373,30 @@ def shift_failover(
     standby: list[dict[str, Any]],
     ddns_status: str,
     group_name: str = "",
+    reason: str = "traffic",
 ) -> notify.Message:
-    """⚠️ 故障转移（原「临时换班」）。两块是脚本原样，三台以上才补「停止账号」。"""
+    """⚠️ 故障转移（原「临时换班」）。两块是脚本原样，三台以上才补「停止账号」。
+
+    reason 决定「为什么换人」：
+      - traffic（默认）：当班流量到阈值，换一台没超的；
+      - stall：当班被抢占后拉不起来、或启动卡住，换一台顶这一班。
+
+    两者共用同一个状态机和同一条事件类型，只是原因和「被接管账号」的叫法不同：
+    起不来的机器谈不上「超限」，还写「超限账号」会把人往流量方向带偏。
+    """
+    stall = reason == "stall"
+    # 起不来的原因不可穷举（库存不足、竞价失败、被回收没及时回来都长得一样），
+    # 所以写「疑被抢占」而不是断言「被抢占」——把话留一点，别让通知替阿里云下结论。
+    cause = "当班实例疑被抢占，保活超时" if stall else "当班实例流量超限"
+    taken_label = "离线账号" if stall else "超限账号"
     parts = [running_block("接替账号", duty, ddns_status)]
-    parts += [stopped_block("超限账号", s, _status(s), used=_used(s)) for s in over]
+    parts += [stopped_block(taken_label, s, _status(s), used=_used(s)) for s in over]
     parts += [stopped_block("停止账号", s, _status(s)) for s in standby]
     return _titled(
         "shift_failover",
         "⚠️",
         title_of("故障转移", group_name),
-        f"📢 <b>故障转移</b>：当班实例流量超限，已启用备用实例。\n{SEP}\n" + _join_blocks(parts),
+        f"📢 <b>故障转移</b>：{cause}，已启用备用实例。\n{SEP}\n" + _join_blocks(parts),
     )
 
 
