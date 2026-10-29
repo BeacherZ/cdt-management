@@ -163,7 +163,7 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 
 **说明**：每台单独配阈值，超限自动停机；换班组会先尝试故障转移，全超才熔断。
 
-> 故障转移两种触发：当班流量到阈值，或当班被抢占。
+> 故障转移的两种触发情形：当班流量到阈值，或当班被抢占。
 
 **目的**：不让任何一台实例烧穿流量包。
 
