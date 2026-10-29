@@ -454,6 +454,20 @@ def add_sample(server_id: int, used: float, status: str) -> None:
     )
 
 
+def last_sample_ts(server_id: int) -> int:
+    """这台机器最近一次流量采样的时间戳；从没采过返回 0。
+
+    用来区分「本月还没见过读数」（月初归零）和「本月读过又突然变空」（接口抖动）：
+    同月内累计流量只会涨，空读数只能是丢了数据。
+    """
+    row = db.query_one(
+        "SELECT MAX(ts) AS ts FROM traffic_samples WHERE server_id=?", (server_id,)
+    )
+    if row is None or row["ts"] is None:
+        return 0
+    return int(row["ts"])
+
+
 def list_samples(server_id: int, hours: int = 72) -> list[dict[str, Any]]:
     since = int(time.time()) - hours * 3600
     rows = db.query(

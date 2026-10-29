@@ -331,8 +331,13 @@ def _mock_advance(state: dict[str, Any]) -> None:
             state["stopped_mode"] = ""
 
 
-def get_traffic_gb(account: dict) -> float:
-    """CDT 当月出方向流量（GB）。与用户脚本一致：累加所有 TrafficDetails。"""
+def get_traffic_gb(account: dict) -> float | None:
+    """CDT 当月出方向流量（GB）。与用户脚本一致：累加所有 TrafficDetails。
+
+    返回 None 表示「接口调用成功，但一个明细都没给」。不在这里折算成 0.0：
+    月初流量包重置后确实是 0，接口抖动时也是空列表，两者在这一层分不开，
+    交给调用方结合上次读数判断（见 shift._resolve_empty_traffic）。
+    """
     if settings.DRY_RUN:
         return float(_mock(account)["traffic"])
     client = _client(account, CDT_REGION)
@@ -346,9 +351,10 @@ def get_traffic_gb(account: dict) -> float:
         data = json.loads(raw.decode("utf-8"))
     except Exception as exc:
         raise AliyunError(f"CDT 流量查询失败: {exc}") from exc
-    total_bytes = sum(
-        float(item.get("Traffic", 0) or 0) for item in data.get("TrafficDetails", []) or []
-    )
+    details = data.get("TrafficDetails") or []
+    if not details:
+        return None
+    total_bytes = sum(float(item.get("Traffic", 0) or 0) for item in details)
     return total_bytes / (1024 ** 3)
 
 

@@ -2561,8 +2561,46 @@ def _all_stopped_any_mode(servers: list[dict[str, Any]]) -> bool:
     return all(_is_stopped_any_mode(server) for server in servers)
 
 
+# 计费月按阿里云账单口径算，固定 UTC+8（跟部署机器/界面时区设置无关）。
+_BILL_TZ = dt.timezone(dt.timedelta(hours=8))
+
+
+def _month_key(ts: int) -> str:
+    return dt.datetime.fromtimestamp(ts, _BILL_TZ).strftime("%Y-%m")
+
+
+def _resolve_empty_traffic(server: dict[str, Any]) -> float:
+    """CDT 接口成功但没返回流量明细时的兜底：返回本轮该用的流量值。
+
+    只有一种情况算「读数不可用」：本计费月里曾经拿到过读数，这次却空了。
+    同月内累计流量只会涨，空读数只能是接口抖动/丢数据 —— 沿用库里旧值继续判定，
+    绝不当成 0：否则一台已经烧到阈值的机器会被判成「没超限」，下一分钟就被开机。
+
+    反过来，新的计费月第一天空明细是正常的（当月还没有流量），按 0 处理，
+    照常启动，不会把机器卡在月初起不来。
+    """
+    server_id = int(server["id"])
+    known = float(server.get("traffic_used") or 0)
+    last_ts = repo.last_sample_ts(server_id)
+    if known > 0 and last_ts and _month_key(last_ts) == _month_key(int(time.time())):
+        flag = f"traffic_empty:{server_id}"
+        if not repo.get_flag(flag):
+            repo.set_flag(flag)
+            repo.add_event(
+                "warning",
+                f"{server.get('label')}：流量读数异常",
+                f"CDT 未返回流量明细，沿用上次读数 {known:.2f} GB 判定，不按 0 处理",
+                level="warning",
+                server_id=server_id,
+            )
+        return known
+    return 0.0
+
+
 def _refresh(server: dict[str, Any]) -> None:
-    traffic = aliyun.get_traffic_gb(server)
+    real_traffic = aliyun.get_traffic_gb(server)
+    empty_reading = real_traffic is None
+    traffic = _resolve_empty_traffic(server) if empty_reading else float(real_traffic)
     info = aliyun.get_instance(server)
     repo.update_server_runtime(
         int(server["id"]),
@@ -2572,7 +2610,11 @@ def _refresh(server: dict[str, Any]) -> None:
         public_ip=info.public_ip,
         region_id=info.region_id,
     )
-    repo.add_sample(int(server["id"]), traffic, info.status)
+    # 空读数不落样本：曲线里插一个假 0 会让人以为流量掉了，实际只是没读上来。
+    if not empty_reading:
+        repo.add_sample(int(server["id"]), traffic, info.status)
+    if repo.get_flag(f"traffic_empty:{int(server['id'])}") and not empty_reading:
+        repo.clear_flag(f"traffic_empty:{int(server['id'])}")
     server["traffic_used"] = traffic
     server["instance_status"] = info.status
     server["stopped_mode"] = info.stopped_mode
