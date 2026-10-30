@@ -157,7 +157,7 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 > 
 >  **交接顺序**：上班准时——到点先把当班实例开机；下班不抢跑——等下一台确认运行中，上一台才停机。
 
-**目的**：通过换班大幅度降低抢占式实例的费用。
+**目的**：通过换班大幅度降低持有多台抢占式实例的成本。
 
 ### 流量保护
 
