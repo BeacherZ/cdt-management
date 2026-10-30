@@ -23,6 +23,68 @@
 
 ![概览](docs/screenshots/02-dashboard.png)
 
+## 主要功能
+
+### 单机保活
+
+**说明**：一台实例自己管自己，掉了就拉起来，不换班、不碰别的实例。
+
+> 每分钟巡检，停着就再下发一次开机，直到拉起为止；启动中不重复下发。
+
+**目的**：失联第一时间拉起来，保证在线率。
+
+### 联合换班
+
+**说明**：多台实例编成一组，按顺序轮流当班，同一时刻只留一台在线。排班周期两种任选：
+
+>  **一天一轮**：填每台的工时，或直接排 0–24 点的固定时刻表，24 小时内换完；
+> 
+>  **一月一轮**：填每台上几天，1 号 0 点从第 1 位开始，最后一位承接当月剩下的天数。
+> 
+>  **交接顺序**：上班准时——到点先把当班实例开机；下班不抢跑——等下一台确认运行中，上一台才停机。
+
+**目的**：通过换班大幅度降低持有多台抢占式实例的成本。
+
+### 流量保护
+
+**说明**：每台单独配阈值，超限自动停机；换班组会先尝试故障转移，全超才熔断。
+
+> 故障转移的两种触发情形：当班流量到阈值，或当班被抢占后尝试3次无法拉起。
+
+**目的**：不让任何一台实例烧穿流量包。
+
+### DNS
+
+**说明**：一条记录绑一台实例或一个换班组，实例开机时自动指向新 IP。
+
+**目的**：单实例换了弹性 IP 不用手动改 DNS；换班组绑定的域名 `DDNS` 同步到目前当班运行的实例IP，组员搭建的同种服务共享配置后可无感切换使用该服务。
+
+### 通知
+
+**说明**：支持 Telegram、邮件、Webhook 三类渠道，可同时开启。
+
+**目的**：换班、故障转移、熔断、超限停机、抢占恢复、换班异常、每日报告都主动推给你，不用盯面板。
+
+实际推出来的样子（点开看原图）：
+
+<p align="center">
+  <img src="docs/screenshots/16-notify-shift.png" width="31%" align="top" alt="CDT 换班完成报告（换班组）">
+  <img src="docs/screenshots/17-notify-failover.png" width="31%" align="top" alt="CDT 故障转移报告（换班组）">
+  <img src="docs/screenshots/18-notify-breaker.png" width="31%" align="top" alt="CDT 全局熔断报告（换班组）">
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/19-notify-limitstop.png" width="31%" align="top" alt="CDT 全局熔断报告（换班组·单台）">
+  <img src="docs/screenshots/20-notify-over-keepalive.png" width="31%" align="top" alt="CDT 超限停机报告（单机保活）">
+  <img src="docs/screenshots/21-notify-over-idle.png" width="31%" align="top" alt="CDT 超限停机报告（闲散手动）">
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/22-notify-recovery.png" width="31%" align="top" alt="CDT 抢占恢复报告">
+  <img src="docs/screenshots/23-notify-error.png" width="31%" align="top" alt="CDT 换班异常报告（换班组）">
+  <img src="docs/screenshots/24-notify-daily.png" width="31%" align="top" alt="CDT 每日报告">
+</p>
+
 ## 快速开始
 
 三种装法任选一种。默认数据目录 `/opt/docker/cdt-management`，宿主机端口 `8282`，容器端口 `8080`。
@@ -136,68 +198,6 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 4. **DNS**：加域名记录，再把它绑到某台实例或某个换班组（不绑就谁也不会去动它）
 5. **设置 → 通知**：填 Telegram Bot Token + Chat ID，点「发送测试」确认能收到
 6. 回概览点「立即同步」，看第一轮结果
-
-## 主要功能
-
-### 单机保活
-
-**说明**：一台实例自己管自己，掉了就拉起来，不换班、不碰别的实例。
-
-> 每分钟巡检，停着就再下发一次开机，直到拉起为止；启动中不重复下发。
-
-**目的**：失联第一时间拉起来，保证在线率。
-
-### 联合换班
-
-**说明**：多台实例编成一组，按顺序轮流当班，同一时刻只留一台在线。排班周期两种任选：
-
->  **一天一轮**：填每台的工时，或直接排 0–24 点的固定时刻表，24 小时内换完；
-> 
->  **一月一轮**：填每台上几天，1 号 0 点从第 1 位开始，最后一位承接当月剩下的天数。
-> 
->  **交接顺序**：上班准时——到点先把当班实例开机；下班不抢跑——等下一台确认运行中，上一台才停机。
-
-**目的**：通过换班大幅度降低持有多台抢占式实例的成本。
-
-### 流量保护
-
-**说明**：每台单独配阈值，超限自动停机；换班组会先尝试故障转移，全超才熔断。
-
-> 故障转移的两种触发情形：当班流量到阈值，或当班被抢占后尝试3次无法拉起。
-
-**目的**：不让任何一台实例烧穿流量包。
-
-### DNS
-
-**说明**：一条记录绑一台实例或一个换班组，实例开机时自动指向新 IP。
-
-**目的**：单实例换了弹性 IP 不用手动改 DNS；换班组绑定的域名 `DDNS` 同步到目前当班运行的实例IP，组员搭建的同种服务共享配置后可无感切换使用该服务。
-
-### 通知
-
-**说明**：支持 Telegram、邮件、Webhook 三类渠道，可同时开启。
-
-**目的**：换班、故障转移、熔断、超限停机、抢占恢复、换班异常、每日报告都主动推给你，不用盯面板。
-
-实际推出来的样子（点开看原图）：
-
-<p align="center">
-  <img src="docs/screenshots/16-notify-shift.png" width="31%" align="top" alt="CDT 换班完成报告（换班组）">
-  <img src="docs/screenshots/17-notify-failover.png" width="31%" align="top" alt="CDT 故障转移报告（换班组）">
-  <img src="docs/screenshots/18-notify-breaker.png" width="31%" align="top" alt="CDT 全局熔断报告（换班组）">
-</p>
-
-<p align="center">
-  <img src="docs/screenshots/19-notify-limitstop.png" width="31%" align="top" alt="CDT 全局熔断报告（换班组·单台）">
-  <img src="docs/screenshots/20-notify-over-keepalive.png" width="31%" align="top" alt="CDT 超限停机报告（单机保活）">
-  <img src="docs/screenshots/21-notify-over-idle.png" width="31%" align="top" alt="CDT 超限停机报告（闲散手动）">
-</p>
-
-<p align="center">
-  <img src="docs/screenshots/22-notify-recovery.png" width="31%" align="top" alt="CDT 抢占恢复报告">
-  <img src="docs/screenshots/23-notify-error.png" width="31%" align="top" alt="CDT 换班异常报告（换班组）">
-  <img src="docs/screenshots/24-notify-daily.png" width="31%" align="top" alt="CDT 每日报告">
-</p>
 
 ## 数据放在哪
 
