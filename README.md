@@ -23,7 +23,7 @@
 
 ![概览](docs/screenshots/02-dashboard.png)
 
-## 主要功能：
+## 主要功能
 
 ### 单机保活
 
