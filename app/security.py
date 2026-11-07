@@ -11,6 +11,7 @@ import hmac
 import json
 import os
 import secrets
+import threading
 import time
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -54,17 +55,28 @@ def verify_password(password: str, stored: str) -> bool:
 def _load_master_key() -> bytes:
     settings.ensure_dirs()
     path = settings.MASTER_KEY_PATH
-    if path.exists():
-        raw = path.read_bytes()
-        if len(raw) >= 32:
-            return raw[:32]
+    try:
+        # O_EXCL：并发首调时只有一个线程/进程能创建成功，另一个落到下面的读分支。
+        # 原来用「先判存在、再 write_bytes」，两个调用方会各生成一把密钥，后写的
+        # 把先写的覆盖掉 —— 用另一把加密的凭据从此解不开。
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        # 刚创建、内容还没写完的瞬间也要等一等：读到 0 字节不是「文件坏了」。
+        for _ in range(50):
+            raw = path.read_bytes()
+            if len(raw) >= 32:
+                return raw[:32]
+            time.sleep(0.01)
         # 文件在但内容不完整：绝不能悄悄重新生成，否则已存的 Secret 全部解不开
         raise RuntimeError(
             f"主密钥文件 {path} 内容不完整（{len(raw)} 字节，至少需要 32）。"
             "请从备份恢复；如果确实要重来，删掉该文件后重新录入所有凭据。"
         )
-    key = os.urandom(32)
-    path.write_bytes(key)
+    try:
+        key = os.urandom(32)
+        os.write(fd, key)
+    finally:
+        os.close(fd)
     try:
         os.chmod(path, 0o600)
     except OSError:
@@ -73,12 +85,15 @@ def _load_master_key() -> bytes:
 
 
 _MASTER_KEY: bytes | None = None
+_KEY_LOCK = threading.Lock()
 
 
 def master_key() -> bytes:
     global _MASTER_KEY
     if _MASTER_KEY is None:
-        _MASTER_KEY = _load_master_key()
+        with _KEY_LOCK:
+            if _MASTER_KEY is None:
+                _MASTER_KEY = _load_master_key()
     return _MASTER_KEY
 
 

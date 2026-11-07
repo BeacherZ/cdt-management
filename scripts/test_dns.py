@@ -118,6 +118,54 @@ class Registry(Base):
         self.assertIsNone(repo.get_dns_record("a.example.com"))
         self.assertEqual(repo.dns_record_of(dns.TARGET_SERVER, server_id), "")
 
+    def test_corrupt_config_never_wipes_bindings(self):
+        """配置读不懂 ≠ 用户清空：整张绑定表必须原样保留。
+
+        以前 records() 把 "not json at all" 当成一条记录名，sync_registry 一看
+        「a.example.com 不在名单里」就连绑定一起删，还建出一条垃圾行；而
+        '{"broken": "dict"}' 会解析出空列表，直接把表清空。
+        """
+        repo.set_settings({"ddns_records": '["a.example.com","b.example.com"]'})
+        dns.sync_registry(self.config())
+        server_id = self.add_server("香港-主力")
+        dns.bind("a.example.com", dns.TARGET_SERVER, server_id)
+
+        for raw in ('{"broken": "dict"}', "not json at all", "a.example.com b.example.com"):
+            with self.subTest(raw=raw):
+                repo.set_settings({"ddns_records": raw, "ddns_record": ""})
+                dns.sync_registry(self.config())
+                self.assertEqual(
+                    [row["record"] for row in repo.list_dns_records()],
+                    ["a.example.com", "b.example.com"],
+                )
+                self.assertEqual(repo.dns_record_of(dns.TARGET_SERVER, server_id),
+                                 "a.example.com")
+
+    def test_clearing_all_records_still_deletes(self):
+        """空数组是用户真的清空，不能因为上面那条保护就删不掉。"""
+        repo.set_settings({"ddns_records": '["a.example.com"]', "ddns_record": "a.example.com"})
+        dns.sync_registry(self.config())
+        repo.set_settings({"ddns_records": "[]", "ddns_record": ""})
+        dns.sync_registry(self.config())
+        self.assertEqual(repo.list_dns_records(), [])
+
+    def test_add_record_refuses_when_config_unreadable(self):
+        """加域名时基底读不懂就拒绝：否则写回「只有新名一条」会清掉其它绑定。"""
+        repo.set_settings({"ddns_records": '["a.example.com"]'})
+        dns.sync_registry(self.config())
+        server_id = self.add_server("香港-主力")
+        dns.bind("a.example.com", dns.TARGET_SERVER, server_id)
+        repo.set_settings({"ddns_records": '{"broken": "dict"}', "ddns_record": ""})
+
+        with self.assertRaises(ValueError):
+            dns.add_record("b.example.com", self.config())
+        with self.assertRaises(ValueError):
+            dns.remove_record("a.example.com", self.config())
+
+        # 配置没被写坏，绑定还在
+        self.assertEqual(repo.dns_record_of(dns.TARGET_SERVER, server_id), "a.example.com")
+        self.assertEqual([row["record"] for row in repo.list_dns_records()], ["a.example.com"])
+
     def test_add_record_appends_and_keeps_order(self):
         repo.set_settings({"ddns_records": '["a.example.com"]'})
         dns.add_record("b.example.com", self.config())

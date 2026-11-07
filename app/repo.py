@@ -18,7 +18,7 @@ SENSITIVE_SETTINGS = {
 }
 
 
-def _is_hhmm(value: str) -> bool:
+def is_hhmm(value: str) -> bool:
     """校验 HH:MM 时刻，支持 00:00–23:59。"""
     parts = value.split(":")
     if len(parts) != 2:
@@ -747,9 +747,9 @@ def upsert_group(payload: dict[str, Any]) -> int:
         # 时刻要么都空（走老 hours 累加），要么都填且格式合法
         if (start_time and not end_time) or (end_time and not start_time):
             raise ValueError("班次起止时刻要成对填写")
-        if start_time and not _is_hhmm(start_time):
+        if start_time and not is_hhmm(start_time):
             raise ValueError(f"起始时刻「{start_time}」格式应为 HH:MM")
-        if end_time and not _is_hhmm(end_time):
+        if end_time and not is_hhmm(end_time):
             raise ValueError(f"结束时刻「{end_time}」格式应为 HH:MM")
         members.append(
             {

@@ -716,8 +716,11 @@ def register(app: FastAPI) -> None:
     def reconcile(request: Request, user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
         require_csrf(request)
         results = engine.reconcile_all()
+        if results is None:
+            # 上一轮还没跑完（后台正忙）：这轮根本没执行，别让前端提示「已触发」。
+            return {"results": [], "busy": True, "dns": []}
         # 手动对账时顺手把 DNS 也过一遍，免得「点了立即对账但域名没跟上」
-        return {"results": results, "dns": dns.reconcile(repo.get_settings())}
+        return {"results": results, "busy": False, "dns": dns.reconcile(repo.get_settings())}
 
     # -- 服务器 ---------------------------------------------------------
     @app.get("/api/v1/servers")
@@ -1012,7 +1015,17 @@ def register(app: FastAPI) -> None:
             updates["billing_interval"] = str(interval)
 
         put_bool("daily_report_enabled", payload.get("daily_report_enabled"))
-        put_str("daily_report_time", payload.get("daily_report_time"))
+        report_time = payload.get("daily_report_time")
+        if report_time is not None:
+            text = str(report_time).strip()
+            if text:
+                # 存进越界值（如 25:00）会让调度线程每轮 now.replace() 抛异常，
+                # 日报从此再也不发 —— 这种值必须在入口挡掉。
+                if not repo.is_hhmm(text):
+                    raise ValueError("日报时间格式应为 HH:MM（00:00–23:59）")
+                hour, minute = (int(part) for part in text.split(":"))
+                text = f"{hour:02d}:{minute:02d}"
+            updates["daily_report_time"] = text
         for key in (
             "notify_on_shift",
             "notify_on_failover",
@@ -1041,8 +1054,12 @@ def register(app: FastAPI) -> None:
                     name = str(item or "").strip()
                     if not name or name.lower() in seen:
                         continue
-                    if any(ch.isspace() for ch in name):
-                        raise ValueError(f"DDNS 记录名不能带空格：{name}")
+                    # 和解析层用同一把尺子：不带点的值存进去，ddns.records() 会当它
+                    # 不存在，界面显示「未配置」、DDNS 也静默不动，只在日志里留一句。
+                    if not ddns.is_valid_record(name):
+                        raise ValueError(
+                            f"DDNS 记录名要是完整域名（至少一层点、不带空格）：{name}"
+                        )
                     seen.add(name.lower())
                     cleaned.append(name)
                 updates["ddns_records"] = json.dumps(cleaned, ensure_ascii=False)

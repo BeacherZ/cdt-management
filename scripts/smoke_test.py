@@ -237,6 +237,20 @@ check(
 status, body = call("POST", "/api/v1/settings", {"reconcile_offset": 60})
 check("巡检起始秒越界被拒绝", status == 400, str(body)[:120])
 
+# 越界时刻存进去会让调度线程每轮 now.replace() 抛异常，日报从此不再发送
+status, body = call("POST", "/api/v1/settings", {"daily_report_time": "25:00"})
+check("日报时间越界被拒绝", status == 400, str(body)[:120])
+
+status, body = call("POST", "/api/v1/settings", {"daily_report_time": "9:5"})
+check("日报时间接受非补零写法", status == 200 and body.get("ok"), str(body)[:120])
+status, body = call("GET", "/api/v1/settings")
+check(
+    "日报时间保存为补零的 HH:MM",
+    body.get("daily_report_time") == "09:05",
+    str(body.get("daily_report_time")),
+)
+call("POST", "/api/v1/settings", {"daily_report_time": "23:58"})
+
 status, body = call(
     "POST",
     "/api/v1/settings",
@@ -250,6 +264,10 @@ check(
     str(body["ddns"]["records"]),
 )
 check("默认域名等于第一条", body["ddns"]["record"] == "cdt.example.com", body["ddns"]["record"])
+
+# 不带点的值存进去，ddns.records() 会当它不存在：界面显示「未配置」、DDNS 静默不动
+status, body = call("POST", "/api/v1/settings", {"ddns": {"records": ["no-dot"]}})
+check("设置里不带点的记录名被拒", status == 400, str(body)[:120])
 
 status, body = call("GET", "/api/v1/events?kind=system&limit=50")
 before_changed = len(body.get("items", []))

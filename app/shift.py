@@ -484,10 +484,12 @@ class Engine:
         self._lock = threading.Lock()
 
     # -- 总入口 -----------------------------------------------------------
-    def reconcile_all(self) -> list[dict[str, Any]]:
+    def reconcile_all(self) -> list[dict[str, Any]] | None:
         if not self._lock.acquire(blocking=False):
             log.debug("上一轮还没结束，跳过本次")
-            return []
+            # 返回 None 而不是空列表：「这一轮没跑」和「跑了但没事可做」必须能区分，
+            # 否则手动点「立即对账」时接口会说「已触发」，实际什么都没发生。
+            return None
         try:
             config = repo.get_settings()
             now = dt.datetime.now(_timezone(config.get("timezone") or "Asia/Shanghai"))
@@ -527,8 +529,13 @@ class Engine:
 
             # 读取告警收尾：机器被删或移出监控后不会再有恢复回调，
             # 统一在每轮末尾把这类「进行中」事件收掉，避免它永远转圈。
+            # 判据是「还在库里」而不是「在换班组/保活里」：闲散机器这一轮也会
+            # 读状态、也会建读取事件，只认换班组+保活的话，它的告警会被刚建好
+            # 就当成孤儿关掉，每分钟开关一次。
             try:
-                _close_orphan_read_errors(grouped | keepalive_ids)
+                _close_orphan_read_errors(
+                    {int(server["id"]) for server in repo.list_servers()}
+                )
             except Exception:  # noqa: BLE001
                 log.exception("读取告警收尾失败")
             return results
@@ -747,15 +754,29 @@ class Engine:
         这是 1.1.15 补上的：之前闲散机器完全没人巡检，超了阈值一直在跑。
         """
         results: list[dict[str, Any]] = []
+        tz_name = config.get("timezone") or "Asia/Shanghai"
         for server in repo.list_servers(decrypt_secret=True):
             server_id = int(server["id"])
             if server_id in grouped or server_id in keepalive_ids:
                 continue
+            label = str(server.get("label") or f"#{server_id}")
             try:
                 _refresh(server)
-            except Exception:  # noqa: BLE001
-                # 读不到状态就当没这回事，别让一台机器把整轮拖垮
+            except Exception as exc:  # noqa: BLE001
+                # 以前这里是静默 continue：卡片一直挂着上一轮的旧状态和旧 IP，
+                # 用户以为机器在跑。保活和换班组都有读取事件，闲散机不该是盲区。
+                _read_error(
+                    server_id=server_id,
+                    title=f"{label} 状态读取异常",
+                    exc=exc,
+                    tz_name=tz_name,
+                )
                 continue
+            _read_recovered(
+                server_id=server_id,
+                title=f"{label} 状态读取已恢复",
+                tz_name=tz_name,
+            )
             if _over_threshold(server):
                 if self._limit_stop_server(server_id, server, config, messages.SCOPE_IDLE):
                     results.append({"idle": server_id, "over_limit": True})
@@ -1790,8 +1811,10 @@ class Engine:
                 over = [server for server in others if _over_threshold(server)]
             if not over and others:
                 over = [others[0]]
-            taken = {id(server) for server in over}
-            standby = [server for server in others if id(server) not in taken]
+            # 按 id 比较，不要用内置 id()：后者比的是 dict 对象地址，一旦哪天
+            # 有人 copy 一份 server 传进来，这里就会静默算错。
+            over_ids = {int(server["id"]) for server in over}
+            standby = [server for server in others if int(server["id"]) not in over_ids]
             message = messages.shift_failover(
                 duty, over, standby, str(ddns_status), group_name=name, reason=reason
             )

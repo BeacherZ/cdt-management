@@ -55,6 +55,15 @@ def normalize(name: str | None) -> str:
 
 def sync_registry(config: dict[str, str]) -> None:
     """把设置里的记录名同步进表里，设置里删掉的就从表里删掉。"""
+    # 配置读不懂（不是列表、或混了非域名）时绝不能往下走：下面那段会把
+    # 「不在名单里」的行连同 target 一起删光，用户从此不再有 DDNS。
+    # 注意区分「读不懂」(None) 和「用户清空」(空列表)：后者该删就删。
+    if ddns.parse_records(config) is None:
+        log.warning(
+            "DDNS 记录名配置无法解析，保留现有绑定不动：%r",
+            (config.get("ddns_records") or "")[:80],
+        )
+        return
     names = ddns.records(config)
     keep = set(names)
     for name in names:
@@ -83,6 +92,18 @@ def adopt_legacy(config: dict[str, str]) -> None:
         log.info("接手换班组「%s」的域名 %s", group.get("name"), legacy)
 
 
+def _editable_records(config: dict[str, str]) -> list[str]:
+    """加/删记录时用来当基底的旧列表。
+
+    这两个入口都是「读出旧列表 → 改一项 → 整体写回」。基底若因为配置读不懂而
+    退化成空列表，写回就等于把其它域名连同绑定一起删了 —— 所以读不懂时直接拒绝，
+    让用户先把 ddns_records 修好。
+    """
+    if ddns.parse_records(config) is None:
+        raise ValueError("记录名配置读不懂（ddns_records 不是合法列表），请先修好再改")
+    return ddns.records(config)
+
+
 def add_record(name: str, config: dict[str, str]) -> str:
     name = normalize(name)
     if not name:
@@ -92,7 +113,7 @@ def add_record(name: str, config: dict[str, str]) -> str:
     if "." not in name:
         raise ValueError("域名至少要有一层，形如 cdt.example.com")
 
-    names = ddns.records(config)
+    names = _editable_records(config)
     if name.lower() not in {item.lower() for item in names}:
         names.append(name)
     repo.set_settings(
@@ -108,7 +129,7 @@ def add_record(name: str, config: dict[str, str]) -> str:
 
 def remove_record(name: str, config: dict[str, str]) -> None:
     name = normalize(name)
-    names = [item for item in ddns.records(config) if item.lower() != name.lower()]
+    names = [item for item in _editable_records(config) if item.lower() != name.lower()]
     repo.set_settings(
         {
             "ddns_records": json.dumps(names, ensure_ascii=False),

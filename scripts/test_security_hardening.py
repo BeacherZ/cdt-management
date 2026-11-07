@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -25,7 +26,7 @@ os.environ["CDT_DATA_DIR"] = _TMP
 os.environ["CDT_DRY_RUN"] = "1"
 os.environ["CDT_MOCK_OP_DELAY"] = "0"
 
-from app import db, repo, shift  # noqa: E402
+from app import db, repo, security, settings, shift  # noqa: E402
 
 db.init_db()
 
@@ -90,6 +91,58 @@ class SecurityHardening(unittest.TestCase):
                     "threshold_gb": 188,
                 }
             )
+
+
+class ManualReconcileBusy(unittest.TestCase):
+    """后台正忙时点「立即对账」，接口必须能说出「这轮没跑」。"""
+
+    def test_lock_held_returns_none(self):
+        engine = shift.Engine()
+        engine._lock.acquire()  # noqa: SLF001 - 模拟上一轮还没结束
+        try:
+            self.assertIsNone(engine.reconcile_all())
+        finally:
+            engine._lock.release()
+
+
+class MasterKeyFirstCall(unittest.TestCase):
+    """冷启动并发首调只能产生一把密钥。
+
+    以前是「先判文件不存在、再 write_bytes」：两个调用方各生成一把，后写的
+    覆盖先写的，用另一把加密的凭据从此解不开。
+    """
+
+    def test_concurrent_first_call_yields_one_key(self):
+        key_path = settings.MASTER_KEY_PATH
+        if key_path.exists():
+            key_path.unlink()
+        security._MASTER_KEY = None  # noqa: SLF001
+        keys: list[bytes] = []
+        errors: list[str] = []
+        lock = threading.Lock()
+        barrier = threading.Barrier(8)
+
+        def grab() -> None:
+            barrier.wait()
+            try:
+                key = security.master_key()
+                with lock:
+                    keys.append(key)
+            except Exception as exc:  # noqa: BLE001
+                with lock:
+                    errors.append(repr(exc))
+
+        threads = [threading.Thread(target=grab) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual(errors, [])
+        self.assertEqual(len(keys), 8)
+        self.assertEqual(len(set(keys)), 1, "并发首调生成了不同的密钥")
+        self.assertEqual(key_path.read_bytes()[:32], keys[0])
+        self.assertEqual(len(key_path.read_bytes()), 32)
 
 
 if __name__ == "__main__":

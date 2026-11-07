@@ -50,6 +50,14 @@ def start() -> None:
         )
         _confirm_thread.start()
     log.info("调度线程已启动，对账间隔 %s 秒", settings.RECONCILE_INTERVAL)
+    if settings.GRACE_ORDER_BROKEN:
+        # 只在有人把 CDT_SHIFT_TIMEOUT_MINUTES 调到 3 分钟及以下时出现：
+        # 起不来判定阈值已经追平/超过超时，先转移后报警的顺序维护不了。
+        log.warning(
+            "换班超时 %s 分钟 ≤ 起不来判定 %s 秒：故障转移不会早于「换班超时」触发",
+            settings.SHIFT_TIMEOUT_MINUTES,
+            settings.DUTY_STALL_SECONDS,
+        )
 
 
 def stop() -> None:
@@ -79,7 +87,7 @@ def _next_tick(now: float, interval: int, offset: int) -> float:
     返回的刻度一定大于 now：正好踩在刻度上时顺延一格，避免同一秒里跑两轮。
     """
     span = max(1, int(interval))
-    # 间隔比 60 小时（新建换班组的 10 秒加密窗口）按取模处理：
+    # 间隔比 60 秒还小（新建换班组的 10 秒加密窗口）按取模处理：
     # 18 % 10 = 8 → 落在 :08/:18/:28，仍然包含用户指定的那一秒。
     mark = int(offset) % span
     slot = int(now // span) * span + mark
@@ -173,6 +181,7 @@ def _confirm_loop() -> None:
 def _confirm_pending_events() -> None:
     now = int(time.time())
     config = repo.get_settings()
+    keepalive_ids: set[int] | None = None
     for event in repo.list_pending_events():
         event_id = int(event["id"])
         server_id = int(event.get("server_id") or 0)
@@ -186,10 +195,15 @@ def _confirm_pending_events() -> None:
         # 单机保活是「一直试到起来为止」，不设超时：一台机器躺一整天也只有这一条
         # 记录，概要里写着已经试了多少次，点开能看到里程碑。只有它被移出保活或
         # 停用保活时才收尾，否则会留一条永远不会结束的转圈。
-        if pending_kind == "keepalive" and server_id not in repo.keepalive_server_ids():
-            repo.finish_event(event_id, "error", "已移出单机保活，停止拉起")
-            repo.clear_flag(f"keepalive_tries:{server_id}")
-            continue
+        if pending_kind == "keepalive":
+            # 保活名单整轮只查一次：这里 5 秒一轮，每个保活事件都单独 SELECT 一遍
+            # 是白花的开销（保活机器多的时候尤其明显）。
+            if keepalive_ids is None:
+                keepalive_ids = repo.keepalive_server_ids()
+            if server_id not in keepalive_ids:
+                repo.finish_event(event_id, "error", "已移出单机保活，停止拉起")
+                repo.clear_flag(f"keepalive_tries:{server_id}")
+                continue
 
         # 超时兜底：别让一个卡住的事件永远占着转圈。保活除外 —— 它本来就该
         # 一直等到实例起来（见上面的注释），超时会把一条长长的中断切成一堆。

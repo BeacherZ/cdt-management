@@ -362,7 +362,7 @@ class SettledShiftNoFalseTimeout(_ShiftBase):
         self.assertGreater(int(runs[0]["started_at"]), old + 3600)
 
 
-class UnsSettledTimeoutStillWorks(_ShiftBase):
+class UnsettledTimeoutStillWorks(_ShiftBase):
     """没结算过的班次：锚点老旧时，超时仍要正常报（别把正常逻辑改坏）。"""
 
     def test_unsettled_shift_still_reports_timeout(self) -> None:
@@ -388,6 +388,81 @@ class UnsSettledTimeoutStillWorks(_ShiftBase):
             any("换班超时" in title for title in titles),
             f"未结算班次的超时应该照常报：{titles}",
         )
+
+
+class IdleReadFailure(unittest.TestCase):
+    """闲散机器读不到状态也要留痕。
+
+    以前这里是静默 continue：卡片一直挂着上一轮的旧状态和旧 IP，用户以为机器
+    在跑。保活和换班组都有读取事件，闲散机不该是盲区。
+    """
+
+    def setUp(self) -> None:
+        _reset()
+        self.sid = _make_server("闲散-01", status="Running")
+        self._real_traffic = aliyun.get_traffic_gb
+        self._real_instance = aliyun.get_instance
+
+    def tearDown(self) -> None:
+        aliyun.get_traffic_gb = self._real_traffic
+        aliyun.get_instance = self._real_instance
+
+    def _reconcile(self) -> list[dict]:
+        config = repo.get_settings()
+        return shift.engine.reconcile_idle_limits(config, dt.datetime.now(TZ), set(), set())
+
+    def _break_traffic(self) -> None:
+        def boom(server):  # noqa: ANN001, ARG001
+            raise aliyun.AliyunError("CDT 流量查询失败：网络不可达（cdt.aliyuncs.com）")
+
+        aliyun.get_traffic_gb = boom
+
+    def test_failure_opens_event_and_recovery_closes_it(self) -> None:
+        self._break_traffic()
+        self._reconcile()
+
+        event = repo.pending_event(self.sid, "read_error")
+        self.assertIsNotNone(event, "闲散机读失败也应该有事件")
+        self.assertIn("读取失败", event["detail"])
+        self.assertIn("网络不可达", event["detail"])
+
+        aliyun.get_traffic_gb = self._real_traffic
+        self._reconcile()
+
+        self.assertIsNone(repo.pending_event(self.sid, "read_error"))
+        latest = repo.list_events(limit=1)[0]
+        self.assertEqual(latest["status"], "done")
+        self.assertTrue(latest["title"].endswith("读取已恢复"), latest["title"])
+        self.assertFalse(repo.get_flag(f"read_err:{self.sid}"))
+
+    def test_recovery_without_failure_is_silent(self) -> None:
+        self._reconcile()
+        self.assertEqual(repo.list_events(group_id=0), [])
+
+    def test_event_survives_orphan_sweep(self) -> None:
+        """整轮对账末尾的孤儿收尾不能把闲散机的读取事件关掉。
+
+        孤儿判据必须是「还在库里」。只认换班组+保活的话，闲散机器刚建好的
+        读取事件会在同一轮末尾被当成孤儿关掉，然后下一轮再建一条 —— 每分钟
+        开关一次，用户只看到一片闪烁的历史记录。
+        """
+        self._break_traffic()
+        shift.engine.reconcile_all()
+        self.assertIsNotNone(
+            repo.pending_event(self.sid, "read_error"),
+            "闲散机的读取事件被孤儿收尾误关了",
+        )
+
+    def test_event_closed_after_server_deleted(self) -> None:
+        self._break_traffic()
+        shift.engine.reconcile_all()
+        repo.delete_server(self.sid)
+        shift.engine.reconcile_all()
+
+        self.assertIsNone(repo.pending_event(self.sid, "read_error"))
+        latest = repo.list_events(limit=1)[0]
+        self.assertEqual(latest["status"], "done")
+        self.assertFalse(repo.get_flag(f"read_err:{self.sid}"))
 
 
 if __name__ == "__main__":

@@ -244,9 +244,14 @@ export default function App() {
     if (reconciling) return
     setReconciling(true)
     try {
-      await post('/api/v1/reconcile', undefined, SLOW_TIMEOUT_MS)
+      const result = await post<{ busy?: boolean }>('/api/v1/reconcile', undefined, SLOW_TIMEOUT_MS)
       await loadAll()
-      toast('已触发一轮同步', 'success')
+      if (result?.busy) {
+        // 后台还在跑上一轮，这一次请求被直接放弃了：不能说「已触发」。
+        toast('上一轮同步还没结束，稍等几秒再试', 'info')
+      } else {
+        toast('已触发一轮同步', 'success')
+      }
     } catch (error) {
       toast(error instanceof Error ? error.message : '同步失败', 'error')
     } finally {

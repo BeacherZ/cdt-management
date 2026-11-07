@@ -47,26 +47,53 @@ class DDNSResult:
 # 记录名
 # --------------------------------------------------------------------------
 
+def is_valid_record(name: str) -> bool:
+    """能不能当域名用：至少一层点、不带空白。
+
+    加这一层是因为 records() 的结果会直接拿去删绑定表 —— 把库里写坏的值
+    （比如 "not json at all"）当成记录名，会先把真记录删掉，再建一条垃圾行。
+    """
+    name = (name or "").strip()
+    return bool(name) and "." in name and not any(ch.isspace() for ch in name)
+
+
+def parse_records(config: dict[str, str]) -> list[str] | None:
+    """解析 ddns_records 里的记录名。
+
+    返回 None 表示「值在、但读不懂」（不是列表，或列表里混了不是域名的东西）。
+    调用方必须把 None 和空列表分开：空列表是用户清空，None 是配置坏了 ——
+    后者不许拿来删绑定表，否则手改一次库就把所有域名解绑了。
+    """
+    raw = (config.get("ddns_records") or "").strip()
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        # 手改过配置文件、写成一行一条的也认
+        parsed = raw.splitlines()
+    if not isinstance(parsed, list):
+        return None
+    items = [str(item).strip() for item in parsed]
+    items = [item for item in items if item]
+    if any(not is_valid_record(item) for item in items):
+        return None
+    return items
+
+
 def records(config: dict[str, str]) -> list[str]:
     """全部 DDNS 记录名。第一条是默认记录：单机保活和没单独指定域名的换班组都用它。
 
     ddns_records 存 JSON 数组；老库里只有单条 ddns_record 时自动当成一条，
     所以升级不需要迁移脚本。
     """
-    raw = (config.get("ddns_records") or "").strip()
-    items: list[str] = []
-    if raw:
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError:
-            # 手改过配置文件、写成一行一条的也认
-            parsed = raw.splitlines()
-        if isinstance(parsed, list):
-            items = [str(item).strip() for item in parsed]
-    items = [item for item in items if item]
+    items = parse_records(config)
+    if items is None:
+        # 读不懂就当没有：展示层退回「未配置」，不把垃圾值当域名去解析
+        items = []
     if not items:
         single = (config.get("ddns_record") or "").strip()
-        if single:
+        if is_valid_record(single):
             items = [single]
     # 去重但保留顺序
     seen: set[str] = set()

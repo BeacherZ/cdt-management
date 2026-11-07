@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 APP_NAME = "cdt-management"
-VERSION = "1.2.7"
+VERSION = "1.2.8"
 
 DATA_DIR = Path(os.environ.get("CDT_DATA_DIR", "./data")).resolve()
 DB_PATH = DATA_DIR / "cdt-management.db"
@@ -50,9 +50,17 @@ DUTY_STALL_SECONDS = max(60, int(os.environ.get("CDT_DUTY_STALL_SECONDS", "180")
 # 取 480（8 分钟）而不是 600：换班超时默认就是 10 分钟，两者相等时，一台真正
 # 卡死的机器会在同一轮同时触发「故障转移」和「换班超时」两条通知。提前 2 分钟
 # 先转移，用户先看到「换人了」，超时那条就不会再来添乱。
+#
+# 但换班超时是可配的（CDT_SHIFT_TIMEOUT_MINUTES）。用户调到 8 分钟以下时，
+# 固定的 480 秒就会反超，变成「先超时报警、后转移」。所以这里跟着它收紧：
+# 宽限至少比超时早 60 秒，同时不低于「确实没在跑」的判定阈值。
+_GRACE_CONFIGURED = max(60, int(os.environ.get("CDT_DUTY_START_GRACE", "480")))
 DUTY_START_GRACE = max(
-    DUTY_STALL_SECONDS, int(os.environ.get("CDT_DUTY_START_GRACE", "480"))
+    DUTY_STALL_SECONDS,
+    min(_GRACE_CONFIGURED, SHIFT_TIMEOUT_MINUTES * 60 - 60),
 )
+# 超时设得比 stall 阈值还短（最小 2 分钟）时，顺序无法再靠宽限修正。
+GRACE_ORDER_BROKEN = DUTY_START_GRACE >= SHIFT_TIMEOUT_MINUTES * 60
 
 # dry-run：不调真实阿里云接口，用于本地 UI 调试
 DRY_RUN = os.environ.get("CDT_DRY_RUN", "0") == "1"

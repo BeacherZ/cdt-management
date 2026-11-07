@@ -456,7 +456,16 @@ def get_instance(account: dict) -> InstanceInfo:
     try:
         raw = client.do_action_with_exception(request)
         data = json.loads(raw.decode("utf-8"))
-        instance = data["Instances"]["Instance"][0]
+        instances = (data.get("Instances") or {}).get("Instance") or []
+        if not instances:
+            # 实例被释放 / 实例 ID 填错 / 地域填错，返回的就是空列表。不拦住的话
+            # 用户看到的是「实例状态查询失败：list index out of range」。
+            raise AliyunError(
+                "实例状态查询失败：实例不存在或已释放，请检查实例 ID 与地域"
+            )
+        instance = instances[0]
+    except AliyunError:
+        raise
     except Exception as exc:
         raise AliyunError(f"实例状态查询失败：{brief_error(exc)}") from exc
 
