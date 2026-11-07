@@ -202,6 +202,7 @@ status, body = call(
         "timezone": "Asia/Shanghai",
         "traffic_threshold_pct": 94,
         "reconcile_interval": 60,
+        "reconcile_offset": 18,
         "ddns": {
             "enabled": False,
             "cf_auth_mode": "token",
@@ -222,10 +223,19 @@ status, body = call("GET", "/api/v1/settings")
 check("Token 不回显原文", body["telegram"]["token_configured"] is True and "token" not in body["telegram"])
 check("DDNS Token 只回显配置标记", body["ddns"]["cf_token_configured"] is True)
 check(
+    "巡检起始秒可保存",
+    body.get("reconcile_offset") == "18",
+    str(body.get("reconcile_offset")),
+)
+check(
     "单条 record 自动当成一条记录名",
     body["ddns"]["records"] == ["cdt.example.com"],
     str(body["ddns"]["records"]),
 )
+
+# 放在读完这段 body 之后：这几次 POST 会把 body 换成错误响应
+status, body = call("POST", "/api/v1/settings", {"reconcile_offset": 60})
+check("巡检起始秒越界被拒绝", status == 400, str(body)[:120])
 
 status, body = call(
     "POST",
@@ -328,7 +338,12 @@ if target:
     check("界面高亮的当班就是替补", bool(duty_member) and duty_member["server_id"] == fail_servers[1])
 
 status, events_body = call("GET", "/api/v1/events?limit=200")
-failover_events = [e for e in events_body.get("items", []) if e["kind"] == "failover"]
+# 结算时 kind 会从 failover 改写成 shift_failover，两种都算同一个事件
+failover_events = [
+    e
+    for e in events_body.get("items", [])
+    if e["kind"] in ("failover", "shift_failover")
+]
 check("故障转移事件只记一次", len(failover_events) == 1, f"实际 {len(failover_events)} 条")
 
 print("\n== 14. 改密码后旧会话立即失效 ==")

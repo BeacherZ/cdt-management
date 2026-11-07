@@ -68,12 +68,37 @@ def request_fast_reconcile(seconds: float = _FAST_WINDOW) -> None:
     _wake.set()
 
 
-def _wait(interval: float) -> None:
-    """等一轮间隔；期间有「立刻对账」请求就提前返回。
+def _next_tick(now: float, interval: int, offset: int) -> float:
+    """下一轮该在什么时候开始：对齐到 interval 网格上的第 offset 秒。
+
+    原来调度是「跑完一轮再睡 interval 秒」，执行耗时全被算进周期里 —— 一轮跑
+    3 秒，实际周期就是 63 秒，跑一天触发时刻越飘越远，也没法说清「这一轮到底
+    在每分钟第几秒打接口」。改成按绝对时间对齐后：interval=60、offset=18 就是
+    每分钟第 18 秒，前面那轮跑了多久都不影响。
+
+    返回的刻度一定大于 now：正好踩在刻度上时顺延一格，避免同一秒里跑两轮。
+    """
+    span = max(1, int(interval))
+    # 间隔比 60 小时（新建换班组的 10 秒加密窗口）按取模处理：
+    # 18 % 10 = 8 → 落在 :08/:18/:28，仍然包含用户指定的那一秒。
+    mark = int(offset) % span
+    slot = int(now // span) * span + mark
+    return float(slot + span if slot <= now else slot)
+
+
+def _offset() -> int:
+    """巡检对齐到网格的哪一秒（0–59）。读不到或越界都当 0，保持老行为。"""
+    try:
+        return max(0, min(59, int(repo.get_setting("reconcile_offset", "0"))))
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _wait(deadline: float) -> None:
+    """等到指定时刻；期间有「立刻对账」请求就提前返回。
 
     用 1 秒切片等，既能被 _wake 及时叫醒，也不至于空转。
     """
-    deadline = time.time() + interval
     while not _stop.is_set():
         remaining = deadline - time.time()
         if remaining <= 0:
@@ -119,7 +144,9 @@ def _loop() -> None:
         interval = _interval()
         if time.time() < _fast_until:
             interval = min(interval, _FAST_INTERVAL)
-        _wait(interval)
+        # 对齐到固定的秒位，而不是「跑完再睡 interval 秒」：后者会把执行耗时
+        # 计入周期，触发时刻一路漂移，也做不到「每分钟第 18 秒」这种错峰。
+        _wait(_next_tick(time.time(), interval, _offset()))
 
 
 def _interval() -> int:
@@ -179,8 +206,13 @@ def _confirm_pending_events() -> None:
                 continue
             info = aliyun.get_instance(server)
         except Exception as exc:  # noqa: BLE001
-            # 查询失败不算到位，下一轮再试；但不刷屏
-            repo.add_event_progress(event_id, f"状态查询失败：{exc}")
+            # 查询失败不算到位，下一轮再试。文案必须脱敏：这里 5 秒一轮，
+            # 原始异常带着整条签名 URL 和对象地址，既会把 AK/Signature 摊在事件里，
+            # 又因为每次文本都不同而躲过 add_event_progress 的相邻去重 —— 一条跨天的
+            # 保活事件能被刷到条数上限，把开头的步骤挤掉。
+            repo.add_event_progress(
+                event_id, f"状态查询失败：{aliyun.brief_error(exc)}"
+            )
             continue
 
         # 用真实状态刷新服务器运行时快照，让卡片同步
@@ -228,6 +260,11 @@ def _confirm_pending_events() -> None:
 
             # 到位后的收尾动作按事件类型区分
             if pending_kind == "keepalive":
+                # 收尾时补一句总次数：概览原本会被「运行中」整条覆盖，用户想看
+                # 「这次被抢之后一共试了多少次才起来」就只剩进度里那几行里程碑。
+                tries = repo.flag_value(f"keepalive_tries:{server_id}")
+                if tries > 1:
+                    record(f"共尝试拉起 {tries} 次", f"共尝试 {tries} 次")
                 # 保活拉起（抢占恢复）：同步这台机器绑的所有域名后补发通知。
                 # IP 必须用刚查到的实时值：server 是轮询前取的快照，实例停机期间
                 # 库里存的是空 IP，拿快照去同步只会得到「⚠️ IP 无效跳过」。

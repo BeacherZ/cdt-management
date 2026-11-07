@@ -115,6 +115,12 @@ def flag_age(key: str) -> float:
     return time.time() - float(row["created_at"])
 
 
+def flag_value(key: str) -> int:
+    """标记附带的值（读取告警用它记「连续失败几次」）；不存在返回 0。"""
+    row = db.query_one("SELECT value FROM flags WHERE key=?", (key,))
+    return int(row["value"] or 0) if row is not None else 0
+
+
 def clear_flags_like(prefix: str) -> None:
     """按前缀清一批标记（如 `dns_fail:a.example.com:` 的所有失败类型）。
 
@@ -334,8 +340,9 @@ def delete_server(server_id: int) -> None:
     # 这台机器专属的一次性标记一并清掉。SQLite 的 AUTOINCREMENT 不复用 id，
     # 留着不会被新机器撞上，但也没人再去清 —— 只能等 90 天的兜底清理，白占表。
     db.execute(
-        "DELETE FROM flags WHERE key IN (?,?,?,?)",
+        "DELETE FROM flags WHERE key IN (?,?,?,?,?)",
         (
+            f"read_err:{server_id}",
             f"keepalive_err:{server_id}",
             f"keepalive_fail:{server_id}",
             f"keepalive_tries:{server_id}",
@@ -1041,6 +1048,15 @@ def pending_event(server_id: int, pending_kind: str) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+def running_pending_events(pending_kind: str) -> list[dict[str, Any]]:
+    """所有「进行中」且带指定 pending_kind 的事件（读取告警的收尾清理用）。"""
+    rows = db.query(
+        "SELECT * FROM events WHERE status='running' AND pending_kind=? ORDER BY id",
+        (pending_kind,),
+    )
+    return [dict(row) for row in rows]
+
+
 # 单个事件最多保留的进度条数，超出丢弃最旧的，防止长期卡住的事件把进度撑爆
 PROGRESS_MAX_STEPS = 50
 
@@ -1102,9 +1118,9 @@ def finish_event(event_id: int, status: str = "done", detail: str = "") -> None:
 
 
 def update_event(
-    event_id: int, *, title: str = "", detail: str = "", kind: str = ""
+    event_id: int, *, title: str = "", detail: str = "", kind: str = "", level: str = ""
 ) -> None:
-    """改写一条事件的标题 / 摘要 / 类型（如「换班进行中」→「换班完成」），保留原 ts 与进度。"""
+    """改写一条事件的标题 / 摘要 / 类型 / 级别（如「换班进行中」→「换班完成」），保留原 ts 与进度。"""
     if not event_id:
         return
     sets: list[str] = []
@@ -1118,6 +1134,9 @@ def update_event(
     if kind:
         sets.append("kind=?")
         params.append(kind)
+    if level:
+        sets.append("level=?")
+        params.append(level)
     if not sets:
         return
     params.append(event_id)

@@ -437,7 +437,7 @@ class TrafficBreaker(unittest.TestCase):
             + [str(e.get("detail") or "") for e in events]
             + [step["text"] for e in events for step in e.get("progress") or []]
         )
-        self.assertIn("状态读取失败", joined, joined)
+        self.assertIn("状态读取异常", joined, joined)
         self.assertNotIn("保守维持当班", joined, joined)
         # 熔断原因要如实写成「读不到」，不能编成「全员超限」
         run = db.query_one(

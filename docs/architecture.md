@@ -10,7 +10,7 @@
 uvicorn (asyncio)
  ├── FastAPI 路由          → 同步端点丢到线程池，不阻塞事件循环
  └── scheduler 线程 (daemon)
-       ├─ 每 N 秒：engine.reconcile_all()
+       ├─ 每 N 秒（对齐到设置的起始秒位）：engine.reconcile_all()
        ├─ 每分钟：检查日报时间
        └─ 每小时：清理事件与采样
 ```

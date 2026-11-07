@@ -524,6 +524,13 @@ class Engine:
                         group_id=int(group["id"]),
                     )
                     results.append({"group_id": group["id"], "error": str(exc)})
+
+            # 读取告警收尾：机器被删或移出监控后不会再有恢复回调，
+            # 统一在每轮末尾把这类「进行中」事件收掉，避免它永远转圈。
+            try:
+                _close_orphan_read_errors(grouped | keepalive_ids)
+            except Exception:  # noqa: BLE001
+                log.exception("读取告警收尾失败")
             return results
         finally:
             self._lock.release()
@@ -582,24 +589,25 @@ class Engine:
             server = repo.get_server(server_id, decrypt_secret=True)
             if server is None:
                 continue
+            tz_name = config.get("timezone") or "Asia/Shanghai"
+            label = str(server.get("label") or f"#{server_id}")
             try:
                 _refresh(server)
             except Exception as exc:  # noqa: BLE001
-                # 同一台机器连续读取失败只记一次，恢复后自动解除，避免每分钟刷一条错误
-                flag = f"keepalive_err:{server_id}"
-                if not repo.get_flag(flag):
-                    repo.set_flag(flag)
-                    repo.add_event(
-                        "error",
-                        f"{server.get('label')} 保活状态读取失败",
-                        str(exc),
-                        level="error",
-                        server_id=server_id,
-                    )
+                # 同一条事件里持续记录，带失败时刻与重试节奏；恢复时补上恢复时刻
+                _read_error(
+                    server_id=server_id,
+                    title=f"{label} 保活状态读取异常",
+                    exc=exc,
+                    tz_name=tz_name,
+                )
                 results.append({"keepalive": server_id, "error": str(exc)})
                 continue
-            if repo.get_flag(f"keepalive_err:{server_id}"):
-                repo.clear_flag(f"keepalive_err:{server_id}")
+            _read_recovered(
+                server_id=server_id,
+                title=f"{label} 保活状态读取已恢复",
+                tz_name=tz_name,
+            )
 
             # 流量超限 → 节省停机并暂停保活，不再无脑拉起。
             # 这是 1.1.15 补上的功能：之前单机保活只判断「停了就拉」，从不看阈值，
@@ -609,6 +617,9 @@ class Engine:
             if _over_threshold(server):
                 if self._limit_stop_server(server_id, server, config, messages.SCOPE_KEEPALIVE):
                     results.append({"keepalive": server_id, "over_limit": True})
+                # 超限期间保活是暂停的：正在转的「保活拉起」必须当场收掉，否则它
+                # 永远 running（确认器对保活不设超时），流量回落后还会被继续续写。
+                _close_keepalive_event(server_id, label, "流量超限，已停机并暂停保活")
                 # 超限停机的机器不再走「停了就拉」：流量回落前它就该保持停机。
                 continue
             # 流量回落到阈值以下（流量包重置 / 调高阈值）：清掉超限标记，
@@ -623,6 +634,8 @@ class Engine:
                 # 中间态不进这个分支，正在启动的实例不会被重复开。
                 # 事件只保留一条：一台机器一直起不来，重试次数续写进同一条事件的进度，
                 # 不再每次重试新开一条「保活拉起」。
+                state_label = messages.STATUS_LABELS.get(status, status or "未知")
+                pending = repo.pending_event(server_id, "keepalive")
                 try:
                     aliyun.start_instance(server)
                     # 保活拉起是异步的：建 running 事件，交给确认器轮询到 Running 后
@@ -631,56 +644,28 @@ class Engine:
                     # 一直起不来时：事件始终是那一条（可以横跨一整天），只把
                     # 「试了多少次」累加进标记，概要行跟着改 —— 收起的事件列表里
                     # 一眼就能看到「这台今天试了几百次还是没起来」，不用点开。
-                    tries_key = f"keepalive_tries:{server_id}"
-                    state_label = messages.STATUS_LABELS.get(status, status or "未知")
-                    pending = repo.pending_event(server_id, "keepalive")
-                    if pending:
-                        event_id = int(pending["id"])
-                        tries = repo.bump_flag(tries_key)
-                        repo.update_event(
-                            event_id,
-                            detail=f"已尝试拉起 {tries} 次，仍未运行（{state_label}）",
-                        )
-                        # 进度只留里程碑：一天 1440 轮，每分钟一行同义句会把事件
-                        # 点开就糊成一片。挑几个数量级记一次，既看出在持续重试，
-                        # 也不会把 PROGRESS_MAX_STEPS 撑爆、把开头那条挤掉。
-                        if tries in _KEEPALIVE_MILESTONES:
-                            repo.add_event_progress(
-                                event_id,
-                                f"{_KEEPALIVE_RETRY_MARK}{state_label}），"
-                                f"已尝试拉起 {tries} 次",
-                            )
-                    else:
-                        # 新的一次中断：计数从 1 重来，别接着上次中断的次数往下数
-                        repo.clear_flag(tries_key)
-                        repo.bump_flag(tries_key)
-                        event_id = repo.add_event(
-                            "start",
-                            f"{server.get('label')}：保活拉起",
-                            # 进行中的事件只说明「在等什么」；确认到位后整条 detail
-                            # 会被改写成结果（运行中 / ✅ 已同步），见 scheduler。
-                            "等待恢复运行",
-                            level="warning",
-                            server_id=server_id,
-                            status="running",
-                            pending_status="Running",
-                            pending_kind="keepalive",
-                        )
-                        repo.add_event_progress(event_id, f"已下发启动指令（原状态 {status}）")
+                    _keepalive_retry_note(
+                        server_id=server_id,
+                        label=str(server.get("label") or f"#{server_id}"),
+                        state_label=state_label,
+                        pending=pending,
+                    )
                     if repo.get_flag(f"keepalive_fail:{server_id}"):
                         repo.clear_flag(f"keepalive_fail:{server_id}")
                 except Exception as exc:  # noqa: BLE001
-                    # 同样只报一次：库存不足这类错误会连续出现，不必每分钟刷屏
-                    flag = f"keepalive_fail:{server_id}"
-                    if not repo.get_flag(flag):
-                        repo.set_flag(flag)
-                        repo.add_event(
-                            "error",
-                            f"{server.get('label')}：保活启动失败",
-                            str(exc),
-                            level="error",
-                            server_id=server_id,
-                        )
+                    # 开机指令没发出去（库存不足 / 限流 / 欠费）同样算一次尝试：
+                    # 以前这里只建一条 error 事件，之后每分钟静默重试，用户在界面上
+                    # 看不出「还在试、试了多少次」，那条 error 还挂着「完成」徽章。
+                    # 现在并进同一条 running 事件，概览写清次数与失败原因。
+                    _keepalive_retry_note(
+                        server_id=server_id,
+                        label=str(server.get("label") or f"#{server_id}"),
+                        state_label=state_label,
+                        pending=pending,
+                        # _brief_exc 会剥掉异常自带的「启动实例失败：」前缀，
+                        # 否则概览里会出现「启动指令失败：启动实例失败：…」两层失败
+                        error=_brief_exc(exc),
+                    )
                 # 已经 Running 时不再下发：抢占恢复的通知由确认器在「Running 到位」
                 # 那一刻统一发出（scheduler._confirm_pending_events）。
             elif status == "Running" and repo.get_flag(f"keepalive_tries:{server_id}"):
@@ -842,25 +827,27 @@ class Engine:
             duty_error = str(exc)
         healthy_others: list[dict[str, Any]] = []
         unreadable: set[int] = set()
+        tz_name = config.get("timezone") or "Asia/Shanghai"
         for server in others:
+            member_id = int(server["id"])
+            member_label = str(server.get("label") or f"#{member_id}")
             try:
                 _refresh(server)
                 healthy_others.append(server)
-                if repo.get_flag(f"member_err:{server['id']}"):
-                    repo.clear_flag(f"member_err:{server['id']}")
+                _read_recovered(
+                    server_id=member_id,
+                    title=f"{member_label} 状态读取已恢复",
+                    tz_name=tz_name,
+                )
             except Exception as exc:  # noqa: BLE001
-                unreadable.add(int(server["id"]))
-                flag = f"member_err:{server['id']}"
-                if not repo.get_flag(flag):
-                    repo.set_flag(flag)
-                    repo.add_event(
-                        "warning",
-                        f"{server.get('label')} 状态读取失败",
-                        str(exc),
-                        level="warning",
-                        group_id=group_id,
-                        server_id=int(server["id"]),
-                    )
+                unreadable.add(member_id)
+                _read_error(
+                    server_id=member_id,
+                    title=f"{member_label} 状态读取异常",
+                    exc=exc,
+                    group_id=group_id,
+                    tz_name=tz_name,
+                )
 
         # 当班状态读不到：本轮不许凭库里的旧快照发指令。
         # 旧快照说「停着」而机器其实在跑，就会给运行中的实例发开机，阿里云回
@@ -868,19 +855,19 @@ class Engine:
         # 反过来旧快照说「跑着」而机器已经停了，就漏掉一次该有的拉起。
         # 读不到就等下一轮 —— 拿不到状态时「什么都不做」比「猜着做」安全。
         if duty_error:
-            flag = f"duty_err:{group_id}:{slot_key}"
-            if not repo.get_flag(flag):
-                repo.set_flag(flag)
-                repo.add_event(
-                    "warning",
-                    f"{name}：当班状态读取失败",
-                    f"{duty.get('label')}：{duty_error}",
-                    level="warning",
-                    group_id=group_id,
-                    server_id=int(duty["id"]),
-                )
+            _read_error(
+                server_id=int(duty["id"]),
+                title=f"{name}：当班状态读取异常",
+                exc=duty_error,
+                group_id=group_id,
+                tz_name=tz_name,
+            )
             return {"group_id": group_id, "state_unreadable": duty_error}
-        repo.clear_flag(f"duty_err:{group_id}:{slot_key}")
+        _read_recovered(
+            server_id=int(duty["id"]),
+            title=f"{name}：当班状态读取已恢复",
+            tz_name=tz_name,
+        )
 
         # 2) 当班超限 → 找一台没超的接班；找不到就停机，绝不让超限的当班继续跑
         failover = False
@@ -963,18 +950,30 @@ class Engine:
         event_id = int(run.get("event_id") or 0)
 
         # 2.5) 当班起不来 → 和「当班流量超限」走同一套故障转移。
-        #      被抢占后拉不起来、或启动指令一直卡在中间态，超过 DUTY_STALL_SECONDS
-        #      就换一台顶这一班；否则整班空着只能等人工，与「只留一台在线」的目的相悖。
+        #      被抢占后拉不起来、或启动指令一直卡在中间态，超时后换一台顶这一班；
+        #      否则整班空着只能等人工，与「只留一台在线」的目的相悖。
         #
         #      计时用独立 flag 而不是 run.started_at：后者的语义是「本班次从什么时候
         #      开始处理」（换班超时按它算），正常换班里它不等同于「这次拉起多久了」。
+        #
+        #      阈值按状态分两档：Stopped 是「确实没在跑」，180 秒足够判死；Starting /
+        #      Pending 是「正在起」，Windows 实例正常开机就要 2–3 分钟，用 180 秒去卡
+        #      等于把慢启动判成起不来 —— 换完人还会把正在启动的原当班主动停机，白启动
+        #      一次。这一段给 DUTY_START_GRACE（默认 480 秒，比 10 分钟的换班超时
+        #      早一档，先转移再报警），真卡死照样转移。
         stall_flag = f"duty_stall:{group_id}:{slot_key}"
+        duty_now = str(duty.get("instance_status") or "")
+        stall_limit = (
+            settings.DUTY_START_GRACE
+            if duty_now in TRANSIENT_STATUS
+            else settings.DUTY_STALL_SECONDS
+        )
         stall = False
-        if not failover and not manual_switch and str(duty.get("instance_status") or "") != "Running":
+        if not failover and not manual_switch and duty_now != "Running":
             if repo.flag_age(stall_flag) < 0:
                 # 第一次发现当班没在跑：先记时，本轮照常尝试拉起（第 3 步）。
                 repo.set_flag(stall_flag)
-            elif repo.flag_age(stall_flag) >= settings.DUTY_STALL_SECONDS:
+            elif repo.flag_age(stall_flag) >= stall_limit:
                 stall = True
         else:
             # 当班已经在跑，或者这次是人手动切的（人盯着界面，系统别自作主张）
@@ -990,7 +989,7 @@ class Engine:
                     repo.add_event(
                         "warning",
                         f"{name}：当班起不来",
-                        f"{duty.get('label')} 已等待 {settings.DUTY_STALL_SECONDS} 秒仍未运行，"
+                        f"{duty.get('label')} 已等待 {stall_limit} 秒仍未运行，"
                         "该组未启用故障转移，保持等待",
                         level="warning",
                         group_id=group_id,
@@ -1017,7 +1016,7 @@ class Engine:
                     repo.set_flag(f"failover_tried:{group_id}:{slot_key}:{int(duty['id'])}")
                     title = f"{name}：当班疑被抢占，保活超时，故障转移"
                     detail = (
-                        f"{duty.get('label')}（{status_text} {settings.DUTY_STALL_SECONDS} 秒未就绪）"
+                        f"{duty.get('label')}（{status_text} {stall_limit} 秒未就绪）"
                         f" → {replacement.get('label')}"
                     )
                     if event_id:
@@ -1082,7 +1081,7 @@ class Engine:
                         repo.add_event(
                             "error",
                             f"{name}：当班起不来，也没有可接替的成员",
-                            f"{duty.get('label')}（{status_text}）等待 {settings.DUTY_STALL_SECONDS} 秒仍未运行，"
+                            f"{duty.get('label')}（{status_text}）等待 {stall_limit} 秒仍未运行，"
                             "其余成员要么流量也已超限，要么状态读取失败",
                             level="error",
                             group_id=group_id,
@@ -1101,6 +1100,10 @@ class Engine:
             PHASE_FAILOVER,
             PHASE_MANUAL,
         )
+        # 已结算的班次被打回 switching（典型是待机成员状态读不到），换班超时不能
+        # 再用建行时写死的 started_at —— 那可能是几天前，一算几千分钟、必报超时。
+        # 打回时把锚点重置为当前时刻，之后仍按阈值正常计；真持续异常照样会报。
+        restart_clock = {"started_at": int(now_ts)} if previously_settled else {}
         duty_status = str(duty.get("instance_status") or "")
         duty_not_running = duty_status not in ("Running",) and duty_status not in TRANSIENT_STATUS
 
@@ -1181,6 +1184,7 @@ class Engine:
                 standby_server_ids=_encode_ids(others),
                 failover=failover_flag,
                 attempts=int(run.get("attempts") or 0) + 1,
+                **restart_clock,
             )
             self._maybe_report_timeout(
                 group, config, now_ts, slot_key, shift_start, duty, others, notify_enabled
@@ -1202,6 +1206,7 @@ class Engine:
                 standby_server_ids=_encode_ids(others),
                 failover=failover_flag,
                 attempts=int(run.get("attempts") or 0) + 1,
+                **restart_clock,
             )
             self._maybe_report_timeout(
                 group, config, now_ts, slot_key, shift_start, duty, others, notify_enabled
@@ -1340,6 +1345,7 @@ class Engine:
             standby_server_ids=_encode_ids(others),
             failover=failover_flag,
             attempts=int(run.get("attempts") or 0) + 1,
+            **(restart_clock if not ready else {}),
         )
 
         summary: dict[str, Any] = {
@@ -2597,6 +2603,258 @@ def _resolve_empty_traffic(server: dict[str, Any]) -> float:
             )
         return known
     return 0.0
+
+
+# --------------------------------------------------------------------------
+# 单机保活重试：一条事件从头记到尾（尝试次数 → 恢复）
+# --------------------------------------------------------------------------
+
+
+def _keepalive_retry_note(
+    *,
+    server_id: int,
+    label: str,
+    state_label: str,
+    pending: dict[str, Any] | None,
+    error: str = "",
+) -> int:
+    """保活又试了一次：计数 +1，刷新同一条「进行中」事件的概览，返回事件 ID。
+
+    开机指令下发成功和下发失败都走这里。库存不足 / 限流 / 欠费这类错误同样是
+    一次「尝试」，不计数的话用户只看得到第一次的失败，之后每分钟在后台重试却
+    完全静默，「一直试到起来」这条链路在事件上就断了。
+
+    error 非空表示这次连开机指令都没发出去：概览补上原因，事件仍然是 running
+    —— 下一轮还会继续试，不是终局。
+    """
+    tries_key = f"keepalive_tries:{server_id}"
+    if pending:
+        event_id = int(pending["id"])
+        tries = repo.bump_flag(tries_key)
+        detail = f"已尝试拉起 {tries} 次，仍未运行（{state_label}）"
+        if error:
+            detail += f"；启动指令失败：{error}"
+        repo.update_event(event_id, detail=detail)
+    else:
+        # 新的一次中断：计数从 1 重来，别接着上次中断的次数往下数
+        repo.clear_flag(tries_key)
+        tries = repo.bump_flag(tries_key)
+        detail = f"已尝试拉起 {tries} 次，仍未运行（{state_label}）"
+        if error:
+            detail += f"；启动指令失败：{error}"
+        event_id = repo.add_event(
+            "start",
+            f"{label}：保活拉起",
+            detail,
+            level="warning",
+            server_id=server_id,
+            status="running",
+            pending_status="Running",
+            pending_kind="keepalive",
+        )
+        repo.add_event_progress(
+            event_id,
+            f"启动指令失败：{error}" if error else f"已下发启动指令（原状态 {state_label}）",
+        )
+
+    # 进度只留里程碑：一天 1440 轮，每分钟一行同义句会把事件点开糊成一片，
+    # 也会把 PROGRESS_MAX_STEPS 撑爆、把开头那条挤掉。
+    if tries in _KEEPALIVE_MILESTONES:
+        repo.add_event_progress(
+            event_id,
+            f"{_KEEPALIVE_RETRY_MARK}{state_label}），已尝试拉起 {tries} 次",
+        )
+    return event_id
+
+
+def _close_keepalive_event(server_id: int, label: str, note: str) -> None:
+    """保活被暂停（流量超限停机）时，把那条还在转的「保活拉起」收尾。
+
+    不接这一手，事件会永远 running：确认器对保活**故意不设超时**（它要「一直试
+    到起来」），于是会一直每 5 秒查一次实例状态；更糟的是等流量包重置、保活恢复
+    之后，_keepalive_retry_note 会重新找到这条几个月前的事件继续往上写次数 ——
+    一条事件横跨一个月，展开也读不懂。
+
+    停机是主动的、预期内的动作，所以标题改写成「保活已暂停」、级别降回 info，
+    不要留一个红色告警图标配「已完成」徽章。
+    """
+    event = repo.pending_event(server_id, "keepalive")
+    # 这次中断到此为止：下次恢复（流量回落后重新拉起）从 1 重新数
+    repo.clear_flag(f"keepalive_tries:{server_id}")
+    if event is None:
+        return
+    eid = int(event["id"])
+    repo.add_event_progress(eid, note)
+    repo.update_event(eid, title=f"{label}：保活已暂停", level="info")
+    repo.finish_event(eid, "done", detail=note)
+
+
+# --------------------------------------------------------------------------
+# 读取异常：一条事件记录完整过程（失败时刻 → 重试次数 → 恢复时刻）
+# --------------------------------------------------------------------------
+
+# 连续失败到这个次数才升格为 error。单次读失败多半是网络抖一下，立刻标红
+# 会吓人；先给下一轮、下下一轮自愈的机会（默认间隔 60 秒，3 次≈3 分钟）。
+_READ_ERROR_ESCALATE = 3
+# 失败次数到这些里程碑时补一行进度，避免每分钟一行把进度刷爆。
+_READ_ERROR_MILESTONES = (2, 5, 10, 30, 60)
+
+
+def _hms(ts: float, tz_name: str = "Asia/Shanghai") -> str:
+    return dt.datetime.fromtimestamp(
+        ts, _timezone(tz_name or "Asia/Shanghai")
+    ).strftime("%H:%M:%S")
+
+
+def _retry_interval() -> int:
+    """事件里写的「每 N 秒重试」必须是用户实际配的巡检间隔。
+
+    以前直接用 settings.RECONCILE_INTERVAL —— 那是环境变量默认值（60），
+    用户在界面上把间隔改成 300 之后，事件还写着「每 60 秒重试」，等于给了他
+    一个错的节奏，等两分钟就以为程序卡了。
+    """
+    try:
+        return max(
+            30,
+            int(
+                repo.get_setting(
+                    "reconcile_interval", str(settings.RECONCILE_INTERVAL)
+                )
+            ),
+        )
+    except Exception:  # noqa: BLE001
+        # 脏值 / 库还没建好：退回环境默认，文案宁可不精确也不能让巡检中断
+        return settings.RECONCILE_INTERVAL
+
+
+def _brief_exc(exc: Exception | str) -> str:
+    if isinstance(exc, Exception):
+        text = aliyun.brief_error(exc)
+    else:
+        text = str(exc).strip()[:140]
+    # 上层模板已经写了「读取失败：」，这里去掉异常自带的「CDT 流量查询失败：」
+    # 之类前缀，避免一句话里连着两个「失败」。
+    for sep in ("失败：", "失败:", "异常：", "异常:"):
+        idx = text.find(sep)
+        if 0 <= idx <= 12:
+            return text[idx + len(sep):].strip() or text
+    return text
+
+
+def _read_error(
+    *,
+    server_id: int,
+    title: str,
+    exc: Exception | str,
+    group_id: int = 0,
+    tz_name: str = "Asia/Shanghai",
+) -> None:
+    """记一次状态读取失败：同一条进行中事件里写明失败时刻与重试节奏。
+
+    不因为「这一次」就定性成错误：第一次只建一条**进行中**事件，详情写
+    「HH:MM:SS 读取失败（原因），每 N 秒重试，恢复后自动更新」；后续只刷新
+    概览里的最近时刻与次数，连续失败到阈值才升格为 error。恢复由
+    _read_recovered 收尾并补上恢复时刻。
+    """
+    now = int(time.time())
+    brief = _brief_exc(exc)
+    count = repo.bump_flag(f"read_err:{server_id}")
+    interval = _retry_interval()
+    event = repo.pending_event(server_id, "read_error")
+    if event is None:
+        eid = repo.add_event(
+            "warning",
+            title,
+            f"{_hms(now, tz_name)} 读取失败：{brief}；"
+            f"每 {interval} 秒重试，恢复后自动更新",
+            level="warning",
+            group_id=group_id,
+            server_id=server_id,
+            status="running",
+            pending_kind="read_error",
+        )
+        # 时间线首条用「第 1 次失败」而不是照抄概览（概览还带了重试节奏），
+        # 这样展开后不会看到同一句话出现两遍，又能和第 2、3 次连成序列。
+        repo.add_event_progress(eid, f"{_hms(now, tz_name)} 第 1 次失败：{brief}")
+        return
+
+    eid = int(event["id"])
+    repo.update_event(
+        eid,
+        detail=(
+            f"{_hms(now, tz_name)} 仍失败（连续 {count} 次）：{brief}；"
+            f"每 {interval} 秒重试"
+        ),
+    )
+    # 升格那一次（第 _READ_ERROR_ESCALATE 次）必须留痕：它是从「抖一下」变成
+    # 「真有问题」的转折点，比前后任意一次都值得看，哪怕不在里程碑里也要记。
+    if count in _READ_ERROR_MILESTONES or count == _READ_ERROR_ESCALATE:
+        repo.add_event_progress(eid, f"{_hms(now, tz_name)} 第 {count} 次失败：{brief}")
+    if count >= _READ_ERROR_ESCALATE:
+        repo.update_event(eid, level="error")
+
+
+def _read_recovered(
+    *,
+    server_id: int,
+    title: str,
+    tz_name: str = "Asia/Shanghai",
+) -> None:
+    """读取恢复正常：给那条进行中的事件补上恢复时刻并收尾。
+
+    title 是收尾后的标题（如「Ali-CDT-02 状态读取已恢复」）；本来就没在
+    失败中时直接返回，不产生任何事件。
+    """
+    key = f"read_err:{server_id}"
+    age = repo.flag_age(key)
+    if age < 0:
+        return
+    count = repo.flag_value(key)
+    repo.clear_flag(key)
+    event = repo.pending_event(server_id, "read_error")
+    if event is None:
+        return
+    eid = int(event["id"])
+    now = int(time.time())
+    minutes = max(1, int(round(age / 60)))
+    repo.add_event_progress(eid, f"{_hms(now, tz_name)} 已恢复")
+    repo.update_event(
+        eid,
+        title=title,
+        detail=(
+            f"{_hms(now, tz_name)} 恢复正常"
+            f"（此前连续失败 {count} 次，持续约 {minutes} 分钟）"
+        ),
+        # 收尾必须把级别降回来：图标颜色看 level、徽章看 status，只改 status
+        # 会留下「红色错误图标 + 绿色完成徽章」的自相矛盾。
+        level="info",
+    )
+    repo.finish_event(eid, "done")
+
+
+def _close_orphan_read_errors(monitored: set[int]) -> None:
+    """收掉「对象已不在监控里」的读取事件，避免它永远转圈。
+
+    机器被删、移出换班组、关掉保活之后，不会再有恢复回调来收尾；
+    每轮对账末尾统一处理一次。
+    """
+    for event in repo.running_pending_events("read_error"):
+        server_id = int(event.get("server_id") or 0)
+        if server_id and server_id in monitored:
+            continue
+        eid = int(event["id"])
+        # 计数跟事件同生共死。只收事件不清标记的话，机器哪天重新被纳入监控，
+        # 下一轮读取失败会从旧值接着往上数：一上来就「连续 12 次」、立刻升红，
+        # 恢复时还会写出「连续失败 14 次，持续约 1 分钟」这种自相矛盾的话。
+        if server_id:
+            repo.clear_flag(f"read_err:{server_id}")
+        # 同 _read_recovered：收尾成「完成」就不要再留红色错误图标。
+        repo.update_event(eid, level="info")
+        repo.finish_event(
+            eid,
+            "done",
+            detail="对象已不在监控中，读取告警自动收尾",
+        )
 
 
 def _refresh(server: dict[str, Any]) -> None:

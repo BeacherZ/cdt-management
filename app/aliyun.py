@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import socket
 import threading
 import time
@@ -47,6 +48,86 @@ if urllib3_conn is not None:
 
 class AliyunError(RuntimeError):
     pass
+
+
+# SDK 原始异常动辄几百字符：整条签名 URL + 对象地址，还带 AccessKeyId / Signature。
+# 直接写进事件既没法看，也等于把凭据摊在通知里。这里归成一句人话再往上抛。
+_NET_ERROR_HINTS = (
+    "network is unreachable",
+    "max retries exceeded",
+    "newconnectionerror",
+    "failed to establish a new connection",
+    "connection refused",
+    "connection reset",
+    "connection aborted",
+    "temporary failure in name resolution",
+    "name or service not known",
+)
+_TIMEOUT_HINTS = ("timed out", "timeout", "readtimeout")
+_AUTH_ERROR_HINTS = (
+    "signaturedoesnotmatch",
+    "invalidaccesskeyid",
+    "invalidaccesskeysecret",
+    "authfailure",
+    "authsitefail",
+    "forbidden",
+    "unauthorized",
+    "accessdenied",
+)
+_THROTTLE_HINTS = ("throttling", "requestlimitexceeded", "serviceunavailable")
+
+_SECRET_PARAM_RE = re.compile(
+    r"(?i)\b(Signature|AccessKeyId|AccessKeySecret|SecurityToken|SignatureNonce)=([^&\s'\"]+)"
+)
+
+
+def _error_host(text: str) -> str:
+    match = re.search(r"host=(?:'|\")?([^'\",\s\)]+)", text)
+    return match.group(1) if match else ""
+
+
+def _redact(text: str) -> str:
+    text = _SECRET_PARAM_RE.sub(r"\1=***", text)
+    text = re.sub(r"<[^>]*object at 0x[0-9a-fA-F]+>", "<sdk-error>", text)
+    # 对象地址每次调用都不一样。留着它，同一句错误在事件进度里「每行都不同」，
+    # 相邻去重就失效了 —— 5 秒一轮的确认器能把一条保活事件刷满。
+    text = re.sub(r"\b0x[0-9a-fA-F]{4,}\b", "0x***", text)
+    return text.strip()
+
+
+def brief_error(exc: Exception | str) -> str:
+    """把 SDK 原始异常压成一句能直接放进事件/通知的话（脱敏 + 分类）。"""
+    text = str(exc)
+    low = text.lower()
+    host = _error_host(text)
+
+    if any(hint in low for hint in _NET_ERROR_HINTS):
+        return f"网络不可达（{host}）" if host else "网络不可达"
+    if any(hint in low for hint in _TIMEOUT_HINTS):
+        return f"连接超时（{host}）" if host else "连接超时"
+    if any(hint in low for hint in _AUTH_ERROR_HINTS):
+        return "鉴权失败（AccessKey 无效或无权限）"
+    if any(hint in low for hint in _THROTTLE_HINTS):
+        return "接口限流，稍后重试"
+
+    # 拿得到阿里云错误码就「错误码：消息」，否则脱敏后截断，绝不整段照搬
+    code = ""
+    message = ""
+    get_code = getattr(exc, "get_error_code", None)
+    get_msg = getattr(exc, "get_error_msg", None)
+    if callable(get_code):
+        try:
+            code = str(get_code() or "").strip()
+        except Exception:  # noqa: BLE001
+            code = ""
+    if callable(get_msg):
+        try:
+            message = str(get_msg() or "").strip()
+        except Exception:  # noqa: BLE001
+            message = ""
+    if code and code.lower() not in ("sdk.httperror", "sdk.servererror", "sdk.clienterror"):
+        return f"{code}：{message}"[:140] if message else code
+    return _redact(text)[:140]
 
 
 # --------------------------------------------------------------------------
@@ -175,7 +256,7 @@ def get_account_balance(account: dict, force: bool = False) -> dict[str, Any]:
     try:
         data, site = _bss_with_site_fallback(account, "QueryAccountBalance")
     except Exception as exc:  # noqa: BLE001
-        raise AliyunError(f"账户余额查询失败: {exc}") from exc
+        raise AliyunError(f"账户余额查询失败：{brief_error(exc)}") from exc
 
     payload = data.get("Data") or {}
     try:
@@ -211,7 +292,7 @@ def get_instance_bill(account: dict, cycle: str) -> dict[str, Any]:
     try:
         data, site = _bss_with_site_fallback(account, "DescribeInstanceBill", params)
     except Exception as exc:  # noqa: BLE001
-        raise AliyunError(f"实例账单查询失败: {exc}") from exc
+        raise AliyunError(f"实例账单查询失败：{brief_error(exc)}") from exc
 
     items = (data.get("Data") or {}).get("Items") or []
     # 有的返回把数组包一层 {"Item": [...]}
@@ -350,7 +431,7 @@ def get_traffic_gb(account: dict) -> float | None:
         raw = client.do_action_with_exception(request)
         data = json.loads(raw.decode("utf-8"))
     except Exception as exc:
-        raise AliyunError(f"CDT 流量查询失败: {exc}") from exc
+        raise AliyunError(f"CDT 流量查询失败：{brief_error(exc)}") from exc
     details = data.get("TrafficDetails") or []
     if not details:
         return None
@@ -377,7 +458,7 @@ def get_instance(account: dict) -> InstanceInfo:
         data = json.loads(raw.decode("utf-8"))
         instance = data["Instances"]["Instance"][0]
     except Exception as exc:
-        raise AliyunError(f"实例状态查询失败: {exc}") from exc
+        raise AliyunError(f"实例状态查询失败：{brief_error(exc)}") from exc
 
     status = str(instance.get("Status") or "")
     mode = str(instance.get("StoppedMode") or "")
@@ -417,7 +498,7 @@ def start_instance(account: dict) -> None:
         message = str(exc)
         if "InsufficientInventory" in message:
             raise AliyunError("库存不足（InsufficientInventory），该地域暂无可用抢占式库存") from exc
-        raise AliyunError(f"启动实例失败: {message}") from exc
+        raise AliyunError(f"启动实例失败：{brief_error(exc)}") from exc
 
 
 def stop_instance(account: dict, mode: str = "StopCharging", fallback: bool = False) -> str:
@@ -460,5 +541,5 @@ def stop_instance(account: dict, mode: str = "StopCharging", fallback: bool = Fa
                 client.do_action_with_exception(request)
                 return "Stop"
             except Exception as retry_exc:  # noqa: BLE001
-                raise AliyunError(f"停止实例失败: {retry_exc}") from retry_exc
-        raise AliyunError(f"停止实例失败: {exc}") from exc
+                raise AliyunError(f"停止实例失败：{brief_error(retry_exc)}") from retry_exc
+        raise AliyunError(f"停止实例失败：{brief_error(exc)}") from exc

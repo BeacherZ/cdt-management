@@ -39,6 +39,7 @@ from app import aliyun, db, messages, notify, repo, settings, shift  # noqa: E40
 
 TZ = dt.timezone(dt.timedelta(hours=8))
 STALL = settings.DUTY_STALL_SECONDS
+GRACE = settings.DUTY_START_GRACE
 
 
 def _now_dt() -> dt.datetime:
@@ -241,7 +242,7 @@ class StallEscalates(_Base):
         """超过容忍时间仍未运行 → 转给另一台，原因记 stall。"""
         self.status[self.a] = "Stopped"
         self._reconcile(self.group_id)  # 开始计时 + 拉起（卡在 Starting）
-        self._age_flag(f"duty_stall:{self.group_id}:{self._slot()}", STALL + 5)
+        self._age_flag(f"duty_stall:{self.group_id}:{self._slot()}", GRACE + 5)
 
         self.started.clear()
         result = self._reconcile(self.group_id)
@@ -264,7 +265,7 @@ class StallEscalates(_Base):
         """结算报告说「保活超时」，被接管那台叫「离线账号」。"""
         self.status[self.a] = "Stopped"
         self._reconcile(self.group_id)
-        self._age_flag(f"duty_stall:{self.group_id}:{self._slot()}", STALL + 5)
+        self._age_flag(f"duty_stall:{self.group_id}:{self._slot()}", GRACE + 5)
         self._reconcile(self.group_id)  # 转到 B，B 开始启动
 
         self.status[self.b] = "Running"
@@ -288,7 +289,7 @@ class StallEscalates(_Base):
         """转移后不该再留一条「已自动拉起」在转圈。"""
         self.status[self.a] = "Stopped"
         self._reconcile(self.group_id)
-        self._age_flag(f"duty_stall:{self.group_id}:{self._slot()}", STALL + 5)
+        self._age_flag(f"duty_stall:{self.group_id}:{self._slot()}", GRACE + 5)
         self._reconcile(self.group_id)
 
         recovery = [
@@ -297,6 +298,73 @@ class StallEscalates(_Base):
             if e.get("kind") == "recovery" and e.get("status") == "running"
         ]
         self.assertEqual(recovery, [], [e["title"] for e in self._events()])
+
+
+class MiddleStateGrace(_Base):
+    """当班正在启动（Starting）时，不能按 Stopped 的 180 秒判死。
+
+    Windows 实例正常开机就要 2–3 分钟，180 秒去卡它等于把「慢」当成「死」：
+    换人之后还会把正在启动的原当班主动停机，白启动一次。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.a = _make_server("当班A", "Running")
+        self.b = _make_server("待机B")
+        self.status = {self.a: "Running", self.b: "Stopped"}
+        self._wire()  # start_to 默认 Starting：下发开机后停在启动中
+        self.group_id = repo.upsert_group(
+            {
+                "name": "换班组",
+                "enabled": True,
+                "members": [
+                    {"server_id": self.a, "hours": 12},
+                    {"server_id": self.b, "hours": 12},
+                ],
+            }
+        )
+        self._reconcile(self.group_id)
+        self.assertEqual(
+            str((repo.get_run(self.group_id, self._slot()) or {}).get("phase")), "settled"
+        )
+
+    def _slot(self) -> str:
+        run = repo.recent_runs(1)
+        return str(run[0]["slot"]) if run else ""
+
+    def test_starting_survives_stall_timeout(self) -> None:
+        """179 秒、185 秒都还是「启动中」→ 不换人。"""
+        self.status[self.a] = "Stopped"
+        self._reconcile(self.group_id)  # 记时 + 拉起 → Starting
+        self.assertEqual(self.status[self.a], "Starting")
+        self.started.clear()
+
+        self._age_flag(f"duty_stall:{self.group_id}:{self._slot()}", STALL + 5)
+        self._reconcile(self.group_id)
+
+        run = repo.get_run(self.group_id, self._slot()) or {}
+        self.assertEqual(
+            int(run.get("duty_server_id") or 0), self.a, "启动中不该被判成起不来"
+        )
+        self.assertEqual(int(run.get("failover") or 0), 0)
+        self.assertNotIn(self.b, self.started, self.started)
+
+    def test_starting_escalates_after_grace(self) -> None:
+        """真卡死在 Starting（超过宽限）时照样转移，不能永远不换。"""
+        self.status[self.a] = "Stopped"
+        self._reconcile(self.group_id)
+        self._age_flag(f"duty_stall:{self.group_id}:{self._slot()}", GRACE + 5)
+        self._reconcile(self.group_id)
+
+        run = repo.get_run(self.group_id, self._slot()) or {}
+        self.assertEqual(int(run.get("duty_server_id") or 0), self.b)
+        self.assertEqual(int(run.get("failover") or 0), 1)
+        self.assertEqual(str(run.get("failover_reason")), "stall")
+        # 文案要写这一档的实际阈值（600），不能沿用 180 —— 否则用户以为系统只等了 3 分钟
+        self.assertTrue(
+            any(f"{GRACE} 秒未就绪" in (e.get("detail") or "") for e in self._events()),
+            [e.get("detail") for e in self._events()],
+        )
 
 
 class DayCycleStall(_Base):
@@ -428,7 +496,7 @@ class StallRespectsSettings(_Base):
 
         self.status[self.a] = "Stopped"
         self._reconcile(group_id)
-        self._age_flag(f"duty_stall:{group_id}:{slot}", STALL + 5)
+        self._age_flag(f"duty_stall:{group_id}:{slot}", GRACE + 5)
         self.started.clear()
         self._reconcile(group_id)
 
@@ -448,7 +516,7 @@ class StallRespectsSettings(_Base):
 
         self.status[self.a] = "Stopped"
         self._reconcile(group_id)
-        self._age_flag(f"duty_stall:{group_id}:{slot}", STALL + 5)
+        self._age_flag(f"duty_stall:{group_id}:{slot}", GRACE + 5)
         self.started.clear()
         self._reconcile(group_id)
 
@@ -464,7 +532,7 @@ class StallRespectsSettings(_Base):
         # 第一次：A 掉线超时 → 转给 B（B 也卡在 Starting）
         self.status[self.a] = "Stopped"
         self._reconcile(group_id)
-        self._age_flag(f"duty_stall:{group_id}:{slot}", STALL + 5)
+        self._age_flag(f"duty_stall:{group_id}:{slot}", GRACE + 5)
         self._reconcile(group_id)
         run = repo.get_run(group_id, slot) or {}
         self.assertEqual(int(run.get("duty_server_id") or 0), self.b)
@@ -472,7 +540,7 @@ class StallRespectsSettings(_Base):
         # 第二次：B 也起不来。转移时计时被清空，要重新等满一轮才判超时 ——
         # 这也是对的：新当班同样享有完整的冷启动时间。
         self._reconcile(group_id)
-        self._age_flag(f"duty_stall:{group_id}:{slot}", STALL + 5)
+        self._age_flag(f"duty_stall:{group_id}:{slot}", GRACE + 5)
         self._reconcile(group_id)
 
         run = repo.get_run(group_id, slot) or {}

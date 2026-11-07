@@ -191,6 +191,7 @@ export type Settings = {
   timezone: string
   traffic_threshold_pct: string
   reconcile_interval: string
+  reconcile_offset: string
   billing_enabled: boolean
   billing_interval: string
   daily_report_enabled: boolean

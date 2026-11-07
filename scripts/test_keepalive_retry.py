@@ -148,7 +148,7 @@ class KeepaliveRetry(unittest.TestCase):
         self.assertEqual(
             texts,
             [
-                "已下发启动指令（原状态 Stopped）",
+                "已下发启动指令（原状态 已停机）",
                 "仍未运行（已停机），已尝试拉起 3 次",
             ],
             texts,
@@ -193,18 +193,28 @@ class KeepaliveRetry(unittest.TestCase):
         self.assertEqual(len(self.started), 3)
         self.assertFalse(repo.get_flag(f"keepalive_tries:{self.server_id}"))
 
-    def test_start_error_reports_once_but_keeps_retrying(self):
-        """开机接口报错（库存不足等）：每分钟照常重试，错误事件只报一次。"""
+    def test_start_error_counts_as_attempts(self):
+        """开机接口报错（库存不足等）：既要继续重试，也要把次数和原因写进同一条事件。
+
+        以前这里只建一条 error 事件就彻底静默：用户看不出系统还在试、试了多少次，
+        而那条事件还是「完成」状态，配着红色错误图标。现在并进同一条 running
+        事件，概览每次刷新成「已尝试拉起 N 次；启动指令失败：原因」。
+        """
         self.start_error = RuntimeError("OperationDenied.NoStock")
         for _ in range(3):
             self._tick()
 
         self.assertEqual(len(self.started), 3, "报错更要重试，不能停手")
-        errors = [
-            e for e in self._events() if e["status"] == "done" and e["kind"] == "error"
-        ]
-        self.assertEqual(len(errors), 1, [e["title"] for e in self._events()])
-        self.assertIn("保活启动失败", errors[0]["title"])
+        events = self._events()
+        self.assertEqual(len(events), 1, [e["title"] for e in events])
+        event = events[0]
+        self.assertEqual(event["status"], "running", "还在重试，不能标成已完成")
+        self.assertIn("保活拉起", event["title"])
+        self.assertIn("已尝试拉起 3 次", event["detail"])
+        self.assertIn("启动指令失败", event["detail"])
+        self.assertIn("NoStock", event["detail"])
+        self.assertEqual(self._texts(event)[0], "启动指令失败：OperationDenied.NoStock")
+        self.assertEqual(repo.flag_value(f"keepalive_tries:{self.server_id}"), 3)
 
 
 class KeepaliveEventLifecycle(unittest.TestCase):
@@ -297,6 +307,34 @@ class KeepaliveEventLifecycle(unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["status"], "done")
         self.assertEqual(events[0]["title"], "躺一天的机器：保活拉起完成")
+        self.assertFalse(repo.get_flag(f"keepalive_tries:{self.server_id}"))
+
+    def test_limit_stop_closes_running_keepalive_event(self):
+        """超限停机：那条还在转的「保活拉起」当场收尾。
+
+        确认器对保活故意不设超时（要「一直试到起来」），所以不主动收的话这条
+        事件永远 running、每 5 秒打一次状态接口；等流量包重置、保活恢复，还会
+        接着往这条旧事件里写次数。
+        """
+        self._tick()  # Stopped → 下发开机，事件转起来
+        self.assertIsNotNone(repo.pending_event(self.server_id, "keepalive"))
+
+        # 这台机器随后被判定流量超限（阈值 188，用量 190）
+        repo.update_server_runtime(self.server_id, traffic=190.0)
+        self.state = "Stopped"
+        self._tick()
+
+        self.assertIsNone(
+            repo.pending_event(self.server_id, "keepalive"), "超限停机后不该还有转圈的事件"
+        )
+        events = repo.list_events(limit=10)
+        closed = [e for e in events if e["title"].endswith("保活已暂停")]
+        self.assertTrue(closed, [e["title"] for e in events])
+        self.assertEqual(closed[0]["status"], "done")
+        self.assertEqual(closed[0]["detail"], "流量超限，已停机并暂停保活")
+        # 主动停机是预期动作，不留红色告警图标
+        self.assertEqual(closed[0]["level"], "info")
+        # 计数归零：流量回落后重新拉起，从第 1 次开始数
         self.assertFalse(repo.get_flag(f"keepalive_tries:{self.server_id}"))
 
 

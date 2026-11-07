@@ -210,6 +210,10 @@ DEFAULTS: dict[str, str] = {
     "timezone": "Asia/Shanghai",
     "traffic_threshold_pct": "90",
     "reconcile_interval": str(settings.RECONCILE_INTERVAL),
+    # 每轮巡检对齐到「每 N 秒网格」里的第几秒触发（0–59）。
+    # 大量保活脚本默认都在第 0 秒打阿里云接口，错开几秒能少挤一点；
+    # 默认 0，与加上这个设置项之前的行为完全一致。
+    "reconcile_offset": "0",
     # 费用/余额查询：需要 RAM 具备 BSS 只读权限，缺权限时关掉即可不显示
     "billing_enabled": "1",
     "billing_interval": "600",

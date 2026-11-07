@@ -42,6 +42,7 @@ from app import aliyun, db, notify, repo, settings, shift  # noqa: E402
 
 TZ = dt.timezone(dt.timedelta(hours=8))
 STALL = settings.DUTY_STALL_SECONDS
+GRACE = settings.DUTY_START_GRACE
 
 
 def _this_month(day: int, hour: int = 0, minute: int = 30) -> float:
@@ -204,7 +205,7 @@ class MonthDayFailover(_Base):
         """让 A 掉线并推过容忍时间，转移给 B。"""
         self.status[self.a] = "Stopped"
         self._reconcile_at(self.group_id, self.d1)  # 计时 + 拉起（卡在 Starting）
-        self._age_flag(f"duty_stall:{self.group_id}:{self._slot(self.group_id, self.d1)}", STALL + 5)
+        self._age_flag(f"duty_stall:{self.group_id}:{self._slot(self.group_id, self.d1)}", GRACE + 5)
         self._reconcile_at(self.group_id, self.d1)
         run = self._run(self.group_id, self.d1)
         self.assertEqual(int(run.get("duty_server_id") or 0), self.b, run)
@@ -308,7 +309,7 @@ class MonthDayFailover(_Base):
         self.status[self.b] = "Running"
         self._reconcile_at(self.group_id, self.d2)  # 复位 + 拉起 A（卡在 Starting）
         self._age_flag(
-            f"duty_stall:{self.group_id}:{self._slot(self.group_id, self.d2)}", STALL + 5
+            f"duty_stall:{self.group_id}:{self._slot(self.group_id, self.d2)}", GRACE + 5
         )
         self._reconcile_at(self.group_id, self.d2)  # 又转回 B
         # 转移后要等原当班停机落地才结算，真实轮询就是每分钟一轮，多跑几轮
@@ -331,7 +332,7 @@ class MonthDayFailover(_Base):
         self.status[self.a] = "Stopped"
         self._reconcile_at(self.group_id, self.d2)
         self._age_flag(
-            f"duty_stall:{self.group_id}:{self._slot(self.group_id, self.d2)}", STALL + 5
+            f"duty_stall:{self.group_id}:{self._slot(self.group_id, self.d2)}", GRACE + 5
         )
         self._reconcile_at(self.group_id, self.d2)
         for _ in range(6):
@@ -389,7 +390,7 @@ class DayCycleUntouched(_Base):
         self._reconcile_at(group_id, ts)
         picked = shift.duty_at(repo.get_group(group_id) or {}, ts)
         slot = str(picked[1])
-        self._age_flag(f"duty_stall:{group_id}:{slot}", STALL + 5)
+        self._age_flag(f"duty_stall:{group_id}:{slot}", GRACE + 5)
         self._reconcile_at(group_id, ts)
 
         run = repo.get_run(group_id, slot) or {}

@@ -406,7 +406,7 @@ class UnreadableStateNoCommand(_Base):
 
         self.assertIn("state_unreadable", first)
         self.assertEqual(started, [], "状态读不到时不该发开机指令")
-        warnings = [e for e in self._events() if "当班状态读取失败" in e["title"]]
+        warnings = [e for e in self._events() if "当班状态读取" in e["title"]]
         self.assertEqual(len(warnings), 1, "同一班次只提示一次，不要每轮刷")
         self.assertIn("state_unreadable", second)
 

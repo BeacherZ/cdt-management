@@ -122,6 +122,7 @@ SETTING_LABELS = {
     "timezone": "时区",
     "traffic_threshold_pct": "流量阈值",
     "reconcile_interval": "同步间隔",
+    "reconcile_offset": "巡检起始秒",
     "daily_report_enabled": "每日汇总",
     "daily_report_time": "汇总时间",
     "notify_on_shift": "换班通知",
@@ -917,6 +918,7 @@ def register(app: FastAPI) -> None:
             "timezone": config.get("timezone"),
             "traffic_threshold_pct": config.get("traffic_threshold_pct"),
             "reconcile_interval": config.get("reconcile_interval"),
+            "reconcile_offset": config.get("reconcile_offset") or "0",
             "billing_enabled": config.get("billing_enabled", "1") == "1",
             "billing_interval": config.get("billing_interval") or "600",
             "daily_report_enabled": config.get("daily_report_enabled") == "1",
@@ -996,6 +998,11 @@ def register(app: FastAPI) -> None:
             if not 30 <= interval <= 3600:
                 raise ValueError("同步间隔应在 30–3600 秒之间")
             updates["reconcile_interval"] = str(interval)
+        if payload.get("reconcile_offset") is not None:
+            offset = _as_int(payload["reconcile_offset"], "巡检起始秒")
+            if not 0 <= offset <= 59:
+                raise ValueError("巡检起始秒应在 0–59 之间")
+            updates["reconcile_offset"] = str(offset)
 
         put_bool("billing_enabled", payload.get("billing_enabled"))
         if payload.get("billing_interval") is not None:

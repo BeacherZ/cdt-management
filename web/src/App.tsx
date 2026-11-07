@@ -793,7 +793,11 @@ export default function App() {
             </Badge>
           )}
           <span>
-            同步间隔 {settings.reconcile_interval} 秒 · {overview.timezone}
+            {`同步间隔 ${settings.reconcile_interval} 秒${
+              Number(settings.reconcile_offset) > 0
+                ? `（第 ${settings.reconcile_offset} 秒）`
+                : ''
+            } · ${overview.timezone}`}
           </span>
           {!settings.sdk_ready && <Badge tone="amber">阿里云 SDK 未就绪</Badge>}
           {settings.dry_run && <Badge tone="amber">DRY RUN</Badge>}

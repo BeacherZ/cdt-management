@@ -46,6 +46,8 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
     if (draft.ddns.records.length === 0 && draft.ddns.record) {
       draft.ddns.records = [draft.ddns.record]
     }
+    // 1.2.6 及以前没有这个字段，补 0 让输入框保持受控
+    if (!draft.reconcile_offset) draft.reconcile_offset = '0'
     return draft
   })
   const [error, setError] = useState('')
@@ -71,6 +73,7 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
         timezone: form.timezone,
         traffic_threshold_pct: Number(form.traffic_threshold_pct),
         reconcile_interval: Number(form.reconcile_interval),
+        reconcile_offset: Number(form.reconcile_offset),
         billing_enabled: form.billing_enabled,
         billing_interval: Number(form.billing_interval),
         daily_report_enabled: form.daily_report_enabled,
@@ -234,6 +237,38 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
               </div>
               <div className="grid-2">
                 <div className="field">
+                  <label htmlFor="interval">巡检间隔（秒）</label>
+                  <input
+                    id="interval"
+                    className="input"
+                    type="number"
+                    min={30}
+                    max={3600}
+                    value={form.reconcile_interval}
+                    onChange={(event) =>
+                      patch((draft) => (draft.reconcile_interval = event.target.value))
+                    }
+                  />
+                  <div className="hint">流量 / 状态 / 保活的查询间隔，默认 60 秒。</div>
+                </div>
+                <div className="field">
+                  <label htmlFor="offset">巡检起始秒（0–59）</label>
+                  <input
+                    id="offset"
+                    className="input"
+                    type="number"
+                    min={0}
+                    max={59}
+                    value={form.reconcile_offset}
+                    onChange={(event) =>
+                      patch((draft) => (draft.reconcile_offset = event.target.value))
+                    }
+                  />
+                  <div className="hint">
+                    每轮巡检从这一秒开始，默认 0；多台实例串行查询，设一次即可，也可用于错开其他项目。
+                  </div>
+                </div>
+                <div className="field">
                   <label htmlFor="tz">
                     <Globe2 size={12} /> 时区
                   </label>
@@ -249,21 +284,7 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
                       </option>
                     ))}
                   </select>
-                </div>
-                <div className="field">
-                  <label htmlFor="interval">巡检间隔（秒）</label>
-                  <input
-                    id="interval"
-                    className="input"
-                    type="number"
-                    min={30}
-                    max={3600}
-                    value={form.reconcile_interval}
-                    onChange={(event) =>
-                      patch((draft) => (draft.reconcile_interval = event.target.value))
-                    }
-                  />
-                  <div className="hint">流量 / 状态 / 保活的查询间隔，默认 60（1 分钟）。</div>
+                  <div className="hint">排班、日报、事件时间都按这个时区显示。</div>
                 </div>
                 <div className="field">
                   <label htmlFor="billingInterval">费用查询间隔（秒）</label>

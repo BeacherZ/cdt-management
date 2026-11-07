@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 APP_NAME = "cdt-management"
-VERSION = "1.2.6"
+VERSION = "1.2.7"
 
 DATA_DIR = Path(os.environ.get("CDT_DATA_DIR", "./data")).resolve()
 DB_PATH = DATA_DIR / "cdt-management.db"
@@ -41,6 +41,18 @@ SHIFT_TIMEOUT_MINUTES = max(2, int(os.environ.get("CDT_SHIFT_TIMEOUT_MINUTES", "
 # 超过就按流量超限那套做故障转移，换一台顶这一班。
 # 不能设太短：竞价实例冷启动本身就要几十秒，太短会把「慢」当成「死」。
 DUTY_STALL_SECONDS = max(60, int(os.environ.get("CDT_DUTY_STALL_SECONDS", "180")))
+
+# 当班已经进入 Starting / Pending（启动指令下发成功、阿里云正在拉机器）时的
+# 额外宽限。这个阶段不是「没起来」，而是「正在起」：Windows 实例正常开机就要
+# 2–3 分钟，拿 180 秒去卡它，等于把正常的慢启动判成起不来，换人之后还会把
+# 正在启动的原当班主动停机 —— 白启动一次。
+#
+# 取 480（8 分钟）而不是 600：换班超时默认就是 10 分钟，两者相等时，一台真正
+# 卡死的机器会在同一轮同时触发「故障转移」和「换班超时」两条通知。提前 2 分钟
+# 先转移，用户先看到「换人了」，超时那条就不会再来添乱。
+DUTY_START_GRACE = max(
+    DUTY_STALL_SECONDS, int(os.environ.get("CDT_DUTY_START_GRACE", "480"))
+)
 
 # dry-run：不调真实阿里云接口，用于本地 UI 调试
 DRY_RUN = os.environ.get("CDT_DRY_RUN", "0") == "1"
