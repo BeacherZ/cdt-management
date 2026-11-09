@@ -1096,7 +1096,8 @@ def add_event(
     now = int(time.time())
     event_id = db.insert(
         "INSERT INTO events(ts, level, kind, group_id, server_id, title, detail, "
-        "status, finished_at, pending_status, pending_kind) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        "status, finished_at, pending_status, pending_kind, pending_ts) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             now,
             level,
@@ -1109,6 +1110,8 @@ def add_event(
             now if status != "running" else 0,
             pending_status if status == "running" else "",
             pending_kind if status == "running" else "",
+            # 等待从这个时刻开始算（与 ts 相同）；retarget_event 改挂目标时会刷新
+            now if status == "running" else 0,
         ),
     )
     if status != "running" and detail:
@@ -1259,12 +1262,16 @@ def retarget_event(event_id: int, pending_status: str, pending_kind: str) -> Non
 
     典型场景：保活拉起事件转到一半，运行窗口关了 —— 它等的 Running 已经没意义，
     应当改等 Stopped（停机到位再收尾），而不是就地写一句「已暂停」了事。
+
+    pending_ts 一起刷新：超时按「开始等这个目标」的时刻算。这条事件可能已经转了
+    几小时（机器一直起不来），沿用原来的 ts 会让确认器下一轮直接把新目标判成
+    「超时未确认」—— 停机指令刚下发就报失败，过程和结果全丢了。
     """
     if not event_id:
         return
     db.execute(
-        "UPDATE events SET pending_status=?, pending_kind=? WHERE id=?",
-        (pending_status, pending_kind, event_id),
+        "UPDATE events SET pending_status=?, pending_kind=?, pending_ts=? WHERE id=?",
+        (pending_status, pending_kind, int(time.time()), event_id),
     )
 
 

@@ -235,7 +235,10 @@ def _confirm_pending_events() -> None:
 
         # 超时兜底：别让一个卡住的事件永远占着转圈。保活除外 —— 它本来就该
         # 一直等到实例起来（见上面的注释），超时会把一条长长的中断切成一堆。
-        elapsed = now - int(event.get("ts") or now)
+        # 计时从「开始等当前目标」算（pending_ts），不是事件创建时间：保活事件被
+        # retarget 成等停机后，ts 还是几小时前的，按 ts 算会当场判超时。
+        base = int(event.get("pending_ts") or event.get("ts") or now)
+        elapsed = now - base
         if elapsed > EVENT_CONFIRM_TIMEOUT and pending_kind != "keepalive":
             repo.add_event_progress(event_id, "等待状态超时，未确认到位")
             repo.finish_event(event_id, "error", "超时未确认")

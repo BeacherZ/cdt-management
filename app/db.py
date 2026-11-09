@@ -185,7 +185,11 @@ CREATE TABLE IF NOT EXISTS events (
     pending_status TEXT    NOT NULL DEFAULT '',
     -- 异步事件类型：manual（手动开关机）/ keepalive（保活拉起）。确认器据此
     -- 决定到位后是否补发通知（保活到位要发「抢占恢复」）
-    pending_kind   TEXT    NOT NULL DEFAULT ''
+    pending_kind   TEXT    NOT NULL DEFAULT '',
+    -- 开始等待「当前」目标状态的时刻。超时按它算，不能用 ts：一条保活事件可能
+    -- 已经转了几小时（机器一直起不来），窗口到点被改挂「等停机」后 ts 还是老的，
+    -- 按 ts 算会立刻判成「超时未确认」，事件收尾变成假失败。
+    pending_ts     INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts DESC);
 
@@ -325,6 +329,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
             "finished_at": "INTEGER NOT NULL DEFAULT 0",
             "pending_status": "TEXT NOT NULL DEFAULT ''",
             "pending_kind": "TEXT NOT NULL DEFAULT ''",
+            "pending_ts": "INTEGER NOT NULL DEFAULT 0",
         },
         "keepalives": {
             "start_time": "TEXT NOT NULL DEFAULT ''",
@@ -358,6 +363,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # 老库上 idx_dns_target 是「一个目标只能占一条记录」的 UNIQUE 索引，
     # 现在一个目标可以挂多条域名，必须把它拆掉，否则第二条绑不上。
     conn.execute("DROP INDEX IF EXISTS idx_dns_target")
+
+    # 老库里还在转的事件没有 pending_ts（新列默认 0）：补成创建时刻，等价于
+    # 升级前的行为（超时按 ts 算），不会因为升级把在跑的事件一次性判超时。
+    conn.execute("UPDATE events SET pending_ts=ts WHERE pending_ts=0 AND status='running'")
 
 
 def init_db() -> None:

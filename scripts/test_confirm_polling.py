@@ -147,6 +147,35 @@ class ConfirmPolling(unittest.TestCase):
 
         self.assertNotIn("共尝试", repo.get_event(event_id)["detail"])
 
+    def test_retargeted_stop_wait_does_not_hit_old_timeout(self) -> None:
+        """转了几个小时的保活事件被改挂「等停机」：超时从改挂时刻算，不能当场判失败。
+
+        回归：超时原先按事件创建时间 ts 算。机器一直起不来时这条事件能挂一整天，
+        窗口到点被 retarget 成等 Stopped 之后，确认器下一轮（5 秒后）就把刚下发
+        的停机判成「超时未确认」，事件以 error 收尾 —— 停机过程和结果全丢了，
+        界面上只剩一句假失败。
+        """
+        event_id = self._pending(1)
+        # 造「已经挂了两小时」的现场
+        db.execute("UPDATE events SET ts=? WHERE id=?", (int(time.time()) - 7200, event_id))
+        repo.retarget_event(event_id, "Stopped", "keepalive_stop")
+
+        aliyun.get_instance = lambda server: aliyun.InstanceInfo(  # noqa: ARG005
+            "Stopping", "StopCharging", "", "cn-hongkong"
+        )
+        scheduler._confirm_pending_events()  # noqa: SLF001
+        event = repo.get_event(event_id)
+        self.assertEqual(event["status"], "running", event["detail"])
+
+        # 真停稳之后照常收尾，结论是「已暂停」而不是超时
+        aliyun.get_instance = lambda server: aliyun.InstanceInfo(  # noqa: ARG005
+            "Stopped", "StopCharging", "", "cn-hongkong"
+        )
+        scheduler._confirm_pending_events()  # noqa: SLF001
+        event = repo.get_event(event_id)
+        self.assertEqual(event["status"], "done", event["detail"])
+        self.assertIn("已暂停", event["detail"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
