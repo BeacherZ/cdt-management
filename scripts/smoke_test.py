@@ -84,12 +84,65 @@ status, body = call("GET", "/api/v1/servers")
 items = body.get("items", [])
 check("服务器列表长度 3", len(items) == 3, f"实际 {len(items)}")
 check("Secret 只回显打码值", bool(items) and "****" in items[0]["access_key_masked"], items[0]["access_key_masked"] if items else "")
+check("停机模式默认节省停机", items and items[0]["stop_mode"] == "StopCharging", str(items[0]["stop_mode"]) if items else "")
+status, body = call(
+    "POST",
+    "/api/v1/servers",
+    {"id": servers[0], "label": "国际站-测试", "region_id": "cn-hongkong", "stop_mode": "Stop"},
+)
+check("切换普通停机", status == 200, f"HTTP {status} {body}")
+renamed = {s["id"]: s for s in call("GET", "/api/v1/servers")[1]["items"]}
+check("停机模式已保存", renamed[servers[0]]["stop_mode"] == "Stop", str(renamed[servers[0]]))
+check("标签保持原样", renamed[servers[0]]["label"] == "国际站-测试", renamed[servers[0]]["label"])
 
 print("\n== 4. 单机保活 ==")
 status, body = call("POST", "/api/v1/keepalives", {"server_id": servers[2]})
 check("加入单机保活", status == 200 and body.get("id"), str(body))
 status, body = call("GET", "/api/v1/keepalives")
 check("保活列表长度 1", len(body.get("items", [])) == 1)
+
+# 运行时段 / 运行日期：合法值存得下，非法值要被挡住
+keepalive_id = call("GET", "/api/v1/keepalives")[1]["items"][0]["id"]
+status, body = call(
+    "POST",
+    f"/api/v1/keepalives/{keepalive_id}",
+    {"enabled": True, "start_time": "08:00", "end_time": "23:00", "start_day": 1, "end_day": 15},
+)
+check("保存运行窗口", status == 200, f"HTTP {status} {body}")
+item = call("GET", "/api/v1/keepalives")[1]["items"][0]
+check(
+    "窗口原样读回",
+    (item["start_time"], item["end_time"], item["start_day"], item["end_day"])
+    == ("08:00", "23:00", 1, 15),
+    str(item),
+)
+check("列表带回窗口判定", isinstance(item.get("in_window"), bool), str(item))
+status, body = call(
+    "POST", f"/api/v1/keepalives/{keepalive_id}", {"enabled": True, "start_time": "08:00", "end_time": "00:00"}
+)
+check("结束 00:00 视为到 24:00", status == 200, f"HTTP {status} {body}")
+item = call("GET", "/api/v1/keepalives")[1]["items"][0]
+check("00:00 原样存回", item["end_time"] == "00:00", str(item))
+status, body = call(
+    "POST", f"/api/v1/keepalives/{keepalive_id}", {"enabled": True, "start_time": "23:00", "end_time": "06:00"}
+)
+check("跨零点时段被拒", status == 400, f"HTTP {status} {body}")
+status, body = call(
+    "POST", f"/api/v1/keepalives/{keepalive_id}", {"enabled": True, "start_time": "08:00"}
+)
+check("半截时段被拒", status == 400, f"HTTP {status} {body}")
+status, body = call(
+    "POST", f"/api/v1/keepalives/{keepalive_id}", {"enabled": True, "start_day": 20, "end_day": 5}
+)
+check("跨月日期被拒", status == 400, f"HTTP {status} {body}")
+status, body = call("POST", f"/api/v1/keepalives/{keepalive_id}", {"enabled": True})
+check("清空窗口（回到全天）", status == 200, f"HTTP {status} {body}")
+item = call("GET", "/api/v1/keepalives")[1]["items"][0]
+check(
+    "窗口已清空",
+    (item["start_time"], item["start_day"]) == ("", 0),
+    str(item),
+)
 
 print("\n== 5. 创建换班组（3 台，8h/8h/8h）==")
 status, body = call(

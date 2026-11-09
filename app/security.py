@@ -9,6 +9,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import secrets
 import threading
@@ -17,6 +18,8 @@ import time
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from . import settings
+
+log = logging.getLogger("cdt-management.security")
 
 PBKDF2_ROUNDS = 260_000
 
@@ -52,6 +55,30 @@ def verify_password(password: str, stored: str) -> bool:
 # 主密钥 + 字段加密
 # --------------------------------------------------------------------------
 
+def _repair_text_mode_key(path, raw: bytes) -> bytes:
+    """修掉「文本模式写入把 0x0A 写成 0x0D 0x0A」的 33 字节密钥文件。
+
+    1.2.8 在 Windows 上用 os.open 写密钥时没带 O_BINARY，CRT 按文本模式打开，
+    32 字节随机数里只要有 0x0A（约 12% 概率）就会写成 33 字节。这种文件的前 32
+    字节不是真密钥，拿去解密会把所有凭据判成「master.key 被替换」。
+
+    按插入位置还原成 32 字节并写回磁盘，用户无感。不是这种形态就原样取前 32 字节。
+    """
+    if len(raw) != 33 or b"\r\n" not in raw:
+        return raw[:32]
+    fixed = raw.replace(b"\r\n", b"\n", 1)
+    if len(fixed) != 32:
+        return raw[:32]
+    try:
+        with open(path, "wb") as fh:
+            fh.write(fixed)
+        log.warning("master.key 是 Windows 文本模式写坏的 33 字节文件，已自动还原为 32 字节")
+    except OSError:  # noqa: BLE001
+        # 写不回去也不影响本次使用：还原出来的密钥是对的
+        pass
+    return fixed
+
+
 def _load_master_key() -> bytes:
     settings.ensure_dirs()
     path = settings.MASTER_KEY_PATH
@@ -59,19 +86,27 @@ def _load_master_key() -> bytes:
         # O_EXCL：并发首调时只有一个线程/进程能创建成功，另一个落到下面的读分支。
         # 原来用「先判存在、再 write_bytes」，两个调用方会各生成一把密钥，后写的
         # 把先写的覆盖掉 —— 用另一把加密的凭据从此解不开。
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        #
+        # O_BINARY（Windows 才有，Linux 上是 0）：不加它，CRT 会以文本模式打开，
+        # 密钥里出现 0x0A 时被写成 0x0D 0x0A，文件变 33 字节、内容也变了。32 字节
+        # 随机数里有 0x0A 的概率约 12%，等于十几分之一的机会重启后所有凭据都解不开。
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+        fd = os.open(path, flags, 0o600)
     except FileExistsError:
         # 刚创建、内容还没写完的瞬间也要等一等：读到 0 字节不是「文件坏了」。
+        raw = b""
         for _ in range(50):
             raw = path.read_bytes()
             if len(raw) >= 32:
-                return raw[:32]
+                break
             time.sleep(0.01)
-        # 文件在但内容不完整：绝不能悄悄重新生成，否则已存的 Secret 全部解不开
-        raise RuntimeError(
-            f"主密钥文件 {path} 内容不完整（{len(raw)} 字节，至少需要 32）。"
-            "请从备份恢复；如果确实要重来，删掉该文件后重新录入所有凭据。"
-        )
+        if len(raw) < 32:
+            # 文件在但内容不完整：绝不能悄悄重新生成，否则已存的 Secret 全部解不开
+            raise RuntimeError(
+                f"主密钥文件 {path} 内容不完整（{len(raw)} 字节，至少需要 32）。"
+                "请从备份恢复；如果确实要重来，删掉该文件后重新录入所有凭据。"
+            )
+        return _repair_text_mode_key(path, raw)
     try:
         key = os.urandom(32)
         os.write(fd, key)

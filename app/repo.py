@@ -171,13 +171,23 @@ def is_session_revoked(token_id: str) -> bool:
 
 SERVER_COLUMNS = (
     "id, label, access_key_id, access_key_secret, region_id, site, instance_id, "
-    "quota_gb, threshold_gb, remark, traffic_used, instance_status, stopped_mode, "
+    "quota_gb, threshold_gb, remark, traffic_used, instance_status, stop_mode, stopped_mode, "
     "public_ip, traffic_checked_at, status_checked_at, monthly_cost, balance_amount, "
     "billing_currency, billing_cycle, billing_updated_at, billing_error, created_at, sort_order"
 )
 
 # 站点取值只有两个；其余一律归一到中国站，避免脏数据流到 endpoint 解析里
 SITE_TYPES = ("china", "international")
+
+# 实例设置里可选的停机模式：StopCharging = 节省停机（不计规格费），Stop = 普通停机。
+# 老库 / 脏值一律按节省停机处理：这是加上这个选项之前全项目的固定行为，升级后不变。
+STOP_MODES = ("StopCharging", "Stop")
+DEFAULT_STOP_MODE = "StopCharging"
+
+
+def normalize_stop_mode(value: Any) -> str:
+    mode = str(value or "").strip()
+    return mode if mode in STOP_MODES else DEFAULT_STOP_MODE
 
 
 def normalize_site(value: Any) -> str:
@@ -188,6 +198,7 @@ def normalize_site(value: Any) -> str:
 def _server_row(row: Any, decrypt_secret: bool = False) -> dict[str, Any]:
     item = dict(row)
     item["site"] = normalize_site(item.get("site"))
+    item["stop_mode"] = normalize_stop_mode(item.get("stop_mode"))
     secret = item.pop("access_key_secret", "") or ""
     item["secret_configured"] = bool(secret)
     if decrypt_secret:
@@ -240,6 +251,11 @@ def upsert_server(payload: dict[str, Any]) -> int:
     threshold_raw = payload.get("threshold_gb")
     threshold = float(threshold_raw) if threshold_raw not in (None, "") else 188.0
     remark = str(payload.get("remark") or "").strip()
+    stop_mode_raw = payload.get("stop_mode")
+    # 没传（老前端 / 只改别处的接口）就保持原值；新建时落到默认的节省停机
+    stop_mode = (
+        normalize_stop_mode(stop_mode_raw) if stop_mode_raw is not None else ""
+    )
 
     if not region:
         raise ValueError("地域不能为空")
@@ -252,7 +268,7 @@ def upsert_server(payload: dict[str, Any]) -> int:
 
     if server_id:
         existing = db.query_one(
-            "SELECT access_key_id, access_key_secret, site, instance_id FROM servers WHERE id=?",
+            "SELECT access_key_id, access_key_secret, site, instance_id, stop_mode FROM servers WHERE id=?",
             (server_id,),
         )
         if existing is None:
@@ -262,6 +278,9 @@ def upsert_server(payload: dict[str, Any]) -> int:
         if payload.get("site") is None:
             # 老前端不传这个字段时保持原值，别把已有配置默默重置成中国站
             site = normalize_site(existing["site"])
+        if stop_mode_raw is None:
+            # 同理：只调用其它字段的接口不能把停机模式重置回默认
+            stop_mode = normalize_stop_mode(existing["stop_mode"])
         encrypted = security.encrypt(sk) if sk else existing["access_key_secret"]
         # 换了账号 / 实例 / 站点，旧账单就不是这台机器的了，必须清掉重查
         billing_changed = (
@@ -277,10 +296,22 @@ def upsert_server(payload: dict[str, Any]) -> int:
         )
         db.execute(
             "UPDATE servers SET label=?, access_key_id=?, access_key_secret=?, region_id=?, "
-            "site=?, instance_id=?, quota_gb=?, threshold_gb=?, remark=?"
+            "site=?, instance_id=?, quota_gb=?, threshold_gb=?, remark=?, stop_mode=?"
             + reset_billing
             + " WHERE id=?",
-            (label or ak[-6:], ak, encrypted, region, site, instance, quota, threshold, remark, server_id),
+            (
+                label or ak[-6:],
+                ak,
+                encrypted,
+                region,
+                site,
+                instance,
+                quota,
+                threshold,
+                remark,
+                stop_mode,
+                server_id,
+            ),
         )
         return server_id
 
@@ -290,7 +321,7 @@ def upsert_server(payload: dict[str, Any]) -> int:
         raise ValueError("新建服务器必须填写 AccessKey Secret")
     return db.insert(
         "INSERT INTO servers(label, access_key_id, access_key_secret, region_id, site, instance_id, "
-        "quota_gb, threshold_gb, remark, created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        "quota_gb, threshold_gb, remark, stop_mode, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
         (
             label or ak[-6:],
             ak,
@@ -301,6 +332,7 @@ def upsert_server(payload: dict[str, Any]) -> int:
             quota,
             threshold,
             remark,
+            stop_mode or DEFAULT_STOP_MODE,
             int(time.time()),
         ),
     )
@@ -340,12 +372,15 @@ def delete_server(server_id: int) -> None:
     # 这台机器专属的一次性标记一并清掉。SQLite 的 AUTOINCREMENT 不复用 id，
     # 留着不会被新机器撞上，但也没人再去清 —— 只能等 90 天的兜底清理，白占表。
     db.execute(
-        "DELETE FROM flags WHERE key IN (?,?,?,?,?)",
+        "DELETE FROM flags WHERE key IN (?,?,?,?,?,?,?)",
         (
             f"read_err:{server_id}",
             f"keepalive_err:{server_id}",
             f"keepalive_fail:{server_id}",
             f"keepalive_tries:{server_id}",
+            # 休止时段标记：机器删了还留着，重新加一台同 id 永远进不了运行窗口
+            f"keepalive_rest:{server_id}",
+            f"keepalive_rest_fail:{server_id}",
             # 1.2.36 及以前用过的等待标记，已不再写入，顺手把残留扫掉
             f"keepalive_wait:{server_id}",
         ),
@@ -498,7 +533,8 @@ def latest_samples(server_id: int) -> dict[str, Any] | None:
 
 def list_keepalives() -> list[dict[str, Any]]:
     rows = db.query(
-        "SELECT k.id, k.server_id, k.enabled, k.created_at, s.label, s.instance_status, "
+        "SELECT k.id, k.server_id, k.enabled, k.created_at, k.start_time, k.end_time, "
+        "k.start_day, k.end_day, s.label, s.instance_status, s.stop_mode, "
         "s.stopped_mode, s.public_ip, s.traffic_used, s.quota_gb, s.threshold_gb, "
         "s.instance_id, s.region_id, s.site, s.status_checked_at "
         "FROM keepalives k JOIN servers s ON s.id=k.server_id ORDER BY k.id"
@@ -506,33 +542,108 @@ def list_keepalives() -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def get_keepalive(keepalive_id: int) -> dict[str, Any] | None:
+    row = db.query_one("SELECT * FROM keepalives WHERE id=?", (keepalive_id,))
+    return dict(row) if row else None
+
+
 def keepalive_server_ids() -> set[int]:
     return {int(row["server_id"]) for row in db.query("SELECT server_id FROM keepalives WHERE enabled=1")}
 
 
-def add_keepalive(server_id: int, enabled: bool = True) -> int:
+def keepalive_schedules() -> dict[int, dict[str, Any]]:
+    """server_id → 运行窗口。确认器每 5 秒一轮，别为每条事件单独查一次库。"""
+    return {
+        int(row["server_id"]): dict(row)
+        for row in db.query(
+            "SELECT server_id, enabled, start_time, end_time, start_day, end_day FROM keepalives"
+        )
+    }
+
+
+def add_keepalive(
+    server_id: int,
+    enabled: bool = True,
+    *,
+    start_time: str = "",
+    end_time: str = "",
+    start_day: int = 0,
+    end_day: int = 0,
+) -> int:
     if db.query_one("SELECT 1 FROM servers WHERE id=?", (server_id,)) is None:
         raise ValueError("服务器不存在")
     enabled_val = 1 if enabled else 0
     # 原子 upsert：以前是「先查再插」，并发两个请求会同时撞上 server_id 的
-    # UNIQUE 约束报 500。ON CONFLICT 只覆盖 enabled，不动 created_at。
+    # UNIQUE 约束报 500。ON CONFLICT 覆盖开关与时间窗，不动 created_at。
     db.execute(
-        "INSERT INTO keepalives(server_id, enabled, created_at) VALUES(?,?,?) "
-        "ON CONFLICT(server_id) DO UPDATE SET enabled=excluded.enabled",
-        (server_id, enabled_val, int(time.time())),
+        "INSERT INTO keepalives(server_id, enabled, start_time, end_time, start_day, end_day, created_at) "
+        "VALUES(?,?,?,?,?,?,?) "
+        "ON CONFLICT(server_id) DO UPDATE SET enabled=excluded.enabled, "
+        "start_time=excluded.start_time, end_time=excluded.end_time, "
+        "start_day=excluded.start_day, end_day=excluded.end_day",
+        (server_id, enabled_val, start_time, end_time, int(start_day), int(end_day), int(time.time())),
     )
+    # 重新加入 / 改了窗口，旧的休止标记就作废
+    _clear_keepalive_flags(server_id)
     row = db.query_one("SELECT id FROM keepalives WHERE server_id=?", (server_id,))
     return int(row["id"]) if row else 0
 
 
+def _clear_keepalive_flags(server_id: int) -> None:
+    """清掉这台机器的保活临时标记。暂停 / 移出 / 改窗口后必须清：
+
+    keepalive_rest 留着，下一轮巡检会以为「还在休止时段」而不发「已恢复」；
+    keepalive_planned 留着，之后真的被抢占也不会推「抢占恢复」通知。
+    """
+    db.execute(
+        "DELETE FROM flags WHERE key IN (?,?,?)",
+        (
+            f"keepalive_rest:{server_id}",
+            f"keepalive_rest_fail:{server_id}",
+            f"keepalive_planned:{server_id}",
+        ),
+    )
+
+
 def set_keepalive_enabled(keepalive_id: int, enabled: bool) -> None:
     db.execute("UPDATE keepalives SET enabled=? WHERE id=?", (1 if enabled else 0, keepalive_id))
+    if not enabled:
+        row = db.query_one("SELECT server_id FROM keepalives WHERE id=?", (keepalive_id,))
+        if row is not None:
+            _clear_keepalive_flags(int(row["server_id"]))
+
+
+def update_keepalive(
+    keepalive_id: int,
+    *,
+    enabled: bool = True,
+    start_time: str = "",
+    end_time: str = "",
+    start_day: int = 0,
+    end_day: int = 0,
+) -> None:
+    """改开关与运行窗口。server_id 不可改 —— 换机器就是删一条再加一条。"""
+    db.execute(
+        "UPDATE keepalives SET enabled=?, start_time=?, end_time=?, start_day=?, end_day=? "
+        "WHERE id=?",
+        (
+            1 if enabled else 0,
+            start_time,
+            end_time,
+            int(start_day),
+            int(end_day),
+            keepalive_id,
+        ),
+    )
 
 
 def delete_keepalive(keepalive_id: int) -> None:
     # 只删保活任务本身。DNS 绑定是用户在 DNS 页显式建立的，不跟着一起清 ——
     # 一台机器可能同时挂着别的用途的域名，删个保活就把人家的解析抹了太粗暴。
+    row = db.query_one("SELECT server_id FROM keepalives WHERE id=?", (keepalive_id,))
     db.execute("DELETE FROM keepalives WHERE id=?", (keepalive_id,))
+    if row is not None:
+        _clear_keepalive_flags(int(row["server_id"]))
 
 
 # --------------------------------------------------------------------------
@@ -663,7 +774,7 @@ def list_members(group_id: int) -> list[dict[str, Any]]:
     rows = db.query(
         "SELECT m.id, m.group_id, m.server_id, m.position, m.hours, m.enabled, "
         "m.slot_name, m.start_time, m.end_time, m.days, "
-        "s.label, s.instance_id, s.region_id, s.site, s.instance_status, s.stopped_mode, "
+        "s.label, s.instance_id, s.region_id, s.site, s.instance_status, s.stop_mode, s.stopped_mode, "
         "s.public_ip, s.traffic_used, s.quota_gb, s.threshold_gb, s.status_checked_at "
         "FROM shift_members m LEFT JOIN servers s ON s.id=m.server_id "
         "WHERE m.group_id=? ORDER BY m.position",
@@ -1196,6 +1307,27 @@ def latest_event_id(kind: str, group_id: int = 0, max_age: int = 3600) -> int:
     sql += " ORDER BY id DESC LIMIT 1"
     row = db.query_one(sql, params)
     return int(row["id"]) if row else 0
+
+
+def latest_server_event(
+    server_id: int, kinds: tuple[str, ...], max_age: int = 600
+) -> dict[str, Any] | None:
+    """某台机器最近一条指定类型的事件，用来把后到的结果补回已收尾的事件。
+
+    单机保活出窗口是两轮完成的：确认器先收尾「单机保活暂停」，巡检下一轮才真正
+    下发停机。要更新的是那条已经 done 的事件，`pending_event()` 只找 running 的，
+    所以单独给一个按 server + kind 取的查询。max_age 同样防写到陈年事件上。
+    """
+    if not kinds:
+        return None
+    placeholders = ",".join("?" for _ in kinds)
+    params: list[Any] = [server_id, *kinds, int(time.time()) - max_age]
+    row = db.query_one(
+        f"SELECT * FROM events WHERE server_id=? AND kind IN ({placeholders}) AND ts>=? "
+        "ORDER BY id DESC LIMIT 1",
+        tuple(params),
+    )
+    return dict(row) if row else None
 
 
 def _parse_progress(raw: str) -> list[dict[str, Any]]:

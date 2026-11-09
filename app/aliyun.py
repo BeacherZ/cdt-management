@@ -481,6 +481,21 @@ def get_instance(account: dict) -> InstanceInfo:
     return InstanceInfo(status, mode, public_ip, region)
 
 
+# 开机被阿里云拒掉时，「库存不足」的几个错误码。抢占式规格售罄时会命中，
+# 和限流 / 欠费 / 鉴权失败是两回事：前者等一会儿可能就有了，后者得人去处理。
+_NO_STOCK_HINTS = ("InsufficientInventory", "NoStock")
+
+
+def _error_code(exc: Exception) -> str:
+    get_code = getattr(exc, "get_error_code", None)
+    if not callable(get_code):
+        return ""
+    try:
+        return str(get_code() or "").strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def start_instance(account: dict) -> None:
     if settings.DRY_RUN:
         log.info("[dry-run] start %s", account.get("instance_id"))
@@ -504,9 +519,14 @@ def start_instance(account: dict) -> None:
     try:
         client.do_action_with_exception(request)
     except Exception as exc:
-        message = str(exc)
-        if "InsufficientInventory" in message:
-            raise AliyunError("库存不足（InsufficientInventory），该地域暂无可用抢占式库存") from exc
+        raw = f"{_error_code(exc)} {exc}"
+        if any(hint in raw for hint in _NO_STOCK_HINTS):
+            # 原来只有 InsufficientInventory 一种，NoStock / OperationDenied.NoStock
+            # 都落到「启动实例失败：…」，事件详情里看不出是库存没了还是配置错了。
+            code = _error_code(exc) or "InsufficientInventory"
+            raise AliyunError(
+                f"库存不足（{code}），{account.get('region_id') or '该地域'} 暂无可用实例库存"
+            ) from exc
         raise AliyunError(f"启动实例失败：{brief_error(exc)}") from exc
 
 

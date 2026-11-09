@@ -144,6 +144,21 @@ class MasterKeyFirstCall(unittest.TestCase):
         self.assertEqual(key_path.read_bytes()[:32], keys[0])
         self.assertEqual(len(key_path.read_bytes()), 32)
 
+    def test_text_mode_key_file_is_repaired(self):
+        """1.2.8 在 Windows 上写出过 33 字节的密钥文件（文本模式把 0x0A 变 \\r\\n）。
+
+        前 32 字节不是真密钥，拿去解密会把所有凭据判成「master.key 被替换」。
+        加载时要按插入位置还原成 32 字节并写回，不能直接截前 32 字节。
+        """
+        key_path = settings.MASTER_KEY_PATH
+        real = bytes(range(200, 232))
+        real = real[:5] + b"\n" + real[6:]
+        key_path.write_bytes(real.replace(b"\n", b"\r\n", 1))
+        security._MASTER_KEY = None  # noqa: SLF001
+
+        self.assertEqual(security.master_key(), real)
+        self.assertEqual(len(key_path.read_bytes()), 32, "还原后要写回磁盘")
+
 
 if __name__ == "__main__":
     unittest.main()

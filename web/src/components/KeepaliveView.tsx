@@ -1,8 +1,10 @@
 import {
+  Clock,
   Globe2,
   HeartPulse,
   LoaderCircle,
   MapPin,
+  Pencil,
   Plus,
   Power,
   PowerOff,
@@ -10,6 +12,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import { regionLabel } from '../regions'
+import { windowSummary } from '../keepalive'
 import type { Keepalive, Server } from '../types'
 import { Badge, Empty, Meter, statusLabel, statusTone } from './ui'
 
@@ -21,6 +24,7 @@ type Props = {
   togglingId: number | null
   onAdd: () => void
   onToggle: (item: Keepalive, enabled: boolean) => void
+  onEdit: (item: Keepalive) => void
   onRemove: (item: Keepalive) => void
   onAction: (serverId: number, action: 'start' | 'stop') => void
   onRefresh: (serverId: number) => void
@@ -34,6 +38,7 @@ export default function KeepaliveView({
   togglingId,
   onAdd,
   onToggle,
+  onEdit,
   onRemove,
   onAction,
   onRefresh,
@@ -46,7 +51,8 @@ export default function KeepaliveView({
         <div>
           <h1>单机保活</h1>
           <p>
-            只做一件事：实例意外停机（或抢占被回收）就自动拉起来，不参与换班、不停机。
+            只做一件事：实例意外停机（或抢占被回收）就自动拉起来，不参与换班。
+            可以限定每天几点到几点、每月几号到几号运行，窗口外自动停机、不推通知。
             同一台服务器如果已经加入换班组，这里会自动让位，避免两边互相拉扯。
           </p>
         </div>
@@ -71,7 +77,11 @@ export default function KeepaliveView({
             // 保活开着的时候手动关机只会被下一轮立刻拉起来，还会伪造一条「保活拉起」，
             // 所以只在暂停 / 让位状态下放开手动启停
             const locked = item.enabled || inGroup
-            const powerHint = running ? '关机（优先节省停机，不支持时转普通停机）' : '开机'
+            const powerHint = running ? '关机（按实例设置的停机模式）' : '开机'
+            const schedule = windowSummary(item)
+            // 窗口外：机器本来就该停着。卡片还写「保活运行中」会让人以为它该在跑，
+            // 以为机器挂了。in_window 由后端按同一套判定算好，前端不重复推演。
+            const resting = item.enabled && item.in_window === false
             return (
               <div className="card server-card" key={item.id}>
                 <div className="head">
@@ -104,6 +114,13 @@ export default function KeepaliveView({
                     )}
                     <button
                       className="btn ghost icon sm"
+                      title="编辑保活设置"
+                      onClick={() => onEdit(item)}
+                    >
+                      <Pencil size={13} />
+                    </button>
+                    <button
+                      className="btn ghost icon sm"
                       title="移出保活"
                       onClick={() => onRemove(item)}
                     >
@@ -121,6 +138,11 @@ export default function KeepaliveView({
                   <span className={`site-tag ${item.site === 'international' ? 'intl' : ''}`}>
                     {item.site === 'international' ? '国际站' : '中国站'}
                   </span>
+                  {item.stop_mode === 'Stop' && (
+                    <span className="site-tag" title="实例设置里的停机模式：普通停机仍按规格收费">
+                      普通停机
+                    </span>
+                  )}
                 </div>
                 <div className="meta-line">
                   <span style={{ fontFamily: 'ui-monospace, Consolas, monospace' }}>
@@ -143,6 +165,15 @@ export default function KeepaliveView({
                   </div>
                 )}
 
+                {schedule && (
+                  <div className="meta-line">
+                    <span className="dns-chip" title="运行窗口：窗口内自动拉起，窗口外自动停机">
+                      <Clock size={10} />
+                      {schedule}
+                    </span>
+                  </div>
+                )}
+
                 <div className="toggle-row" style={{ paddingTop: 4, paddingBottom: 0, borderBottom: 0 }}>
                   <div className="toggle-text">
                     {groupedIds.has(item.server_id) ? (
@@ -153,9 +184,17 @@ export default function KeepaliveView({
                     ) : (
                       <>
                         <strong style={{ fontSize: 12 }}>
-                          {item.enabled ? '保活运行中' : '已暂停'}
+                          {!item.enabled ? '已暂停' : resting ? '休止时段（窗口外）' : '保活运行中'}
                         </strong>
-                        <span>暂停后不再自动拉起，实例状态保持不变</span>
+                        <span>
+                          {!item.enabled
+                            ? '暂停后不再自动拉起，实例状态保持不变'
+                            : resting
+                              ? `当前不在 ${schedule || '运行窗口'} 内，窗口外自动停机、到点自动拉起`
+                              : schedule
+                                ? `只在 ${schedule} 内运行，窗口外自动停机`
+                                : '实例停机后自动拉起，不参与换班'}
+                        </span>
                       </>
                     )}
                   </div>

@@ -35,6 +35,12 @@ CREATE TABLE IF NOT EXISTS servers (
     remark              TEXT    NOT NULL DEFAULT '',
     traffic_used        REAL,
     instance_status     TEXT    NOT NULL DEFAULT '',
+    -- 用户希望的停机模式：StopCharging（节省停机）/ Stop（普通停机）。
+    -- 各模块下发停机指令时都读这个值，不再各自写死「节省停机」。
+    stop_mode           TEXT    NOT NULL DEFAULT 'StopCharging',
+    -- 上一次阿里云返回的**真实**停机模式（StopCharging / KeepCharging / Not-applicable）。
+    -- 与上面那个偏好分开存：选了节省停机但规格不支持时，这里会是 KeepCharging，
+    -- 事件与通知里的「已节省停机 / 已普通停机」必须按它写，否则账单照扣还在说省钱。
     stopped_mode        TEXT    NOT NULL DEFAULT '',
     public_ip           TEXT    NOT NULL DEFAULT '',
     traffic_checked_at  INTEGER NOT NULL DEFAULT 0,
@@ -53,11 +59,19 @@ CREATE TABLE IF NOT EXISTS servers (
     sort_order          INTEGER NOT NULL DEFAULT 0
 );
 
--- 单机保活：只负责「停了就拉起来」，不做换班
+-- 单机保活：负责「停了就拉起来」，可限定运行时段与日期
 CREATE TABLE IF NOT EXISTS keepalives (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     server_id  INTEGER NOT NULL UNIQUE,
     enabled    INTEGER NOT NULL DEFAULT 1,
+    -- 每天允许运行的时段：start_time ≤ now < end_time，必须同一天内（不跨零点）。
+    -- 两项都空 = 全天。
+    start_time TEXT    NOT NULL DEFAULT '',
+    end_time   TEXT    NOT NULL DEFAULT '',
+    -- 每月允许运行的日子：start_day ≤ day ≤ end_day，必须同一个月内（不跨月）。
+    -- 0 = 不限（两项都 0 才是全月，只有一项为 0 视为无效配置）。
+    start_day  INTEGER NOT NULL DEFAULT 0,
+    end_day    INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL DEFAULT 0
 );
 
@@ -294,6 +308,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
             "billing_updated_at": "INTEGER NOT NULL DEFAULT 0",
             "billing_error": "TEXT NOT NULL DEFAULT ''",
             "sort_order": "INTEGER NOT NULL DEFAULT 0",
+            "stop_mode": "TEXT NOT NULL DEFAULT 'StopCharging'",
         },
         "shift_members": {
             "slot_name": "TEXT NOT NULL DEFAULT ''",
@@ -310,6 +325,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
             "finished_at": "INTEGER NOT NULL DEFAULT 0",
             "pending_status": "TEXT NOT NULL DEFAULT ''",
             "pending_kind": "TEXT NOT NULL DEFAULT ''",
+        },
+        "keepalives": {
+            "start_time": "TEXT NOT NULL DEFAULT ''",
+            "end_time": "TEXT NOT NULL DEFAULT ''",
+            "start_day": "INTEGER NOT NULL DEFAULT 0",
+            "end_day": "INTEGER NOT NULL DEFAULT 0",
         },
         "shift_runs": {
             "stage": "TEXT NOT NULL DEFAULT ''",

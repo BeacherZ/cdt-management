@@ -292,7 +292,8 @@ class OtherReports(unittest.TestCase):
         self.assertTrue(
             message.html.startswith("🚨 <b>CDT 超限停机报告（单机保活）</b>\n\n")
         )
-        self.assertIn("已暂停保活", message.html)
+        # 停机模式必须写出来：只写「已暂停保活」看不出这台是省钱停了还是照常计费
+        self.assertIn("已节省停机，并暂停保活", message.html)
         self.assertIn("┃ 📈 已用：190.00 GB（阈值 188 GB）", message.html)
 
     def test_over_limit_idle(self):

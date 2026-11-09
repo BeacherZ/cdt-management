@@ -1,5 +1,8 @@
 export type SiteType = 'china' | 'international'
 
+/** 停机模式：节省停机（不计规格费）/ 普通停机（照常收规格费） */
+export type StopMode = 'StopCharging' | 'Stop'
+
 /** 服务器被哪个自动化流程托管；null 表示闲散机器，可随时手动开关机 */
 export type Managed = {
   kind: 'keepalive' | 'group'
@@ -70,6 +73,9 @@ export type Server = {
   traffic_used: number | null
   traffic_percent: number | null
   instance_status: string
+  /** 实例设置里选的停机模式：StopCharging 节省停机 / Stop 普通停机 */
+  stop_mode: StopMode
+  /** 阿里云返回的真实停机模式（选了节省停机但规格不支持时会是 KeepCharging） */
   stopped_mode: string
   public_ip: string
   traffic_checked_at: number
@@ -86,8 +92,17 @@ export type Keepalive = {
   server_id: number
   enabled: boolean
   created_at: number
+  /** 每天允许运行的时段（HH:MM，不跨零点）；空串 = 全天 */
+  start_time: string
+  end_time: string
+  /** 每月允许运行的日子（1–31，不跨月）；0 = 全月 */
+  start_day: number
+  end_day: number
+  /** 当前是否落在运行窗口内（后端按同一套判定算好）；没设窗口时恒为 true */
+  in_window?: boolean
   label: string
   instance_status: string
+  stop_mode?: StopMode
   stopped_mode: string
   public_ip: string
   traffic_used: number | null
@@ -268,6 +283,7 @@ export function emptyServer(): Server {
     traffic_used: null,
     traffic_percent: null,
     instance_status: 'Unknown',
+    stop_mode: 'StopCharging',
     stopped_mode: '',
     public_ip: '',
     traffic_checked_at: 0,

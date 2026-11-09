@@ -2,12 +2,18 @@ import { useState } from 'react'
 import { Globe2, KeyRound, MapPin, Server, TriangleAlert } from 'lucide-react'
 import { post } from '../api'
 import { DEFAULT_REGION, GROUP_ORDER, regionsFor } from '../regions'
-import type { Server as ServerType, SiteType } from '../types'
+import type { Server as ServerType, SiteType, StopMode } from '../types'
 import { Modal, Segmented } from './ui'
+import ConfirmDialog from './ConfirmDialog'
 
 const SITE_OPTIONS: { value: SiteType; label: string }[] = [
   { value: 'china', label: '中国站' },
   { value: 'international', label: '国际站' },
+]
+
+const STOP_MODE_OPTIONS: { value: StopMode; label: string }[] = [
+  { value: 'StopCharging', label: '节省停机' },
+  { value: 'Stop', label: '普通停机' },
 ]
 
 function groupedRegions(site: SiteType) {
@@ -42,10 +48,12 @@ export default function ServerDialog({
     instance_id: server?.instance_id ?? '',
     quota_gb: server?.quota_gb ?? 200,
     threshold_gb: server?.threshold_gb ?? Math.round((200 * defaultThresholdPercent) / 100),
+    stop_mode: (server?.stop_mode ?? 'StopCharging') as StopMode,
     remark: server?.remark ?? '',
   }))
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [confirmStop, setConfirmStop] = useState(false)
 
   function update<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
     setForm((current) => ({ ...current, [key]: value }))
@@ -83,6 +91,16 @@ export default function ServerDialog({
       setError('限流阈值不能超过总配额')
       return
     }
+    // 从节省停机改成普通停机要二次确认：这一改动会让每次关机都开始计规格费，
+    // 用户多半只是想看看有什么区别，一句提示比事后看账单便宜。
+    if (form.stop_mode === 'Stop' && (server?.stop_mode ?? 'StopCharging') !== 'Stop') {
+      setConfirmStop(true)
+      return
+    }
+    await submit()
+  }
+
+  async function submit() {
     setBusy(true)
     try {
       await post('/api/v1/servers', { ...form, access_key_id: form.access_key_id.trim() })
@@ -226,6 +244,15 @@ export default function ServerDialog({
       </div>
 
       <div className="field">
+        <label>停机模式</label>
+        <Segmented value={form.stop_mode} options={STOP_MODE_OPTIONS} onChange={(value) => update('stop_mode', value)} />
+        <div className="hint">
+          保活、换班休班、超限与手动关机的所有停机动作都按这里执行。普通停机仍按规格收费；
+          本地盘 / 包年包月 / GPU 等规格不支持节省停机，会自动退化为普通停机。
+        </div>
+      </div>
+
+      <div className="field">
         <label htmlFor="remark">备注</label>
         <input
           id="remark"
@@ -241,6 +268,20 @@ export default function ServerDialog({
           <TriangleAlert size={14} />
           {error}
         </div>
+      )}
+
+      {confirmStop && (
+        <ConfirmDialog
+          title="改成普通停机？"
+          message={`「${form.label || '这台实例'}」之后每次关机都会按实例规格计费。`}
+          hint="只有需要保留实例内状态（比如本地盘数据、固定公网 IP 立即可用）时才建议这样；只想让它停机省钱就用节省停机。"
+          confirmText="仍要改成普通停机"
+          onCancel={() => setConfirmStop(false)}
+          onConfirm={() => {
+            setConfirmStop(false)
+            void submit()
+          }}
+        />
       )}
     </Modal>
   )

@@ -29,6 +29,7 @@ from .shift import (
     actual_duty,
     current_member_index,
     engine,
+    keepalive_window,
     member_span_label,
     next_switch_at,
 )
@@ -430,6 +431,53 @@ def _validate_group_timetable(payload: dict[str, Any]) -> None:
         _validate_timetable_coverage(members)
 
 
+def _keepalive_window(payload: dict[str, Any]) -> tuple[str, str, int, int]:
+    """解析并校验单机保活的运行窗口，返回 (start_time, end_time, start_day, end_day)。
+
+    两个维度都只允许「全空（不限）」或「成对且同向」：
+
+    - 时段必须在同一天内（end > start，不跨零点；结束填 00:00 表示到 24:00，
+      与联合换班同义）：跨零点会让「今天 22:00–06:00」到底算今天还是明天变得没法
+      在界面上说清，用户要跨天就拆成两个保活轮不到，不如直接不支持。
+    - 日期必须在同一个月内（1 ≤ start ≤ end ≤ 31，不跨月）：跨月同理，而且每个月
+      天数不同，跨月边界没法用两个固定数字表达。
+
+    只填一半（比如只填开始时刻）当错误处理，不做静默兜底 —— 静默兜底的结果是
+    界面显示着时段、引擎却当没配，这种「表里不一」最难排查。
+    """
+    start_raw = str(payload.get("start_time") or "").strip()
+    end_raw = str(payload.get("end_time") or "").strip()
+    if bool(start_raw) != bool(end_raw):
+        raise ValueError("运行时段的起止时刻要成对填写，或都留空（全天）")
+    if start_raw:
+        if not repo.is_hhmm(start_raw) or not repo.is_hhmm(end_raw):
+            raise ValueError("运行时段要用 HH:MM 格式，例如 08:00")
+        start_min = int(start_raw[:2]) * 60 + int(start_raw[3:])
+        end_min = int(end_raw[:2]) * 60 + int(end_raw[3:])
+        # 结束 00:00 就是「到当天午夜」，与联合换班同一套写法；其余仍要求 end > start
+        if end_min == 0 and start_min > 0:
+            end_min = 24 * 60
+        if end_min <= start_min:
+            raise ValueError(
+                "运行时段的结束时刻必须晚于开始时刻（不支持跨零点；结束填 00:00 表示到 24:00）"
+            )
+
+    try:
+        start_day = int(payload.get("start_day") or 0)
+        end_day = int(payload.get("end_day") or 0)
+    except (TypeError, ValueError):
+        raise ValueError("运行日期必须是 1–31 的数字") from None
+    if bool(start_day) != bool(end_day):
+        raise ValueError("运行日期的起止日要成对填写，或都留空（全月）")
+    if start_day:
+        if not (1 <= start_day <= 31 and 1 <= end_day <= 31):
+            raise ValueError("运行日期必须在 1–31 之间")
+        if end_day < start_day:
+            raise ValueError("运行日期的结束日不能早于开始日（不支持跨月）")
+
+    return start_raw, end_raw, start_day, end_day
+
+
 def _managed_map() -> dict[int, dict[str, Any]]:
     """哪台服务器被哪个自动化流程接管。
 
@@ -481,6 +529,7 @@ def server_summary(
         "traffic_used": used,
         "traffic_percent": round((used or 0) / quota * 100, 2) if used is not None else None,
         "instance_status": server.get("instance_status") or "Unknown",
+        "stop_mode": repo.normalize_stop_mode(server.get("stop_mode")),
         "stopped_mode": server.get("stopped_mode") or "",
         "public_ip": server.get("public_ip") or "",
         "traffic_checked_at": server.get("traffic_checked_at") or 0,
@@ -783,7 +832,15 @@ def register(app: FastAPI) -> None:
     # -- 单机保活 -------------------------------------------------------
     @app.get("/api/v1/keepalives")
     def keepalives(user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
-        return {"items": repo.list_keepalives()}
+        # in_window 给界面用：窗口外机器是停着的，卡片还写「保活运行中」会让人
+        # 以为它该在跑。按后端时区算，和巡检用的是同一条判定。
+        config = repo.get_settings()
+        now = dt.datetime.now(_timezone(config.get("timezone") or "Asia/Shanghai"))
+        items = repo.list_keepalives()
+        for item in items:
+            in_window, _ = keepalive_window(item, now)
+            item["in_window"] = in_window
+        return {"items": items}
 
     @app.post("/api/v1/keepalives")
     def add_keepalive(request: Request, payload: dict[str, Any], user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
@@ -791,7 +848,39 @@ def register(app: FastAPI) -> None:
         server_id = int(payload.get("server_id") or 0)
         if not server_id:
             raise ValueError("请选择服务器")
-        return {"id": repo.add_keepalive(server_id, bool(payload.get("enabled", True)))}
+        start_time, end_time, start_day, end_day = _keepalive_window(payload)
+        return {
+            "id": repo.add_keepalive(
+                server_id,
+                bool(payload.get("enabled", True)),
+                start_time=start_time,
+                end_time=end_time,
+                start_day=start_day,
+                end_day=end_day,
+            )
+        }
+
+    @app.post("/api/v1/keepalives/{keepalive_id}")
+    def update_keepalive(request: Request, keepalive_id: int, payload: dict[str, Any], user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
+        require_csrf(request)
+        if repo.get_keepalive(keepalive_id) is None:
+            raise ValueError("保活任务不存在")
+        start_time, end_time, start_day, end_day = _keepalive_window(payload)
+        repo.update_keepalive(
+            keepalive_id,
+            enabled=bool(payload.get("enabled", True)),
+            start_time=start_time,
+            end_time=end_time,
+            start_day=start_day,
+            end_day=end_day,
+        )
+        # 改了窗口就当「重新开始」：休止标记留着会让新的时段到点也不恢复
+        item = repo.get_keepalive(keepalive_id) or {}
+        server_id = int(item.get("server_id") or 0)
+        if server_id:
+            repo.clear_flag(f"keepalive_rest:{server_id}")
+            repo.clear_flag(f"keepalive_rest_fail:{server_id}")
+        return {"ok": True}
 
     @app.post("/api/v1/keepalives/{keepalive_id}/toggle")
     def toggle_keepalive(request: Request, keepalive_id: int, payload: dict[str, Any], user: str = Depends(require_admin)):  # noqa: ANN202, ARG001

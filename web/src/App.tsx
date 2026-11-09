@@ -18,6 +18,7 @@ import type { InitStatus, Keepalive, Managed, Overview, Server, Settings, ShiftG
 import Auth from './components/Auth'
 import DashboardView from './components/DashboardView'
 import KeepaliveView from './components/KeepaliveView'
+import KeepaliveDialog from './components/KeepaliveDialog'
 import ServersView from './components/ServersView'
 import ShiftView from './components/ShiftView'
 import ServerDialog from './components/ServerDialog'
@@ -121,13 +122,17 @@ export default function App() {
   })
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [keepalivePicker, setKeepalivePicker] = useState(false)
+  // 单机保活设置页：新建时带 server，编辑时带 item
+  const [keepaliveDialog, setKeepaliveDialog] = useState<{
+    server: Server | null
+    item: Keepalive | null
+  } | null>(null)
   const [confirmBox, setConfirmBox] = useState<ConfirmRequest | null>(null)
   const [confirmBusy, setConfirmBusy] = useState(false)
   const [busyDns, setBusyDns] = useState<string | null>(null)
   const [dnsSyncingAll, setDnsSyncingAll] = useState(false)
   const [reconciling, setReconciling] = useState(false)
   const [busyKeepalive, setBusyKeepalive] = useState<number | null>(null)
-  const [addingKeepalive, setAddingKeepalive] = useState(false)
   // 轮询连续失败两轮以上才置 true：偶发一次抖动静默跳过，别每分钟弹一次提示
   const [stale, setStale] = useState(false)
   const polling = useRef<number | null>(null)
@@ -374,19 +379,10 @@ export default function App() {
     })
   }
 
-  async function addKeepalive(serverId: number) {
-    if (addingKeepalive) return
-    setAddingKeepalive(true)
-    try {
-      await post('/api/v1/keepalives', { server_id: serverId })
-      setKeepalivePicker(false)
-      await loadAll()
-      toast('已加入单机保活', 'success')
-    } catch (error) {
-      toast(error instanceof Error ? error.message : '添加失败', 'error')
-    } finally {
-      setAddingKeepalive(false)
-    }
+  function openKeepaliveDialog(server: Server) {
+    // 先关掉选择器，避免两个弹窗叠在一起
+    setKeepalivePicker(false)
+    setKeepaliveDialog({ server, item: null })
   }
 
   async function toggleKeepalive(item: Keepalive, enabled: boolean) {
@@ -720,6 +716,7 @@ export default function App() {
             togglingId={busyKeepalive}
             onAdd={() => setKeepalivePicker(true)}
             onToggle={toggleKeepalive}
+            onEdit={(item) => setKeepaliveDialog({ server: null, item })}
             onRemove={removeKeepalive}
             onAction={serverAction}
             onRefresh={refreshServer}
@@ -751,12 +748,12 @@ export default function App() {
             onAction={(server, action) => serverAction(server.id, action)}
             onBilling={serverBilling}
             onReorder={reorderServers}
-            onAddToKeepalive={async (server) => {
+            onAddToKeepalive={(server) => {
               if (keepaliveIds.has(server.id)) {
                 toast('这台已经在单机保活里了', 'info')
                 return
               }
-              await addKeepalive(server.id)
+              openKeepaliveDialog(server)
             }}
           />
         )}
@@ -873,9 +870,9 @@ export default function App() {
                     type="button"
                     key={server.id}
                     className={`server-pick-row${blocked ? ' is-disabled' : ''}`}
-                    disabled={blocked || addingKeepalive}
+                    disabled={blocked}
                     title={reason || `选择「${server.label}」`}
-                    onClick={() => addKeepalive(server.id)}
+                    onClick={() => openKeepaliveDialog(server)}
                   >
                     <span className="server-pick-main">
                       <span className="server-pick-name">{server.label}</span>
@@ -894,6 +891,19 @@ export default function App() {
             </div>
           )}
         </Modal>
+      )}
+
+      {keepaliveDialog && (
+        <KeepaliveDialog
+          server={keepaliveDialog.server}
+          item={keepaliveDialog.item}
+          onClose={() => setKeepaliveDialog(null)}
+          onSaved={(message) => {
+            setKeepaliveDialog(null)
+            void loadAll()
+            toast(message, 'success')
+          }}
+        />
       )}
 
       {settingsOpen && (

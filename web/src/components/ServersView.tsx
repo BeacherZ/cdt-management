@@ -232,6 +232,11 @@ export default function ServersView({
                   <span className={`site-tag ${server.site === 'international' ? 'intl' : ''}`}>
                     {server.site === 'international' ? '国际站' : '中国站'}
                   </span>
+                  {server.stop_mode === 'Stop' && (
+                    <span className="site-tag" title="实例设置里的停机模式：普通停机仍按规格收费">
+                      普通停机
+                    </span>
+                  )}
                   <span className="card-ip" title="公网 IP">
                     {server.public_ip || '无公网 IP'}
                   </span>

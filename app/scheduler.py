@@ -8,7 +8,7 @@ import threading
 import time
 
 from . import aliyun, billing, dns, messages, notify, repo, settings
-from .shift import engine, _timezone
+from .shift import engine, keepalive_window, _timezone
 
 log = logging.getLogger("cdt-management.scheduler")
 
@@ -182,6 +182,8 @@ def _confirm_pending_events() -> None:
     now = int(time.time())
     config = repo.get_settings()
     keepalive_ids: set[int] | None = None
+    keepalive_schedules: dict[int, dict] | None = None
+    local_now = dt.datetime.fromtimestamp(now, _timezone(config.get("timezone") or "Asia/Shanghai"))
     for event in repo.list_pending_events():
         event_id = int(event["id"])
         server_id = int(event.get("server_id") or 0)
@@ -204,6 +206,30 @@ def _confirm_pending_events() -> None:
                 repo.finish_event(event_id, "error", "已移出单机保活，停止拉起")
                 repo.clear_flag(f"keepalive_tries:{server_id}")
                 continue
+            # 运行窗口外：立刻收尾，别再等状态 —— 一是窗口外本来就不该拉起，
+            # 二是万一它这会儿正好到 Running，确认器会推一条「抢占恢复」，而这次
+            # 停机/不开机是计划的，推「疑被抢占」是误导。收尾时顺手置上休止标记，
+            # 巡检那一轮就不会再记一条同名的「单机保活暂停」。
+            if keepalive_schedules is None:
+                keepalive_schedules = repo.keepalive_schedules()
+            schedule = keepalive_schedules.get(server_id)
+            if schedule and schedule.get("enabled"):
+                in_window, window_text = keepalive_window(schedule, local_now)
+                if not in_window:
+                    label = str((repo.get_server(server_id) or {}).get("label") or f"#{server_id}")
+                    window_note = f"（{window_text}）" if window_text else ""
+                    repo.add_event_progress(
+                        event_id, f"已离开运行窗口{window_note}，窗口外不再自动拉起"
+                    )
+                    repo.update_event(
+                        event_id, title=f"{label}：单机保活暂停", level="info", kind="keepalive_pause"
+                    )
+                    repo.finish_event(event_id, "done", "已暂停（窗口外）")
+                    repo.set_flag(f"keepalive_rest:{server_id}")
+                    repo.clear_flag(f"keepalive_tries:{server_id}")
+                    # 这次中断到此为止：计划内开机的标记一并作废，别让它吞掉下次真抢占的通知
+                    repo.clear_flag(f"keepalive_planned:{server_id}")
+                    continue
 
         # 超时兜底：别让一个卡住的事件永远占着转圈。保活除外 —— 它本来就该
         # 一直等到实例起来（见上面的注释），超时会把一条长长的中断切成一堆。
@@ -305,12 +331,21 @@ def _confirm_pending_events() -> None:
                     record(f"DDNS：{ddns_status}", brief)
                 # 标题从进行时的「保活拉起」改成完成态：事件列表里一条已经完成的事
                 # 还写着「拉起」，读起来像还在进行（换班那边收尾也会改题）。
-                repo.update_event(
-                    event_id, title=f"{server.get('label')}：保活拉起完成"
-                )
+                # keepalive_quiet 是「运行窗口开了、到点开机」那条，标题本来就是
+                # 「单机保活恢复」，不改名。
+                if str(event.get("kind") or "") != "keepalive_quiet":
+                    repo.update_event(
+                        event_id, title=f"{server.get('label')}：保活拉起完成"
+                    )
                 # 这次中断结束了，重试计数归零，下一次从 1 重新数
                 repo.clear_flag(f"keepalive_tries:{server_id}")
-                if config.get("notify_on_keepalive") == "1":
+                repo.clear_flag(f"keepalive_planned:{server_id}")
+                # 到点开机不是「被抢占」：这类事件一律不发「抢占恢复」通知，
+                # 只在事件列表里留痕（用户明确要求窗口外的拉起不推通知）。
+                if (
+                    config.get("notify_on_keepalive") == "1"
+                    and str(event.get("kind") or "") != "keepalive_quiet"
+                ):
                     try:
                         results = notify.send_all(
                             config,

@@ -480,10 +480,10 @@ def over_limit(server: dict[str, Any], scope: str, mode: str | None = None) -> n
 
     停机措辞同样按实际生效的模式走（见 limit_stop）。
     """
-    if scope == SCOPE_KEEPALIVE:
-        paused = "已暂停保活"
-    else:
-        paused = stop_phrase(mode if mode is not None else server.get("stopped_mode"))
+    # 单机保活除了停机还要暂停保活，但停机模式同样必须写出来：只写「已暂停保活」，
+    # 用户看不出这台是省钱停了还是照常计费，和事件标题「流量超限，已节省停机」也对不上。
+    stopped = stop_phrase(mode if mode is not None else server.get("stopped_mode"))
+    paused = f"{stopped}，并暂停保活" if scope == SCOPE_KEEPALIVE else stopped
     return _titled(
         "limit_stop",
         "🚨",

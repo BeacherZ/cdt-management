@@ -328,7 +328,8 @@ class KeepaliveEventLifecycle(unittest.TestCase):
             repo.pending_event(self.server_id, "keepalive"), "超限停机后不该还有转圈的事件"
         )
         events = repo.list_events(limit=10)
-        closed = [e for e in events if e["title"].endswith("保活已暂停")]
+        # 按 kind 取，别按标题后缀：超限事件标题现在也以「保活已暂停」结尾
+        closed = [e for e in events if e["kind"] == "keepalive_pause"]
         self.assertTrue(closed, [e["title"] for e in events])
         self.assertEqual(closed[0]["status"], "done")
         self.assertEqual(closed[0]["detail"], "流量超限，已停机并暂停保活")

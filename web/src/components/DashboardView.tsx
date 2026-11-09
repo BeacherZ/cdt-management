@@ -37,6 +37,11 @@ const EVENT_ICON: Record<string, typeof Info> = {
   daily_report: Gauge,
   stop: CloudOff,
   start: Cloud,
+  // 单机保活的窗口相关事件：暂停 / 恢复 / 计划内拉起，图标要与「抢占恢复」区分开
+  keepalive_pause: CloudOff,
+  keepalive_resume: Cloud,
+  keepalive_quiet: Cloud,
+  keepalive_rest_error: AlertTriangle,
 }
 
 /** 事件列表默认露这么多条，点一次「显示更多事件」再加这么多（后端最多给 20 条） */
