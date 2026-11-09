@@ -503,6 +503,70 @@ class TrafficBreaker(unittest.TestCase):
         self.assertEqual(row.get("phase"), shift.PHASE_SETTLED, row)
         self.assertEqual(row.get("note"), "", "恢复正常后不该还挂着熔断原因")
 
+    def test_breaker_does_not_flip_settled_event(self):
+        """熔断 / 超限停机拿 run.event_id 收尾时，只能动还在转的事件。
+
+        先让班次正常结算，再全员超限触发熔断：那条已经 done 的「换班完成」
+        不能被翻成 error（否则列表里红叉和「换班完成」四个字同时出现）。
+        """
+        self.traffic = 10.0
+        for _ in range(3):
+            self._reconcile()
+        self.assertEqual(self._run_phase(), shift.PHASE_SETTLED)
+        settled = [
+            e
+            for e in repo.list_events(limit=50, group_id=self.group_id)
+            if e["title"].startswith("换班完成")
+        ]
+        self.assertEqual(len(settled), 1, "先要有一次正常结算")
+
+        self.traffic = 199.0
+        for _ in range(2):
+            self._reconcile()
+        self.assertEqual(self._run_phase(), shift.PHASE_BREAKER)
+
+        settled_after = [
+            e
+            for e in repo.list_events(limit=50, group_id=self.group_id)
+            if e["title"].startswith("换班完成")
+        ]
+        self.assertEqual(len(settled_after), 1)
+        self.assertEqual(settled_after[0]["status"], "done", "已结算的事件不能被翻成 error")
+
+    def test_breaker_recovery_is_recovery_not_timeout(self):
+        """熔断解除后重新拉起当班：是「恢复」，不是「新换班」，更不能误报超时。
+
+        熔断期间 started_at 停在本班次建行时刻（可能已过去几小时），若沿用旧锚点，
+        解除后第一轮刚下发开机就会算出几千分钟、当场冒一条「换班超时」并推送。
+        """
+        self._reconcile()
+        self.assertEqual(self._run_phase(), shift.PHASE_BREAKER)
+        # 模拟这一班已经跑了 3 小时
+        db.execute(
+            "UPDATE shift_runs SET started_at=? WHERE group_id=?",
+            (int(time.time() - 10800), self.group_id),
+        )
+
+        self.traffic = 10.0
+        for _ in range(3):
+            self._reconcile()
+
+        titles = [
+            str(e["title"])
+            for e in repo.list_events(limit=50, group_id=self.group_id)
+        ]
+        self.assertFalse(
+            any(t.startswith("换班超时") for t in titles), f"熔断恢复不该误报换班超时：{titles}"
+        )
+        recovered = [
+            e
+            for e in repo.list_events(limit=50, group_id=self.group_id)
+            if e["title"].startswith("当班已恢复运行")
+        ]
+        self.assertEqual(len(recovered), 1, titles)
+        self.assertEqual(recovered[0]["status"], "done")
+        self.assertEqual(recovered[0]["detail"], "运行中", "恢复事件摘要不该停在过程句")
+
 
 def _now_dt():
     import datetime as dt

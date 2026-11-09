@@ -553,6 +553,95 @@ class StallRespectsSettings(_Base):
         )
 
 
+class StartFailureSingleEvent(_Base):
+    """启动指令持续失败：只留一条 running 事件，别每轮巡检新开一条「换班进行中」。
+
+    欠费 / 库存不足 / 被安全锁定这类故障会持续几小时甚至几天，按 60 秒一轮若每轮
+    都新开一条事件，一小时就堆出 60 条，把「最近事件」里别的机器记录全挤掉。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.a = _make_server("当班A")
+        self.b = _make_server("待机B")
+        self.status = {self.a: "Stopped", self.b: "Stopped"}
+        self._wire()
+
+        def _boom(server):  # noqa: ANN001, ARG001
+            raise aliyun.AliyunError("启动实例失败：欠费")
+
+        aliyun.start_instance = _boom
+        self.group_id = repo.upsert_group(
+            {
+                "name": "换班组",
+                "enabled": True,
+                "failover_enabled": False,
+                "members": [
+                    {"server_id": self.a, "hours": 12},
+                    {"server_id": self.b, "hours": 12},
+                ],
+            }
+        )
+
+    def test_repeated_start_failure_keeps_one_running_event(self):
+        for _ in range(6):
+            self._reconcile(self.group_id)
+
+        running = [e for e in self._events() if e["status"] == "running"]
+        self.assertEqual(len(running), 1, self._titles())
+        # 概览要体现失败，而不是停在「等待当班到位」让人以为一直没动作
+        self.assertIn("启动失败", str(running[0].get("detail") or ""))
+
+
+class RecoveryAfterFailedStart(_Base):
+    """恢复过程里某轮启动失败、之后成功：事件仍应结为「当班已恢复运行」。
+
+    启动失败会把 phase 打成 error，下一轮 previously_settled 变 False，若不把
+    恢复优先于「新换班」判断，那条好不容易拉起来的恢复事件会被误改题成「换班完成」。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.a = _make_server("当班A")
+        self.b = _make_server("待机B")
+        self.status = {self.a: "Running", self.b: "Stopped"}
+        self._wire()
+        self.group_id = repo.upsert_group(
+            {
+                "name": "换班组",
+                "enabled": True,
+                "failover_enabled": False,
+                "members": [
+                    {"server_id": self.a, "hours": 12},
+                    {"server_id": self.b, "hours": 12},
+                ],
+            }
+        )
+        self._reconcile(self.group_id)  # 先结算
+
+    def test_recovery_keeps_title_after_one_failed_start(self):
+        fail_times = {"n": 1}
+
+        def _flaky_start(server):  # noqa: ANN001
+            if fail_times["n"] > 0:
+                fail_times["n"] -= 1
+                raise aliyun.AliyunError("启动实例失败：欠费")
+            self.started.append(int(server["id"]))
+            self.status[int(server["id"])] = "Running"
+
+        aliyun.start_instance = _flaky_start
+        self.status[self.a] = "Stopped"  # 当班被停 → 触发恢复
+
+        for _ in range(3):
+            self._reconcile(self.group_id)
+
+        recovery = [e for e in self._events() if e["kind"] == "recovery"]
+        self.assertEqual(len(recovery), 1, self._titles())
+        self.assertEqual(recovery[0]["status"], "done")
+        self.assertTrue(recovery[0]["title"].startswith("当班已恢复运行"), self._titles())
+        self.assertEqual(recovery[0]["detail"], "运行中")
+
+
 class MessageMapping(unittest.TestCase):
     """文案层：两种原因各说各的，别混。"""
 

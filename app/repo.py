@@ -1364,7 +1364,10 @@ def _parse_progress(raw: str) -> list[dict[str, Any]]:
 def prune_events(days: int) -> None:
     now = int(time.time())
     cutoff = now - days * 86400
-    db.execute("DELETE FROM events WHERE ts<?", (cutoff,))
+    # 还在 running 的事件不删：保活 / 换班事件本来就允许跨天，一台机器持续起不来
+    # （长期欠费 / 长期无库存）时，事件可以合法地挂上十几天；按 ts 一刀切会把它
+    # 在界面上凭空删掉，「已尝试 N 次」也从 1 重新数。
+    db.execute("DELETE FROM events WHERE ts<? AND status<>'running'", (cutoff,))
     # flags 里既有 per-slot 的一次性去重键，也有「已让位」「已熔断」这类长期状态，
     # 统一按 90 天兜底清理，别跟着事件保留期一起删
     db.execute("DELETE FROM flags WHERE created_at<?", (now - max(days, 90) * 86400,))

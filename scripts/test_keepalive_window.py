@@ -395,6 +395,41 @@ class KeepaliveWindowEngine(unittest.TestCase):
         self.assertEqual(len(quiet), 1, self._titles())
         self.assertEqual(self.sent, [])
 
+    def test_mid_state_resume_leaves_no_placeholder_event(self):
+        """窗口刚开时实例还在 Stopping：不留一条已完成的「窗口恢复/停止中」。
+
+        早期实现这里会落一条 done 的「单机保活窗口恢复 / 停止中」，等它真停稳再拉起
+        又落一条「窗口恢复中 → 窗口恢复」——同一件事两条记录，第一条结论还是过程词。
+        现在中间态只留标记，真正拉起那一轮才建唯一一条事件。
+        """
+        self._keepalive(start_time="08:00", end_time="23:00")
+
+        def slow_stop(account, mode="StopCharging", fallback=False):  # noqa: ARG001
+            self.stopped.append((mode, fallback))
+            self.state = "Stopping"
+            return mode
+
+        aliyun.stop_instance = slow_stop
+        self._tick(_at(23, 30))  # 出窗口 → 停机（卡在 Stopping）
+        self.assertEqual(self.state, "Stopping")
+
+        self._tick(_at(8, 30))  # 回窗口，但还在停的路上：不留占位事件
+        placeholder = [
+            e for e in self._events() if e["detail"] == "停止中"
+        ]
+        self.assertEqual(placeholder, [], self._titles())
+
+        self.state = "Stopped"
+        self.mode = "StopCharging"
+        self._tick(_at(8, 31))  # 停稳 → 真正拉起
+        self.state = "Running"  # 开机到位
+        self._confirm()
+
+        resumes = [e for e in self._events() if e["title"].startswith("单机保活窗口恢复")]
+        self.assertEqual(len(resumes), 1, self._titles())
+        self.assertEqual(resumes[0]["status"], "done")
+        self.assertEqual(resumes[0]["detail"], "运行中")
+
     def test_resume_pending_is_cleared_once_running(self):
         """窗口恢复那轮实例还在 Starting：跑起来后标记必须作废。
 

@@ -28,6 +28,11 @@ PHASE_MANUAL = "manual"
 PHASE_BREAKER = "breaker"
 PHASE_ERROR = "error"
 
+# 这些阶段的班次「这一班已经处理过」：当班被重新拉起时是恢复，不是一次新换班。
+# breaker 也在内 —— 熔断 / 超限停机后流量回落，重新拉起当班属于恢复，不该记成
+# 一次新换班，更不该拿建行时那个可能已过去几小时的 started_at 去误报「换班超时」。
+_SETTLED_LIKE_PHASES = (PHASE_SETTLED, PHASE_FAILOVER, PHASE_MANUAL, PHASE_BREAKER)
+
 # shift_runs.origin：本班次是怎么来的。
 # 新建换班组后的第一次对齐单独标出来 —— 那次事件要一直叫「组名：新建换班组」，
 # 不能被结算逻辑改名成「换班完成」，否则用户点保存后看到的事件对不上自己刚做的事。
@@ -53,6 +58,23 @@ def _close_group_events(group_id: int, note: str) -> None:
         event_id = int(event["id"])
         repo.add_event_progress(event_id, note)
         repo.finish_event(event_id, "error", note)
+
+
+def _close_running_event(event_id: int, note: str) -> bool:
+    """把一条还在转的事件收尾；已经收尾的不动，返回是否真的收掉了。
+
+    熔断 / 超限停机拿 run.event_id 直接 finish 的话，会把本班次早就结算完的
+    「换班完成」翻成 error —— 事件里红叉和「换班完成」四个字同时出现。
+    只有 status='running' 的事件才该被这里收掉。
+    """
+    if not event_id:
+        return False
+    event = repo.get_event(event_id)
+    if not event or str(event.get("status") or "") != "running":
+        return False
+    repo.add_event_progress(event_id, note)
+    repo.finish_event(event_id, "error", note)
+    return True
 
 
 # 同一台机器在同一个班次里重复下发停机指令的最小间隔（秒）。
@@ -1333,11 +1355,7 @@ class Engine:
         # 3) 保证当班运行 —— 只做「启动当班」，不碰非当班。
         #    整个换班过程（启动当班 → 停非当班 → DDNS）都记在同一条事件里：
         #    以前每一步都单开一条事件，界面上一轮换班会冒出三条互不相干的记录。
-        previously_settled = run.get("phase") in (
-            PHASE_SETTLED,
-            PHASE_FAILOVER,
-            PHASE_MANUAL,
-        )
+        previously_settled = run.get("phase") in _SETTLED_LIKE_PHASES
         # 已结算的班次被打回 switching（典型是待机成员状态读不到），换班超时不能
         # 再用建行时写死的 started_at —— 那可能是几天前，一算几千分钟、必报超时。
         # 打回时把锚点重置为当前时刻，之后仍按阈值正常计；真持续异常照样会报。
@@ -1376,6 +1394,9 @@ class Engine:
                 aliyun.start_instance(duty)
                 repo.clear_flag(f"start_err:{group_id}:{slot_key}")
                 repo.add_event_progress(event_id, f"已下发启动当班 {duty.get('label')}")
+                # 上一轮失败时概览写的是失败原因，这里开机成功就把它拨回「等待」，
+                # 别让列表里刚发起的这次启动还挂着上次的「当班启动失败」。
+                repo.update_event(event_id, detail="等待开机到位")
                 duty_status = "Starting"
             except Exception as exc:  # noqa: BLE001
                 flag = f"start_err:{group_id}:{slot_key}"
@@ -1389,15 +1410,18 @@ class Engine:
                         group_id=group_id,
                         server_id=int(duty["id"]),
                     )
-                # 事件里挂着的转圈要打上失败标志，否则「最近事件」里永远在转
-                repo.add_event_progress(event_id, f"当班启动失败：{_brief_exc(exc)}")
-                repo.finish_event(event_id, "error")
+                # 启动失败不代表这场换班结束：下一轮还会再试。事件保持 running 别 finish、
+                # 别把 event_id 清零，否则每轮巡检都会新开一条「换班进行中」，持续欠费 /
+                # 库存不足时一小时就能堆出 60 条，把别的机器记录全挤掉。失败原因追加进
+                # 进度（once 去重），概览改成失败态，点开能看到，收起也能一眼看出没起来。
+                repo.update_event(event_id, detail=f"当班启动失败，等待重试：{_brief_exc(exc)}")
+                repo.add_event_progress(event_id, f"当班启动失败：{_brief_exc(exc)}", once=True)
                 repo.upsert_run(
                     group_id,
                     slot_key,
                     phase=PHASE_ERROR,
                     stage="",
-                    event_id=0,
+                    event_id=event_id,
                     duty_server_id=int(duty["id"]),
                     standby_server_ids=_encode_ids(others),
                     failover=failover_flag,
@@ -1577,7 +1601,18 @@ class Engine:
 
         ready = duty_status == "Running" and all_stopped and (has_ip or not ddns_enabled) and ddns_ok
 
-        first_settle = ready and not previously_settled
+        # 抢占恢复用 flag 标记；恢复过程里某轮启动失败会把 phase 打成 error，
+        # 下一轮 previously_settled 变 False，若不把恢复优先于「新换班」判断，
+        # 好不容易拉起来的那条恢复事件会被误改题成「换班完成」。
+        # 但也要排除故障转移 / 手动换班这两条同 slot 的结算路径，别让残留的恢复
+        # 标记把一次真转移的结算误写成「当班已恢复运行」。
+        recovered = (
+            ready
+            and bool(repo.get_flag(recovery_flag))
+            and not failover_flag
+            and not manual_switch
+        )
+        first_settle = ready and not previously_settled and not recovered
         if not ready:
             phase = PHASE_SWITCHING
         elif failover_flag:
@@ -1664,8 +1699,6 @@ class Engine:
 
         # 抢占恢复：当班被拉起并重新就绪，收掉那条恢复事件。
         # flag 跨轮持久化，所以「这轮才拉起、下一轮才就绪」也能收尾。
-
-        recovered = bool(repo.get_flag(recovery_flag)) and not first_settle
         if recovered:
             repo.clear_flag(recovery_flag)
             if event_id:
@@ -1738,9 +1771,9 @@ class Engine:
 
         # 本班次若已有进行中的换班事件，熔断要把它关掉，否则前端永远转圈
         run = repo.get_run(group_id, slot_key) or {}
-        if int(run.get("event_id") or 0):
-            repo.add_event_progress(int(run["event_id"]), f"{why}，触发全局熔断")
-            repo.finish_event(int(run["event_id"]), "error")
+        _close_running_event(
+            int(run.get("event_id") or 0), f"{why}，触发全局熔断"
+        )
 
         for server in everyone:
             # 已经物理停机就不再下指令（含 Not-applicable，避免死循环）
@@ -1831,9 +1864,7 @@ class Engine:
 
         # 本班次若已有进行中的换班事件，超限停机要把它关掉，否则前端永远转圈
         run = repo.get_run(group_id, slot_key) or {}
-        if int(run.get("event_id") or 0):
-            repo.add_event_progress(int(run["event_id"]), "当班流量超限，触发超限停机")
-            repo.finish_event(int(run["event_id"]), "error")
+        _close_running_event(int(run.get("event_id") or 0), "当班流量超限，触发超限停机")
 
         # 只有物理停机（Stopped 且 mode 合法）才算到位；否则（运行中/中间态）下指令
         if not _is_stopped_any_mode(duty):
@@ -2071,6 +2102,20 @@ class Engine:
         else:
             flag = f"notify:{group_id}:{slot_key}:{scope}"
         if repo.get_flag(flag):
+            # 通知已经发过、这次不再重发，但事件摘要还是要写 —— 否则同一个 slot 里
+            # 第二次结算（典型：熔断停机后流量回落重新拉起）时，事件概览会永远停在
+            # 「等待当班 X 到位」的过程句，点开才知道这一班到底跑没跑起来。
+            self._record_settled(
+                group_id,
+                slot_key,
+                kind,
+                name,
+                duty,
+                others,
+                str(ddns_status),
+                is_failover=is_failover,
+                is_manual=is_manual,
+            )
             return
 
         enabled_key = "notify_on_failover" if is_failover else "notify_on_shift"
@@ -3246,15 +3291,12 @@ def _keepalive_resume_note(server: dict[str, Any], window_text: str, status: str
             "运行中",
             [head, "实例已在运行，无需指令"],
         )
+    # 还在 Stopping / Starting / Pending 等中间态：这一轮开不了机，也谈不上「恢复」，
+    # 别急着落一条已完成的「窗口恢复 / 停止中」——等它停稳后真正拉起的那一轮，
+    # 再建一条「窗口恢复中 → 窗口恢复」，同一件事只留一条完整记录。
+    # 只留标记把「这次是窗口到点」传给下一轮，让它继续走安静渠道。
     repo.set_flag(resume_flag)
-    state_label = messages.STATUS_LABELS.get(status, status or "未知")
-    return _keepalive_one_shot(
-        server_id,
-        "keepalive_resume",
-        done_title,
-        state_label,
-        [head, f"实例当前{state_label}，下一轮继续按状态处理"],
-    )
+    return 0
 
 
 # --------------------------------------------------------------------------

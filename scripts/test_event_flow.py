@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -272,6 +273,31 @@ class EventFlow(unittest.TestCase):
         self.assertEqual(len(self.sent), 1)
         # 完成态标题：不能还留着进行时的「保活拉起」
         self.assertEqual(_event(event_id).get("title"), "单机保活抢占恢复（测试机-未绑定）")
+
+
+class PruneKeepsRunningEvents(unittest.TestCase):
+    """清理历史事件时，仍在 running 的事件必须保留。
+
+    保活 / 换班事件本来就允许跨天（一台机器持续起不来时，事件可以合法地挂上
+    十几天），按 ts 一刀切会把它在界面上凭空删掉，「已尝试 N 次」也从 1 重数。
+    """
+
+    def setUp(self) -> None:
+        db.init_db()
+        for table in ("events", "flags", "shift_runs", "traffic_samples"):
+            db.execute(f"DELETE FROM {table}")
+
+    def test_running_event_survives_prune(self):
+        running_id = repo.add_event("start", "长期在转的事件", "等待开机到位", status="running")
+        done_id = repo.add_event("start", "早就结束的事件", "运行中", status="done")
+        old = int(time.time()) - 20 * 86400
+        db.execute("UPDATE events SET ts=? WHERE id=?", (old, running_id))
+        db.execute("UPDATE events SET ts=? WHERE id=?", (old, done_id))
+
+        repo.prune_events(14)
+
+        self.assertIsNotNone(repo.get_event(running_id), "running 事件不能被清理")
+        self.assertIsNone(repo.get_event(done_id), "早就结束的事件该被清理")
 
 
 if __name__ == "__main__":
