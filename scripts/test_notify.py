@@ -172,5 +172,66 @@ class EmailFrom(unittest.TestCase):
         self.assertEqual(server.login_args, ("bot@example.com", "pass1234"))
 
 
+class ErrorRedaction(unittest.TestCase):
+    """通知失败时不能把 token / 密码弹到浏览器或写进日志。
+
+    requests 的连接类异常会带完整 URL，Telegram token 就在 /bot<token>/sendMessage
+    这段 path 里；「测试连接」接口直接 str(exc) 会把明文凭据回显出去。
+    """
+
+    def test_safe_error_masks_token_but_keeps_reason(self):
+        token = "abc123SECRET_TOKEN"
+        exc = RuntimeError(
+            "Telegram 推送失败：HTTPSConnectionPool(host='api.telegram.org', port=443): "
+            f"Max retries exceeded with url: /bot{token}/sendMessage "
+            "(Caused by ProxyError('Unable to connect to proxy'))"
+        )
+        text = notify.safe_error(exc, {"notify_tg_token": token})
+        self.assertNotIn(token, text)
+        self.assertIn("/bot***", text)
+        self.assertIn("ProxyError", text, "打码不能把排查原因一起抹掉")
+
+    def test_safe_error_masks_bot_path_without_config(self):
+        # 草稿里没带 token（或异常来自别的渠道）时也要兜底
+        text = notify.safe_error("连接失败 /botabc123SECRET_TOKEN/sendMessage timeout")
+        self.assertNotIn("abc123SECRET_TOKEN", text)
+
+    def test_safe_error_masks_webhook_url_and_mail_password(self):
+        config = {
+            "notify_wh_url": "https://example.com/hook?key=TOPSECRET123",
+            "notify_mail_password": "pass1234",
+        }
+        text = notify.safe_error(
+            "发送到 https://example.com/hook?key=TOPSECRET123 失败，登录密码 pass1234 被拒",
+            config,
+        )
+        self.assertNotIn("TOPSECRET123", text)
+        self.assertNotIn("pass1234", text)
+
+    def test_send_all_result_and_log_are_redacted(self):
+        token = "abc123SECRET_TOKEN"
+        config = {
+            "notify_tg_enabled": "1",
+            "notify_tg_token": token,
+            "notify_tg_chat_id": "123",
+        }
+        original = notify.send
+
+        def boom(_config, _channel, _message):
+            raise RuntimeError(f"Telegram 推送失败：/bot{token}/sendMessage 连不上")
+
+        notify.send = boom
+        try:
+            with self.assertLogs("cdt-management.notify", level="WARNING") as logs:
+                results = notify.send_all(config, notify.Message("test", "标题", "<p>x</p>", "x"))
+        finally:
+            notify.send = original
+        self.assertIn("telegram", results)
+        self.assertNotIn(token, str(results))
+        self.assertNotIn(token, "\n".join(logs.output))
+        # 事件进度只取渠道名，本来就不该带异常原文
+        self.assertEqual(notify.result_text(results), "通知发送失败：telegram")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

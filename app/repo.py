@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 from typing import Any
 
@@ -238,6 +239,24 @@ def get_server(server_id: int, decrypt_secret: bool = False) -> dict[str, Any] |
     return _server_row(row, decrypt_secret) if row else None
 
 
+def _gb_value(raw: Any, default: float, label: str) -> float:
+    """把配额 / 阈值转成有限浮点数。
+
+    float("inf") 能绕过 quota>0、threshold<=quota 两个判断直接落库，之后所有
+    返回服务器的接口都会因为 JSON 不接受 Infinity 变成 400，整页打不开；
+    nan 则触发 SQLite 的 NOT NULL 约束变成 500。所以这里先挡在写入之前。
+    """
+    if raw is None or raw == "":
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"{label}必须是数字") from None
+    if not math.isfinite(value):
+        raise ValueError(f"{label}必须是有限数字")
+    return value
+
+
 def upsert_server(payload: dict[str, Any]) -> int:
     server_id = int(payload.get("id") or 0)
     label = str(payload.get("label") or "").strip()
@@ -246,10 +265,8 @@ def upsert_server(payload: dict[str, Any]) -> int:
     region = str(payload.get("region_id") or "").strip()
     site = normalize_site(payload.get("site"))
     instance = str(payload.get("instance_id") or "").strip()
-    quota_raw = payload.get("quota_gb")
-    quota = float(quota_raw) if quota_raw not in (None, "") else 200.0
-    threshold_raw = payload.get("threshold_gb")
-    threshold = float(threshold_raw) if threshold_raw not in (None, "") else 188.0
+    quota = _gb_value(payload.get("quota_gb"), 200.0, "总配额")
+    threshold = _gb_value(payload.get("threshold_gb"), 188.0, "阈值")
     remark = str(payload.get("remark") or "").strip()
     stop_mode_raw = payload.get("stop_mode")
     # 没传（老前端 / 只改别处的接口）就保持原值；新建时落到默认的节省停机

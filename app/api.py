@@ -7,6 +7,7 @@ import datetime as dt
 import ipaddress
 import json
 import logging
+import math
 import threading
 import time
 from typing import Any
@@ -508,13 +509,27 @@ def _managed_map() -> dict[int, dict[str, Any]]:
     return managed
 
 
+def _finite_gb(value: Any, fallback: float = 0.0) -> float:
+    """老库里可能已经有 inf / nan（1.3.6 之前写入没拦），展示时兜成有限值。
+
+    JSON 不接受 Infinity / NaN，一条脏数据就能让整个服务器页和仪表盘返回 400；
+    兜底后页面还能打开，用户也能进编辑框把数值改回来。
+    """
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    return number if math.isfinite(number) else fallback
+
+
 def server_summary(
     server: dict[str, Any],
     managed: dict[int, dict[str, Any]] | None = None,
     dns_map: dict[int, list[str]] | None = None,
 ) -> dict[str, Any]:
     used = server.get("traffic_used")
-    quota = float(server.get("quota_gb") or 0) or 1
+    quota_raw = server.get("quota_gb")
+    quota = _finite_gb(quota_raw) or 1
     owner = (managed or {}).get(int(server.get("id") or 0))
     return {
         "id": server.get("id"),
@@ -523,8 +538,8 @@ def server_summary(
         "region_id": server.get("region_id") or "",
         "site": repo.normalize_site(server.get("site")),
         "instance_id": server.get("instance_id") or "",
-        "quota_gb": server.get("quota_gb") or 0,
-        "threshold_gb": server.get("threshold_gb") or 0,
+        "quota_gb": _finite_gb(quota_raw),
+        "threshold_gb": _finite_gb(server.get("threshold_gb")),
         "remark": server.get("remark") or "",
         "traffic_used": used,
         "traffic_percent": round((used or 0) / quota * 100, 2) if used is not None else None,
@@ -1257,7 +1272,11 @@ def register(app: FastAPI) -> None:
         config = _config_from_draft(payload or {})
         if channel == "ddns":
             result = ddns.test(config)
-            return {"ok": result.status.startswith("✅"), "status": result.status, "detail": result.detail}
+            return {
+                "ok": result.status.startswith("✅"),
+                "status": result.status,
+                "detail": notify.safe_error(result.detail, config),
+            }
 
         if channel not in ("telegram", "email", "webhook"):
             raise ValueError("未知渠道")
@@ -1270,7 +1289,7 @@ def register(app: FastAPI) -> None:
         try:
             notify.send(config, channel, message)
         except Exception as exc:  # noqa: BLE001
-            return {"ok": False, "detail": str(exc)}
+            return {"ok": False, "detail": notify.safe_error(exc, config)}
         return {"ok": True, "detail": "已发送"}
 
     # -- 事件 -----------------------------------------------------------

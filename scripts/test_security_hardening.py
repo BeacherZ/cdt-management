@@ -92,6 +92,67 @@ class SecurityHardening(unittest.TestCase):
                 }
             )
 
+    def _server_payload(self, **overrides):
+        payload = {
+            "label": "配额非法",
+            "access_key_id": "LTAI5tFakeKeyForTest",
+            "access_key_secret": "fake-secret-for-test",
+            "region_id": "cn-hongkong",
+            "instance_id": "i-bad-quota",
+            "quota_gb": 200,
+            "threshold_gb": 188,
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_upsert_server_rejects_non_finite_quota(self):
+        # inf 能绕过 quota>0 / threshold<=quota 落库，之后所有返回服务器的接口
+        # 都会因为 JSON 不接受 Infinity 变成 400；nan 会触发 NOT NULL → 500。
+        for raw in ("inf", "-inf", "nan", "1e309", float("inf"), float("nan")):
+            with self.subTest(quota=raw), self.assertRaises(ValueError):
+                repo.upsert_server(self._server_payload(quota_gb=raw))
+
+    def test_upsert_server_rejects_non_finite_threshold(self):
+        for raw in ("inf", "nan", float("inf")):
+            with self.subTest(threshold=raw), self.assertRaises(ValueError):
+                repo.upsert_server(self._server_payload(threshold_gb=raw))
+
+    def test_upsert_server_rejects_non_numeric_quota(self):
+        for raw in ("abc", {"a": 1}, [1]):
+            with self.subTest(quota=raw), self.assertRaises(ValueError):
+                repo.upsert_server(self._server_payload(quota_gb=raw))
+
+    def test_upsert_server_accepts_string_numbers(self):
+        sid = repo.upsert_server(self._server_payload(quota_gb="200", threshold_gb="188"))
+        self.assertEqual(repo.get_server(sid)["quota_gb"], 200)
+
+    def test_server_summary_survives_legacy_infinite_values(self):
+        """老库里已有的 inf / nan 不能让服务器页和仪表盘整页 400。"""
+        import json
+
+        from app import api
+
+        row = {
+            "id": 1,
+            "label": "老数据",
+            "quota_gb": float("inf"),
+            "threshold_gb": float("nan"),
+            "traffic_used": 10.0,
+            "instance_status": "Running",
+            "stopped_mode": "",
+            "public_ip": "",
+            "remark": "",
+            "site": "international",
+            "stop_mode": "",
+            "traffic_checked_at": 0,
+            "status_checked_at": 0,
+        }
+        payload = api.server_summary(row)
+        json.dumps(payload)  # 不能抛 ValueError: Out of range float values
+        self.assertEqual(payload["quota_gb"], 0)
+        self.assertEqual(payload["threshold_gb"], 0)
+        self.assertIsNotNone(payload["traffic_percent"])
+
 
 class ManualReconcileBusy(unittest.TestCase):
     """后台正忙时点「立即对账」，接口必须能说出「这轮没跑」。"""

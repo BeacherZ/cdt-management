@@ -178,8 +178,9 @@ def _confirm_loop() -> None:
         _stop.wait(EVENT_POLL_INTERVAL)
 
 
-def _confirm_pending_events() -> None:
-    now = int(time.time())
+def _confirm_pending_events(now_ts: float | None = None) -> None:
+    """now_ts 只用于测试注入固定时钟；生产轮询不传，一律用真实时间。"""
+    now = int(now_ts if now_ts is not None else time.time())
     config = repo.get_settings()
     keepalive_ids: set[int] | None = None
     keepalive_schedules: dict[int, dict] | None = None

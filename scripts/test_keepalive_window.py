@@ -129,6 +129,10 @@ class KeepaliveWindowEngine(unittest.TestCase):
         repo.set_settings({"ddns_enabled": "0", "notify_on_keepalive": "1", "timezone": "Asia/Shanghai"})
 
         self.sent: list[notify.Message] = []
+        # 巡检与确认器必须共用同一个时刻：确认器原本读真实时钟，而事件是用
+        # _at() 的固定日期造的，凌晨/深夜跑这套用例会让「窗口恢复」被误判成
+        # 「窗口暂停」。_tick 会更新它，_confirm 默认接着用。
+        self.last_now = _at(12, 0)
         self._orig_send = notify.send_all
         notify.send_all = lambda config, message: (  # noqa: ANN001, ARG005
             self.sent.append(message) or {}
@@ -197,16 +201,15 @@ class KeepaliveWindowEngine(unittest.TestCase):
         return repo.add_keepalive(self.server_id, enabled=True, **kwargs)
 
     def _tick(self, now: dt.datetime | None = None) -> None:
-        shift.engine.reconcile_keepalives(
-            repo.get_settings(), now or dt.datetime.now(TZ), set()
-        )
+        self.last_now = now or dt.datetime.now(TZ)
+        shift.engine.reconcile_keepalives(repo.get_settings(), self.last_now, set())
 
-    def _confirm(self) -> None:
-        scheduler._confirm_pending_events()  # noqa: SLF001
+    def _confirm(self, at: dt.datetime | None = None) -> None:
+        scheduler._confirm_pending_events((at or self.last_now).timestamp())  # noqa: SLF001
 
     def _settle(self) -> None:
         """巡检下发停机 + 确认器看到停稳：一条「暂停」事件的完整两轮。"""
-        self._tick(dt.datetime.now(TZ))
+        self._tick(_at(23, 30))
         self._confirm()
 
     def _events(self) -> list[dict]:
@@ -485,7 +488,7 @@ class KeepaliveWindowEngine(unittest.TestCase):
         self._tick(_at(12))  # 建一条还在转的「保活拉起」
         self.state = "Running"
         repo.update_server_runtime(self.server_id, status="Running", stopped_mode="")
-        # 确认器用真实时间判窗口，把窗口挪到已经过去的时段
+        # 把运行窗口挪到当前时刻之外，确认器这一轮应当判定「已出窗口」
         repo.update_keepalive(
             int(repo.list_keepalives()[0]["id"]),
             enabled=True,
@@ -497,7 +500,7 @@ class KeepaliveWindowEngine(unittest.TestCase):
         self.assertEqual(event["status"], "running", "停机指令还没下发，不能写完成")
         self.assertEqual(event["detail"], "等待停机到位")
 
-        self._tick(dt.datetime.now(TZ))  # 巡检这一轮才真正下发停机
+        self._tick(_at(12))  # 巡检这一轮才真正下发停机（窗口已挪到 00:00–00:01）
         event = repo.get_event(int(event["id"]))
         self.assertIn("已下发停机指令（节省停机）", self._texts(event))
         self.assertEqual(event["status"], "running", "指令下发≠停稳，等确认器")
@@ -516,7 +519,7 @@ class KeepaliveWindowEngine(unittest.TestCase):
         self.assertEqual(len(self.sent), 0)
 
         self.state = "Running"
-        # 确认器用的是「现在」的时间，这里直接把窗口改成已经过去的时段
+        # 把窗口改到覆盖不到当前时刻的时段，确认器应判定窗口外
         repo.update_keepalive(
             int(repo.list_keepalives()[0]["id"]),
             enabled=True,

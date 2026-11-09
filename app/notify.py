@@ -54,6 +54,39 @@ def enabled_channels(config: dict[str, str]) -> list[str]:
     return channels
 
 
+# 对外展示 / 写日志前先把凭据抹掉：requests 的连接类异常会带完整 URL，
+# Telegram token 就在 /bot<token>/sendMessage 这段 path 里，直接 str(exc)
+# 等于把 token 弹到浏览器或写进日志。
+_SECRET_KEYS = (
+    "notify_tg_token",
+    "notify_tg_proxy",
+    "notify_mail_password",
+    "notify_mail_username",
+    "notify_wh_url",
+    "notify_wh_headers",
+    "ddns_cf_token",
+    "ddns_cf_key",
+)
+_BOT_PATH_RE = re.compile(r"(/bot)[^/\s]+", re.IGNORECASE)
+
+
+def safe_error(exc: Exception | str, config: dict[str, str] | None = None) -> str:
+    """抹掉异常原文里的敏感值，但保留可读的失败原因。
+
+    不复用 aliyun.brief_error：那是给阿里云 SDK 异常分类用的，会把
+    「HTTP 401 / 代理连不上」这类排查测试连接需要的信息压掉。
+    """
+    text = str(exc)
+    cfg = config or {}
+    for key in _SECRET_KEYS:
+        value = str(cfg.get(key) or "").strip()
+        if len(value) >= 4:
+            text = text.replace(value, "***")
+    # 配置里没带 token（草稿为空、或异常来自别的渠道）时，兜底打码 /bot<token>/ 路径
+    text = _BOT_PATH_RE.sub(r"\1***", text)
+    return text[:300]
+
+
 def send_all(config: dict[str, str], message: Message) -> dict[str, str]:
     """逐个渠道发送，返回 {渠道: 结果}。换班通知里要回显这个结果。"""
     results: dict[str, str] = {}
@@ -62,8 +95,9 @@ def send_all(config: dict[str, str], message: Message) -> dict[str, str]:
             send(config, channel, message)
             results[channel] = "ok"
         except Exception as exc:  # noqa: BLE001 - 通知失败不能影响主流程
-            results[channel] = f"failed: {exc}"
-            log.warning("通知发送失败 channel=%s error=%s", channel, exc)
+            safe = safe_error(exc, config)
+            results[channel] = f"failed: {safe}"
+            log.warning("通知发送失败 channel=%s error=%s", channel, safe)
     return results
 
 
