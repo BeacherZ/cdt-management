@@ -224,11 +224,14 @@ def _confirm_pending_events() -> None:
                     repo.update_event(
                         event_id, title=messages.ev("单机保活暂停", messages.obj_server(label)), level="info", kind="keepalive_pause"
                     )
-                    repo.finish_event(event_id, "done", "已暂停（窗口外）")
+                    # 不能就地写成「已暂停」：这时停机指令还没下发，写下去就是假结论。
+                    # 改成等 Stopped，巡检下发停机、确认器看到停稳后才收尾，
+                    # 事件里才有「窗口外 → 下发停机 → 已确认 Stopped」的完整过程。
+                    repo.retarget_event(event_id, "Stopped", "keepalive_stop")
+                    repo.update_event(event_id, detail="等待停机到位")
                     repo.set_flag(f"keepalive_rest:{server_id}")
                     repo.clear_flag(f"keepalive_tries:{server_id}")
-                    # 这次中断到此为止：计划内开机的标记一并作废，别让它吞掉下次真抢占的通知
-                    repo.clear_flag(f"keepalive_planned:{server_id}")
+                    repo.clear_flag(f"keepalive_live:{server_id}")
                     continue
 
         # 超时兜底：别让一个卡住的事件永远占着转圈。保活除外 —— 它本来就该
@@ -269,6 +272,10 @@ def _confirm_pending_events() -> None:
 
         if _status_reached(info, pending):
             suffix = messages.status_suffix(info.status, info.stopped_mode)
+            # 真的看到 Running 了：这是判断「下次停机是被抢占还是我们自己让它停的」
+            # 的唯一依据。巡检和确认器都写这个标记，谁先看到都算数。
+            if pending == "Running":
+                repo.set_flag(f"keepalive_live:{server_id}")
 
             # server 是轮询开始前取的快照：实例刚停机时它的 public_ip 还是空的。
             # 通知里的「IP / 地域 / 状态」行要用刚查到的实时值，否则报告会带着空 IP 发出去。
@@ -334,17 +341,14 @@ def _confirm_pending_events() -> None:
                         record(f"DDNS：{ddns_status}", "❌ DDNS 异常")
                     else:
                         record(f"DDNS：{ddns_report.detail}", ddns_report.brief)
-                # 标题从进行时的「保活拉起」改成完成态：事件列表里一条已经完成的事
-                # 还写着「拉起」，读起来像还在进行（换班那边收尾也会改题）。
-                # keepalive_quiet 是「运行窗口开了、到点开机」那条，标题本来就是
-                # 「单机保活恢复」，不改名。
-                if str(event.get("kind") or "") != "keepalive_quiet":
-                    repo.update_event(
-                        event_id, title=messages.ev("单机保活拉起完成", messages.obj_server(str(server.get('label') or '')))
-                    )
+                # 标题从进行时的「保活拉起」改成完成态「已恢复」：这条事件在列表里
+                # 已经收起，还挂着「拉起」读起来像还在进行。到点开机和抢占恢复
+                # 收尾后是同一个结论，标题也就该是同一个。
+                repo.update_event(
+                    event_id, title=messages.ev("单机保活已恢复", messages.obj_server(str(server.get('label') or '')))
+                )
                 # 这次中断结束了，重试计数归零，下一次从 1 重新数
                 repo.clear_flag(f"keepalive_tries:{server_id}")
-                repo.clear_flag(f"keepalive_planned:{server_id}")
                 # 到点开机不是「被抢占」：这类事件一律不发「抢占恢复」通知，
                 # 只在事件列表里留痕（用户明确要求窗口外的拉起不推通知）。
                 if (
@@ -388,10 +392,25 @@ def _confirm_pending_events() -> None:
                     record(f"解析同步失败：{exc}", "❌ 解析同步失败")
 
             # 收起时这一行就是事件的全部可见信息：只讲结果，段与段之间统一用「 / 」
-            repo.finish_event(event_id, "done", " / ".join(steps))
+            summary = " / ".join(steps)
+            if pending_kind == "keepalive_stop":
+                # 这条事件的语义是「保活暂停」，结论就该写「已暂停」，
+                # 与手动停机的「已停止」区分开
+                summary = f"已暂停（{messages.mode_label(info.stopped_mode) or '停机'}）"
+            elif pending_kind == "limit_stop":
+                # 超限停机事件原本只有原因（已用多少 / 阈值多少），
+                # 收尾时补上真实结果，而不是只说「下发过指令」。
+                # 进行中的概览是「等待停机到位 / 原因」，这里要把等待那一段摘掉，
+                # 否则会写成「已停止（节省停机） / 等待停机到位 / 已用 …」。
+                reason = str(event.get("detail") or "").strip()
+                if reason.startswith("等待停机到位"):
+                    reason = reason.split(" / ", 1)[1].strip() if " / " in reason else ""
+                result = messages.result_label(info.status, info.stopped_mode)
+                summary = f"{result} / {reason}" if reason else result
+            repo.finish_event(event_id, "done", summary)
         else:
             # 单机保活等的是「一直试到起来」，中间态不往进度里刷状态：
-            # 概要行由巡检每分钟更新成「已尝试拉起 N 次」，这里再插一句就重复了。
+            # 概要行由巡检每分钟更新成「等待开机到位（已尝试 N 次）」，这里再插一句就重复了。
             if pending_kind == "keepalive":
                 continue
             # 还没到位：记录一次当前状态，方便用户在进度里看到中间态

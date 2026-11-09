@@ -593,14 +593,14 @@ def _clear_keepalive_flags(server_id: int) -> None:
     """清掉这台机器的保活临时标记。暂停 / 移出 / 改窗口后必须清：
 
     keepalive_rest 留着，下一轮巡检会以为「还在休止时段」而不发「已恢复」；
-    keepalive_planned 留着，之后真的被抢占也不会推「抢占恢复」通知。
+    keepalive_live 留着，之后真的被抢占也不会推「抢占恢复」通知。
     """
     db.execute(
         "DELETE FROM flags WHERE key IN (?,?,?)",
         (
             f"keepalive_rest:{server_id}",
             f"keepalive_rest_fail:{server_id}",
-            f"keepalive_planned:{server_id}",
+            f"keepalive_live:{server_id}",
         ),
     )
 
@@ -1252,6 +1252,20 @@ def update_event(
         return
     params.append(event_id)
     db.execute(f"UPDATE events SET {', '.join(sets)} WHERE id=?", params)
+
+
+def retarget_event(event_id: int, pending_status: str, pending_kind: str) -> None:
+    """把一条还在转的事件改成「等另一个目标状态」。
+
+    典型场景：保活拉起事件转到一半，运行窗口关了 —— 它等的 Running 已经没意义，
+    应当改等 Stopped（停机到位再收尾），而不是就地写一句「已暂停」了事。
+    """
+    if not event_id:
+        return
+    db.execute(
+        "UPDATE events SET pending_status=?, pending_kind=? WHERE id=?",
+        (pending_status, pending_kind, event_id),
+    )
 
 
 def running_events(group_id: int, kinds: tuple[str, ...]) -> list[dict[str, Any]]:

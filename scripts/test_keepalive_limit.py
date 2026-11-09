@@ -93,6 +93,28 @@ class KeepaliveLimit(unittest.TestCase):
         self.assertTrue(repo.get_flag(f"limit_stop:{messages.SCOPE_KEEPALIVE}:{sid}"))
         self.assertEqual(self.sent, ["CDT 超限停机报告（单机保活）"], self.sent)
 
+    def test_limit_stop_event_waits_for_stopped(self):
+        """超限停机事件不能「下发指令即完成」：要等确认 Stopped 才收尾。"""
+        sid = self._new_keepalive("保活机D", "i-keepalive-d")
+        self._over(sid, used=200.0)
+        shift.engine.reconcile_keepalives(repo.get_settings(), _now_dt(), set())
+
+        event = repo.list_events(limit=1)[0]
+        self.assertEqual(event["title"], "流量超限，保活已暂停（保活机D）")
+        self.assertEqual(event["status"], "running", "指令下发 ≠ 已停稳")
+        texts = [str(step["text"]) for step in event["progress"]]
+        self.assertIn("已用 200.00 GB，超过阈值 188 GB", texts)
+        self.assertIn("已下发停机指令（节省停机）", texts)
+
+        from app import scheduler  # noqa: PLC0415
+
+        scheduler._confirm_pending_events()  # noqa: SLF001
+        event = repo.get_event(int(event["id"]))
+        self.assertEqual(event["status"], "done")
+        self.assertEqual(event["detail"], "已停止（节省停机） / 已用 200.00 GB（阈值 188 GB）")
+        texts = [str(step["text"]) for step in event["progress"]]
+        self.assertIn("已确认 Stopped（节省停机）", texts)
+
     def test_flag_blocks_restart_while_over(self):
         sid = self._new_keepalive("保活机B", "i-keepalive-b")
         self._over(sid, used=200.0)

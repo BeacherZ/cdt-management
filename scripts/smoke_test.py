@@ -338,7 +338,7 @@ status, body = call("GET", "/api/v1/events?kind=system&limit=50")
 latest = body["items"][0] if body.get("items") else {}
 check(
     "只记本次真正改动的项",
-    latest.get("detail") == "流量阈值",
+    latest.get("detail") == "已保存 / 流量阈值",
     str(latest.get("detail")),
 )
 

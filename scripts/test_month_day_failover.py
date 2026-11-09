@@ -343,11 +343,11 @@ class MonthDayFailover(_Base):
         ]
         self.assertEqual(running, [], "不该留下悬而未决的事件")
         # 转移的过程和结果在同一条事件里：结算后标题是「故障转移（保活超时）」，
-        # 不会像以前那样先留一条「当班疑被抢占，保活超时，故障转移」再另起一条。
+        # 不会像以前那样先留一条「当班未就绪，故障转移」再另起一条。
         settled = [
             e
             for e in repo.list_events(limit=100)
-            if e.get("kind") == "shift_failover" and "保活超时，故障转移" in e["title"]
+            if e.get("kind") == "shift_failover" and "当班未就绪，故障转移" in e["title"]
         ]
         self.assertTrue(settled, self._titles())
 

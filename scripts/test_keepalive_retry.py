@@ -7,7 +7,7 @@
    就说明上一轮没成，立刻再下发一次开机，不做退避窗口。只有 Stopped 才下发，
    Starting 这类中间态不碰（正在启动的实例不该被重复开）。
 2. **一直试到起来，事件只有一条**。机器躺一整天也只有一个事件：概要行
-   （事件列表收起时看到的那行）随重试次数刷新成「已尝试拉起 N 次，仍未运行」，
+   （事件列表收起时看到的那行）随重试次数刷新成「等待开机到位（已尝试 N 次）」，
    进度里只在第 3、10、30… 次补一行里程碑，不会一分钟一行。
 3. **只有它离开保活才收尾**。确认器不按 10 分钟超时切它的记录；被移出保活
    或停用保活时才结束那条记录，否则会留一条永远转圈的事件。
@@ -137,7 +137,7 @@ class KeepaliveRetry(unittest.TestCase):
         events = self._events()
         self.assertEqual(len(events), 1, [e["title"] for e in events])
         self.assertEqual(events[0]["status"], "running")
-        self.assertEqual(events[0]["detail"], "已尝试拉起 6 次，仍未运行（已停机）")
+        self.assertEqual(events[0]["detail"], "等待开机到位（已尝试 6 次）")
 
     def test_progress_only_on_milestones(self):
         """进度不能一分钟一行：只有在第 3、10 次这些里程碑上补。"""
@@ -179,7 +179,7 @@ class KeepaliveRetry(unittest.TestCase):
 
         self.assertEqual(len(self.started), 2, "Stopped 两轮都该下发")
         self.assertEqual(
-            self._events()[0]["detail"], "已尝试拉起 2 次，仍未运行（已停机）"
+            self._events()[0]["detail"], "等待开机到位（已尝试 2 次）"
         )
 
     def test_recovers_stops_retrying(self):
@@ -198,7 +198,7 @@ class KeepaliveRetry(unittest.TestCase):
 
         以前这里只建一条 error 事件就彻底静默：用户看不出系统还在试、试了多少次，
         而那条事件还是「完成」状态，配着红色错误图标。现在并进同一条 running
-        事件，概览每次刷新成「已尝试拉起 N 次；启动指令失败：原因」。
+        事件，概览每次刷新成「等待开机到位（已尝试 N 次）；启动指令失败：原因」。
         """
         self.start_error = RuntimeError("OperationDenied.NoStock")
         for _ in range(3):
@@ -210,7 +210,7 @@ class KeepaliveRetry(unittest.TestCase):
         event = events[0]
         self.assertEqual(event["status"], "running", "还在重试，不能标成已完成")
         self.assertIn("保活拉起", event["title"])
-        self.assertIn("已尝试拉起 3 次", event["detail"])
+        self.assertIn("已尝试 3 次", event["detail"])
         self.assertIn("启动指令失败", event["detail"])
         self.assertIn("NoStock", event["detail"])
         self.assertEqual(self._texts(event)[0], "启动指令失败：OperationDenied.NoStock")
@@ -306,7 +306,7 @@ class KeepaliveEventLifecycle(unittest.TestCase):
         events = repo.list_events(limit=10)
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["status"], "done")
-        self.assertEqual(events[0]["title"], "单机保活拉起完成（躺一天的机器）")
+        self.assertEqual(events[0]["title"], "单机保活已恢复（躺一天的机器）")
         self.assertFalse(repo.get_flag(f"keepalive_tries:{self.server_id}"))
 
     def test_limit_stop_closes_running_keepalive_event(self):

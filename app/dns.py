@@ -503,7 +503,7 @@ def reconcile(config: dict[str, str], force: bool = False) -> list[dict[str, Any
             if previous != live and not _shift_busy(kind, int(row.get("target_id") or 0)):
                 repo.add_event(
                     "dns",
-                    messages.ev("解析已更新", messages.obj_server(record)),
+                    messages.ev("DNS 记录已更新", messages.obj_server(record)),
                     f"{previous or '—'} → {live}（{target.get('label')}）",
                 )
         else:
@@ -559,12 +559,12 @@ def bind(record: str, kind: str, target_id: int, config: dict[str, str] | None =
         synced = sync_record(record, config)
         result["sync"] = {"status": synced.status, "detail": synced.detail, "ip": synced.ip}
 
-    detail = f"{record} → {label}"
+    detail = f"已指向 {label}"
     if len(records) > 1:
         detail += f"（该目标现有 {len(records)} 条记录）"
     if result.get("sync"):
         detail += f"\n绑定后立即同步：{result['sync']['status']}"
-    repo.add_event("dns", messages.ev("DNS 绑定已更新"), detail)
+    repo.add_event("dns", messages.ev("DNS 绑定已更新", record), detail)
     return result
 
 

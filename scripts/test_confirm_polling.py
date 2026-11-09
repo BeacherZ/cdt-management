@@ -88,7 +88,7 @@ class ConfirmPolling(unittest.TestCase):
         event_id = repo.add_event(
             "start",
             "保活机：保活拉起",
-            "已尝试拉起 1 次，仍未运行（已停机）",
+            "等待开机到位（已尝试 1 次）",
             level="warning",
             server_id=self.server_id,
             status="running",

@@ -4,7 +4,7 @@
 锁死两条：
   1. 关掉「换班通知」时，事件照样要写结算摘要。以前通知开关直接 return，
      那条 running 事件永远停在「正在启动当班 X」—— 界面看着像卡死，班其实早换完了。
-  2. 一次故障转移只留一条事件。以前决策（「当班流量超限，故障转移」）和结果
+  2. 一次故障转移只留一条事件。以前决策（「当班超限，故障转移」）和结果
      （「故障转移」）各开一条，事件列表里两条标题几乎一样的记录，事后分不清
      哪条是结论、哪条是过程。
 
@@ -176,6 +176,46 @@ class SettleWhenNotifyOff(_Base):
         self.assertEqual(event["detail"], "当班 当班A / 待机 1 台 / ⏸ 未绑定")
 
 
+class SettleWhenNotifyDisabled(_Base):
+    """notify_enabled=False（新建换班组走这条路）：概览照样要写结算结论。
+
+    以前这个参数直接 return，事件的概览永远停在「等待当班 X 到位」这种过程句上，
+    明明班已经换完，列表里看着像还在进行。
+    """
+
+    def test_detail_written_with_notify_disabled(self):
+        a = _make_server("当班A", "Running")
+        b = _make_server("待机B", "Stopped")
+        self.status = {a: "Running", b: "Stopped"}
+        self._wire()
+        group_id = self._group(
+            [
+                {"server_id": a, "hours": 12},
+                {"server_id": b, "hours": 12},
+            ]
+        )
+
+        for _ in range(4):
+            shift.engine.reconcile_group(
+                repo.get_group(group_id) or {},
+                repo.get_settings(),
+                dt.datetime.now(TZ),
+                float(time.time()),
+                notify_enabled=False,
+            )
+
+        self.assertEqual(self.sent, [], "notify_enabled=False 不该发通知")
+        events = self._events(group_id)
+        self.assertEqual(len(events), 1, [e["title"] for e in events])
+        event = events[0]
+        self.assertEqual(event["status"], "done")
+        self.assertEqual(
+            event["detail"],
+            "当班 当班A / 待机 1 台 / ⏸ 未绑定",
+            "概览必须是结算结论，不能停在「等待当班 A 到位」",
+        )
+
+
 class FailoverIsOneEvent(_Base):
     """一次转移 = 一条事件。"""
 
@@ -198,7 +238,7 @@ class FailoverIsOneEvent(_Base):
         self.assertEqual(len(events), 1, [e["title"] for e in events])
         event = events[0]
         self.assertEqual(event["kind"], "shift_failover")
-        self.assertTrue(event["title"].startswith("故障转移（换班组："), event["title"])
+        self.assertTrue(event["title"].startswith("当班超限，故障转移（换班组："), event["title"])
         self.assertEqual(event["status"], "done")
         # 决策、启动、停机、结算都在同一条事件里
         texts = [step["text"] for step in event["progress"]]

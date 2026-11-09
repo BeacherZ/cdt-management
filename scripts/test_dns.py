@@ -435,7 +435,7 @@ class ShiftQuiet(Base):
         return [
             e["title"]
             for e in repo.list_events(limit=50, kind="dns")
-            if "解析已更新" in e["title"]
+            if "DNS 记录已更新" in e["title"]
         ]
 
     def test_shift_suppresses_standalone_dns_event(self):

@@ -664,7 +664,7 @@ def register(app: FastAPI) -> None:
                 "initialized": "1",
             }
         )
-        repo.add_event("system", messages.ev("系统初始化完成"), f"管理员：{username}")
+        repo.add_event("system", messages.ev("系统初始化完成"), f"已初始化 / 管理员 {username}")
         response = JSONResponse({"ok": True})
         _attach_session(response, username)
         return response
@@ -958,7 +958,7 @@ def register(app: FastAPI) -> None:
         require_csrf(request)
         name = dns.add_record(str(payload.get("record") or ""), repo.get_settings())
         repo.add_event(
-            "dns", messages.ev("DNS 记录已添加", messages.obj_server(name)), name
+            "dns", messages.ev("DNS 记录已添加", messages.obj_server(name)), f"已添加 / {name}"
         )
         return {"record": name}
 
@@ -970,7 +970,8 @@ def register(app: FastAPI) -> None:
             raise HTTPException(status_code=404, detail="记录不存在")
         dns.remove_record(record, repo.get_settings())
         repo.add_event(
-            "dns", messages.ev("DNS 记录已删除", messages.obj_server(record)), f"{record}（绑定已一并解除）" if row.get("target_kind") else record
+            "dns", messages.ev("DNS 记录已删除", messages.obj_server(record)),
+            f"已删除 / {record}（绑定已一并解除）" if row.get("target_kind") else f"已删除 / {record}",
         )
         return {"ok": True}
 
@@ -1230,7 +1231,7 @@ def register(app: FastAPI) -> None:
                 # 记录名列表变了，把表里的行同步一遍（增的补上、删的连绑定一起清掉）
                 dns.sync_registry(repo.get_settings())
             if changed:
-                repo.add_event("system", messages.ev("配置已更新"), _setting_labels(changed))
+                repo.add_event("system", messages.ev("配置已更新"), f"已保存 / {_setting_labels(changed)}")
 
         if bumped_epoch is not None:
             # 改用户名 / 改密码的这个浏览器要留住，给它发一张新票据；

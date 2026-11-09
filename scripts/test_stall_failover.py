@@ -198,7 +198,7 @@ class StallEscalates(_Base):
         self.assertEqual(self.started, [self.a], "应先尝试拉起原当班")
         self.assertEqual(self.stopped, [], "这时不该停任何人")
         self.assertTrue(
-            any("已自动拉起" in t for t in self._titles()), self._titles()
+            any("当班自动拉起中" in t for t in self._titles()), self._titles()
         )
         run = repo.get_run(self.group_id, self._slot()) or {}
         self.assertEqual(int(run.get("failover") or 0), 0, "计时刚开始，不该记故障转移")
@@ -254,7 +254,7 @@ class StallEscalates(_Base):
         self.assertEqual(int(run.get("failover_from") or 0), self.a)
         self.assertIn(self.b, self.started, "应去拉起接替的那台")
         self.assertTrue(
-            any(t.startswith("当班疑被抢占，故障转移（换班组：") for t in self._titles()), self._titles()
+            any(t.startswith("当班未就绪，故障转移（换班组：") for t in self._titles()), self._titles()
         )
         # 原当班也进了待停名单：接替者就绪后的下一轮才真正下发停机
         self.status[self.b] = "Running"
@@ -282,11 +282,11 @@ class StallEscalates(_Base):
         self.assertNotIn("超限账号", msg.text)
         # 事件标题能区分是哪一种转移
         self.assertTrue(
-            any("保活超时，故障转移" in t for t in self._titles()), self._titles()
+            any("当班未就绪，故障转移" in t for t in self._titles()), self._titles()
         )
 
     def test_no_duplicate_recovery_event_after_switch(self):
-        """转移后不该再留一条「已自动拉起」在转圈。"""
+        """转移后不该再留一条「自动拉起中」在转圈。"""
         self.status[self.a] = "Stopped"
         self._reconcile(self.group_id)
         self._age_flag(f"duty_stall:{self.group_id}:{self._slot()}", GRACE + 5)
@@ -360,11 +360,14 @@ class MiddleStateGrace(_Base):
         self.assertEqual(int(run.get("duty_server_id") or 0), self.b)
         self.assertEqual(int(run.get("failover") or 0), 1)
         self.assertEqual(str(run.get("failover_reason")), "stall")
-        # 文案要写这一档的实际阈值（600），不能沿用 180 —— 否则用户以为系统只等了 3 分钟
-        self.assertTrue(
-            any(f"{GRACE} 秒未就绪" in (e.get("detail") or "") for e in self._events()),
-            [e.get("detail") for e in self._events()],
-        )
+        # 文案要写这一档的实际阈值（600），不能沿用 180 —— 否则用户以为系统只等了 3 分钟。
+        # 概览统一成「等待接管到位（B）」，阈值这类原因留在展开的过程里。
+        steps = [
+            step.get("text", "")
+            for e in self._events()
+            for step in (e.get("progress") or [])
+        ]
+        self.assertTrue(any(f"{GRACE} 秒未就绪" in t for t in steps), steps)
 
 
 class DayCycleStall(_Base):
@@ -546,7 +549,7 @@ class StallRespectsSettings(_Base):
         run = repo.get_run(group_id, slot) or {}
         self.assertEqual(int(run.get("duty_server_id") or 0), self.b, "不该又切回 A")
         self.assertTrue(
-            any("无成员可接替" in t for t in self._titles()), self._titles()
+            any("无成员接替" in t for t in self._titles()), self._titles()
         )
 
 

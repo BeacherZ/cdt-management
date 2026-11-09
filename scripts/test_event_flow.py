@@ -271,7 +271,7 @@ class EventFlow(unittest.TestCase):
         # 通知里照样告诉用户域名没跟着走（报告是另一回事，不因事件省略而省略）
         self.assertEqual(len(self.sent), 1)
         # 完成态标题：不能还留着进行时的「保活拉起」
-        self.assertEqual(_event(event_id).get("title"), "单机保活拉起完成（测试机-未绑定）")
+        self.assertEqual(_event(event_id).get("title"), "单机保活已恢复（测试机-未绑定）")
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@
    到点必须把机器停掉；只做到「不拉起」的话它会一直跑到第二天早上。
 2. **窗口外一律不推通知**。到点停机、到点开机都是预期的，推一条「实例疑被抢占，
    已自动恢复运行」会让人以为机器被阿里云回收了。
-3. **事件里能看到「单机保活暂停 / 单机保活恢复」**，概览一句结论，展开是过程。
+3. **事件里能看到「单机保活暂停 / 单机保活拉起」**，概览一句结论，展开是过程。
 4. **停机模式按实例设置走**：选普通停机就发 Stop，不再写死节省停机。
 5. 配置写坏（半截时段、跨零点）时按「不限」处理，不能把机器钉死在停机状态。
 
@@ -138,6 +138,7 @@ class KeepaliveWindowEngine(unittest.TestCase):
         self.mode = "StopCharging"
         self.started: list[int] = []
         self.stopped: list[tuple[str, bool]] = []
+        self.stop_fail = 0  # >0 时下一次停机抛错，用来验证「失败后补结果」
         self._orig_refresh = shift._refresh  # noqa: SLF001
         self._orig_start = aliyun.start_instance
         self._orig_stop = aliyun.stop_instance
@@ -152,6 +153,9 @@ class KeepaliveWindowEngine(unittest.TestCase):
             self.started.append(int(server["id"]))
 
         def _fake_stop(account: dict, mode: str = "StopCharging", fallback: bool = False) -> str:  # noqa: ANN001, ARG001
+            if self.stop_fail > 0:
+                self.stop_fail -= 1
+                raise RuntimeError("StopInstance 调用失败")
             self.stopped.append((mode, fallback))
             self.state = "Stopped"
             self.mode = mode
@@ -197,6 +201,14 @@ class KeepaliveWindowEngine(unittest.TestCase):
             repo.get_settings(), now or dt.datetime.now(TZ), set()
         )
 
+    def _confirm(self) -> None:
+        scheduler._confirm_pending_events()  # noqa: SLF001
+
+    def _settle(self) -> None:
+        """巡检下发停机 + 确认器看到停稳：一条「暂停」事件的完整两轮。"""
+        self._tick(dt.datetime.now(TZ))
+        self._confirm()
+
     def _events(self) -> list[dict]:
         return repo.list_events(limit=50)
 
@@ -217,13 +229,43 @@ class KeepaliveWindowEngine(unittest.TestCase):
         self.assertEqual(len(self._events()), 1)
         event = self._events()[0]
         self.assertEqual(event["title"], "单机保活暂停（保活机）")
-        self.assertEqual(event["detail"], "已暂停（节省停机）")
+        # 指令下去了但还没确认停稳：事件必须还是「进行中」，不能先写「已暂停」
+        self.assertEqual(event["status"], "running")
+        self.assertEqual(event["detail"], "等待停机到位")
         self.assertEqual(
             self._texts(event),
             ["已离开运行窗口（每天 08:00–23:00），窗口外不再自动拉起", "已下发停机指令（节省停机）"],
             self._texts(event),
         )
         self.assertEqual(self.sent, [], "到点停机是预期动作，不该推通知")
+
+        # 确认器看到 Stopped 才收尾：过程里有结果，不是「下发完就不管了」
+        self._confirm()
+        event = self._events()[0]
+        self.assertEqual(event["status"], "done")
+        self.assertEqual(event["detail"], "已暂停（节省停机）")
+        self.assertIn("已确认 Stopped（节省停机）", self._texts(event))
+
+    def test_pause_completion_needs_stopped_confirmation(self):
+        """机器没停稳（Stopping）时事件不能收尾：等它真停下来才算完。"""
+        self._keepalive(start_time="08:00", end_time="23:00")
+
+        def slow_stop(account, mode="StopCharging", fallback=False):  # noqa: ARG001
+            self.stopped.append((mode, fallback))
+            self.state = "Stopping"
+            return mode
+
+        aliyun.stop_instance = slow_stop
+        self._tick(_at(23, 30))
+        self._confirm()
+        self.assertEqual(self._events()[0]["status"], "running", "还在停，不能写完成")
+
+        self.state = "Stopped"
+        self.mode = "StopCharging"
+        self._confirm()
+        event = self._events()[0]
+        self.assertEqual(event["status"], "done")
+        self.assertEqual(event["detail"], "已暂停（节省停机）")
 
     def test_pause_logged_once_per_rest(self):
         """同一段休止时间里只记一条，不每分钟刷一条。"""
@@ -235,7 +277,7 @@ class KeepaliveWindowEngine(unittest.TestCase):
         self.assertEqual(len(self.stopped), 1, "停过一次就够了，停机状态下不该重发指令")
 
     def test_rest_closes_running_pull_event(self):
-        """进入休止时段时，那条还在转的「保活拉起」要收掉，不能一直转圈。"""
+        """进入休止时段时，那条还在转的「保活拉起」不能再转圈：改成「等停机」。"""
         self._keepalive(start_time="08:00", end_time="23:00")
         self.state = "Stopped"
         self._tick(_at(12))  # 窗口内：正常拉起，建一条 running 事件
@@ -245,12 +287,16 @@ class KeepaliveWindowEngine(unittest.TestCase):
         self.state = "Running"
         self._tick(_at(23, 30))  # 出窗口
 
-        self.assertEqual(
-            [e for e in self._events() if e["status"] == "running"], [], "不能留转圈事件"
-        )
-        titles = self._titles()
-        self.assertIn("单机保活暂停（保活机）", titles)
-        self.assertNotIn("单机保活拉起（保活机）", titles, "原事件被复用改名，不该留旧标题")
+        self.assertNotIn("单机保活拉起中（保活机）", self._titles(), "原事件被复用改名")
+        pause = [e for e in self._events() if e["title"] == "单机保活暂停（保活机）"][0]
+        self.assertEqual(pause["status"], "running", "等停机确认")
+        self.assertEqual(self.stopped, [("StopCharging", True)])
+
+        self._confirm()
+        event = [e for e in self._events() if e["title"] == "单机保活暂停（保活机）"][0]
+        self.assertEqual(event["status"], "done")
+        self.assertEqual(event["detail"], "已暂停（节省停机）")
+        self.assertEqual([e for e in self._events() if e["status"] == "running"], [])
 
     def test_outside_window_skips_limit_stop(self):
         """窗口外先按休止处理，不因为超阈值再推一条超限停机报告。"""
@@ -266,6 +312,7 @@ class KeepaliveWindowEngine(unittest.TestCase):
     def test_resume_logs_and_starts_without_notification(self):
         self._keepalive(start_time="08:00", end_time="23:00")
         self._tick(_at(23, 30))
+        self._confirm()
         self.state = "Stopped"
         self.mode = "StopCharging"
         events_before = len(self._events())
@@ -275,9 +322,9 @@ class KeepaliveWindowEngine(unittest.TestCase):
         new_events = self._events()[: len(self._events()) - events_before]
         self.assertEqual(len(new_events), 1, self._titles())
         event = new_events[0]
-        self.assertEqual(event["title"], "单机保活恢复（保活机）")
+        self.assertEqual(event["title"], "单机保活拉起中（保活机）")
         self.assertEqual(event["status"], "running", "等确认到位")
-        self.assertEqual(event["detail"], "已恢复，正在拉起")
+        self.assertEqual(event["detail"], "等待开机到位")
         self.assertEqual(
             self._texts(event),
             ["已进入运行窗口（每天 08:00–23:00），恢复自动拉起", "已下发开机指令（原状态 已停机）"],
@@ -286,17 +333,18 @@ class KeepaliveWindowEngine(unittest.TestCase):
         self.assertEqual(self.sent, [], "到点开机不是被抢占，不推通知")
 
     def test_resume_completion_keeps_title_and_stays_quiet(self):
-        """确认器把这条事件收尾时：标题仍是「单机保活恢复」，且不推抢占恢复。"""
+        """确认器把这条事件收尾时：标题变成「已恢复」，且不推抢占恢复。"""
         self._keepalive(start_time="08:00", end_time="23:00")
         self._tick(_at(23, 30))
+        self._confirm()
         self.state = "Stopped"
         self._tick(_at(8, 30))
 
         self.state = "Running"
-        scheduler._confirm_pending_events()  # noqa: SLF001
+        self._confirm()
 
         self.assertEqual(self.sent, [], "计划内开机不推「抢占恢复」")
-        event = [e for e in self._events() if e["title"] == "单机保活恢复（保活机）"][0]
+        event = [e for e in self._events() if e["title"] == "单机保活已恢复（保活机）"][0]
         self.assertEqual(event["status"], "done")
         self.assertEqual(event["detail"], "运行中")
         self.assertIn("已确认 Running（运行中）", self._texts(event))
@@ -305,15 +353,15 @@ class KeepaliveWindowEngine(unittest.TestCase):
         """休止时段里被人手动开机：回窗口只记一条「已恢复」，不再发指令。"""
         self._keepalive(start_time="08:00", end_time="23:00")
         self._tick(_at(23, 30))
+        self._confirm()
         self.state = "Running"  # 有人在窗口外手动开回来了
         repo.update_server_runtime(self.server_id, status="Running", stopped_mode="")
 
         self._tick(_at(8, 30))
         self.assertEqual(self.started, [], "已经在跑，不该再下发开机")
-        event = self._events()[0]
-        self.assertEqual(event["title"], "单机保活恢复（保活机）")
+        event = [e for e in self._events() if e["title"] == "单机保活已恢复（保活机）"][0]
         self.assertEqual(event["status"], "done")
-        self.assertEqual(event["detail"], "已恢复，实例在运行")
+        self.assertEqual(event["detail"], "运行中")
 
     def test_mid_state_resume_does_not_fall_back_to_normal_pull(self):
         """窗口刚开时实例还在 Stopping：下一轮真正拉起也不能退回普通「保活拉起」。
@@ -361,8 +409,8 @@ class KeepaliveWindowEngine(unittest.TestCase):
             self._tick(_at(23, 30))
         self.assertEqual(len(self.stopped), 1, f"重复下发 {len(self.stopped)} 次")
 
-    def test_stop_result_appended_after_confirm_closes(self):
-        """确认器先收尾、巡检后停机：停机结果要补回同一条事件，不能只有「窗口外」。"""
+    def test_confirm_converts_pull_to_stop_wait(self):
+        """确认器先发现出窗口：把还在转的拉起改成「等停机」，不能就地写「已暂停」。"""
         self._keepalive(start_time="08:00", end_time="23:00")
         self.state = "Stopped"
         self._tick(_at(12))  # 建一条还在转的「保活拉起」
@@ -375,17 +423,24 @@ class KeepaliveWindowEngine(unittest.TestCase):
             start_time="00:00",
             end_time="00:01",
         )
-        scheduler._confirm_pending_events()  # noqa: SLF001
+        self._confirm()
         event = [e for e in self._events() if e["title"] == "单机保活暂停（保活机）"][0]
-        self.assertEqual(event["detail"], "已暂停（窗口外）")
+        self.assertEqual(event["status"], "running", "停机指令还没下发，不能写完成")
+        self.assertEqual(event["detail"], "等待停机到位")
 
         self._tick(dt.datetime.now(TZ))  # 巡检这一轮才真正下发停机
         event = repo.get_event(int(event["id"]))
-        self.assertEqual(event["detail"], "已暂停（节省停机）")
         self.assertIn("已下发停机指令（节省停机）", self._texts(event))
+        self.assertEqual(event["status"], "running", "指令下发≠停稳，等确认器")
+
+        self._confirm()
+        event = repo.get_event(int(event["id"]))
+        self.assertEqual(event["status"], "done")
+        self.assertEqual(event["detail"], "已暂停（节省停机）")
+        self.assertIn("已确认 Stopped（节省停机）", self._texts(event))
 
     def test_confirm_closes_pull_when_window_closes(self):
-        """确认器先发现出窗口：收尾成「单机保活暂停」，不推通知，巡检不再重复记。"""
+        """确认器先发现出窗口：转成「等停机」，全程不推通知，巡检不再重复记。"""
         self._keepalive(start_time="08:00", end_time="23:00")
         self.state = "Stopped"
         self._tick(_at(12))  # 拉起事件，等 Running
@@ -399,17 +454,72 @@ class KeepaliveWindowEngine(unittest.TestCase):
             start_time="00:00",
             end_time="00:01",
         )
-        scheduler._confirm_pending_events()  # noqa: SLF001
+        self._confirm()
 
         self.assertEqual(self.sent, [], "窗口外到位也不许推抢占恢复")
         titles = self._titles()
         self.assertIn("单机保活暂停（保活机）", titles, titles)
-        self.assertEqual(
-            [e for e in self._events() if e["status"] == "running"], [], "要收尾"
-        )
-        # 巡检再来一轮不会重复记一条
+        # 巡检再来一轮不会重复记一条，且把停机结果补进同一条
         self._tick(_at(23, 30))
         self.assertEqual(len([t for t in self._titles() if t == "单机保活暂停（保活机）"]), 1)
+        self._confirm()
+        event = [e for e in self._events() if e["title"] == "单机保活暂停（保活机）"][0]
+        self.assertEqual(event["status"], "done")
+        self.assertEqual(event["detail"], "已暂停（节省停机）")
+
+    def test_first_pull_after_adding_keepalive_is_quiet(self):
+        """保活刚加上、机器本来就停着：窗口内第一次拉起不是被抢占，不推通知。
+
+        回归：以前靠「计划内开机」标记判断要不要推通知，这个标记只有「从休止时段
+        回来」才会置。手动停过、或者刚加进保活，都拿不到标记 —— 于是窗口里的
+        第一次拉起被当成抢占，推了一条「实例疑被抢占」，用户看到的渠道就错了。
+        """
+        self._keepalive(start_time="00:00", end_time="23:59")  # 现在就在窗口内
+        self.state = "Stopped"
+        self.mode = "StopCharging"
+        self._tick(_at(12))
+
+        self.assertEqual(self.started, [self.server_id])
+        self.state = "Running"
+        self._confirm()
+
+        self.assertEqual(self.sent, [], "计划内拉起不该走「抢占恢复」渠道")
+        event = [e for e in self._events() if e["status"] == "done"][0]
+        self.assertEqual(event["title"], "单机保活已恢复（保活机）")
+
+    def test_real_preemption_still_notifies(self):
+        """上一轮还看着它在跑、这一轮已经停了：这才是被抢占，通知必须照发。"""
+        self._keepalive()  # 没有运行窗口
+        self.state = "Running"
+        self._tick(_at(12))  # 巡检看到 Running，记下「它活着」
+        self.assertEqual(self._events(), [], "正常运行不该产生事件")
+
+        self.state = "Stopped"  # 被阿里云收回
+        self.mode = "StopCharging"
+        self._tick(_at(12, 1))
+        self.state = "Running"
+        self._confirm()
+
+        self.assertEqual(len(self.sent), 1, "真抢占必须推「抢占恢复」")
+        self.assertIn("抢占恢复", self.sent[0].title)
+
+    def test_stop_failure_event_gets_its_result(self):
+        """停机失败一次、下一轮停成：那条失败事件要补上「重试成功」。
+
+        以前只清 fail 标记，事件永远停在「停机指令失败」，用户点开不知道后来
+        到底停成没有 —— 与「凡是要等外部状态的动作都得有结果」这条规则相悖。
+        """
+        self._keepalive(start_time="08:00", end_time="23:00")
+        self.stop_fail = 1
+        self._tick(_at(23, 30))  # 第一次：指令失败，只记一条
+        failed = [e for e in self._events() if e["title"].startswith("单机保活停机失败")]
+        self.assertEqual(len(failed), 1, self._titles())
+        self.assertIn("停机指令失败", failed[0]["detail"])
+
+        self._tick(_at(23, 31))  # 第二次：停成了
+        event = [e for e in self._events() if e["title"].startswith("单机保活停机失败")][0]
+        self.assertEqual(event["detail"], "重试成功，已停机（节省停机）")
+        self.assertIn("重试成功，已停机（节省停机）", self._texts(event))
 
     # -- 停机模式 -------------------------------------------------------
 
@@ -430,6 +540,7 @@ class KeepaliveWindowEngine(unittest.TestCase):
         self._tick(_at(23, 30))
 
         self.assertEqual(self.stopped, [("Stop", False)], "选普通停机就别 fallback")
+        self._confirm()
         self.assertEqual(self._events()[0]["detail"], "已暂停（普通停机）")
 
     def test_manual_stop_reports_real_mode(self):
@@ -448,7 +559,7 @@ class KeepaliveWindowEngine(unittest.TestCase):
         )
         shift.engine.manual_action(self.server_id, "stop")
         event = self._events()[0]
-        self.assertEqual(event["detail"], "已下发停机指令（普通停机）")
+        self.assertEqual(event["detail"], "等待停机到位（普通停机）")
 
 
 class StopModeStore(unittest.TestCase):

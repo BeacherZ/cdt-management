@@ -47,7 +47,7 @@ _DDNS_WAIT_SECONDS = 180
 
 # 保活重试的里程碑：一台机器一天都起不来时，事件只有一条（可以横跨一整天），
 # 进度里只在这几个「已尝试次数」上补一行，其余轮次只改事件概要那句
-# 「已尝试拉起 N 次」—— 每分钟一行同义句会把展开的事件糊成一片。
+# 「等待开机到位（已尝试 N 次）」—— 每分钟一行同义句会把展开的事件糊成一片。
 _KEEPALIVE_RETRY_MARK = "仍未运行（"
 _KEEPALIVE_MILESTONES = (3, 10, 30, 100, 300, 1000, 3000)
 
@@ -539,7 +539,9 @@ class Engine:
                 results.extend(self.reconcile_keepalives(config, now, grouped))
             except Exception as exc:  # noqa: BLE001
                 log.exception("单机保活对账失败")
-                repo.add_event("error", messages.ev("单机保活同步异常"), str(exc), level="error")
+                repo.add_event(
+                    "error", messages.ev("单机保活同步异常"), aliyun.brief_error(exc), level="error"
+                )
 
             try:
                 results.extend(
@@ -547,7 +549,9 @@ class Engine:
                 )
             except Exception as exc:  # noqa: BLE001
                 log.exception("闲散机器超限对账失败")
-                repo.add_event("error", messages.ev("闲散超限检查异常"), str(exc), level="error")
+                repo.add_event(
+                    "error", messages.ev("闲散超限检查异常"), aliyun.brief_error(exc), level="error"
+                )
 
             for group in repo.list_groups():
                 try:
@@ -557,7 +561,7 @@ class Engine:
                     repo.add_event(
                         "error",
                         messages.ev("换班组同步异常", messages.obj_group(str(group.get('name') or ''))),
-                        str(exc),
+                        aliyun.brief_error(exc),
                         level="error",
                         group_id=int(group["id"]),
                     )
@@ -622,8 +626,8 @@ class Engine:
                     repo.set_flag(flag)
                     repo.add_event(
                         "warning",
-                        messages.ev("单机保活让位", messages.obj_server(str(item.get('label') or ''))),
-                        "同一台服务器不要同时挂在两个模块下",
+                        messages.ev("单机保活已停用", messages.obj_server(str(item.get('label') or ''))),
+                        "已由换班组接管，单机保活自动停用，避免两边互相拉扯",
                         level="warning",
                         server_id=server_id,
                     )
@@ -687,7 +691,8 @@ class Engine:
                 repo.clear_flag(f"limit_stop:{messages.SCOPE_KEEPALIVE}:{server_id}")
 
             status = str(server.get("instance_status") or "")
-            # 刚从休止时段回来：先记一条「单机保活恢复」，开机指令也在这里发。
+            live_flag = f"keepalive_live:{server_id}"
+            # 刚从休止时段回来：先记一条「单机保活拉起中」，开机指令也在这里发。
             # planned=True 时本轮不再走下面的「Stopped 就拉起」，否则一条恢复事件
             # 后面又会紧跟着建一条「保活拉起」，同一件事被记两遍。
             planned = False
@@ -703,6 +708,12 @@ class Engine:
                 # 中间态不进这个分支，正在启动的实例不会被重复开。
                 # 事件只保留一条：一台机器一直起不来，重试次数续写进同一条事件的进度，
                 # 不再每次重试新开一条「保活拉起」。
+                #
+                # 是不是「被抢占」只看一个依据：我们最后一次看到它的时候它还在跑。
+                # 自己停的（窗口外休止、流量超限、手动停机）都会把这个标记清掉，
+                # 所以到点开机、刚加进保活、手动停过之后被拉起，一律不推「抢占恢复」。
+                preempted = bool(repo.get_flag(live_flag))
+                repo.clear_flag(live_flag)
                 state_label = messages.STATUS_LABELS.get(status, status or "未知")
                 pending = repo.pending_event(server_id, "keepalive")
                 try:
@@ -718,8 +729,9 @@ class Engine:
                         label=str(server.get("label") or f"#{server_id}"),
                         state_label=state_label,
                         pending=pending,
-                        # 计划内开机（运行窗口开了）重试时也别发「抢占恢复」
-                        quiet=bool(repo.get_flag(f"keepalive_planned:{server_id}")),
+                        # 上一轮还看着它在跑、这一轮已经停了 = 真被抢占；
+                        # 其余都是计划内的拉起，不进通知渠道
+                        quiet=not preempted,
                     )
                     if repo.get_flag(f"keepalive_fail:{server_id}"):
                         repo.clear_flag(f"keepalive_fail:{server_id}")
@@ -736,7 +748,7 @@ class Engine:
                         # _brief_exc 会剥掉异常自带的「启动实例失败：」前缀，
                         # 否则概览里会出现「启动指令失败：启动实例失败：…」两层失败
                         error=_brief_exc(exc),
-                        quiet=bool(repo.get_flag(f"keepalive_planned:{server_id}")),
+                        quiet=not preempted,
                     )
                 # 已经 Running 时不再下发：抢占恢复的通知由确认器在「Running 到位」
                 # 那一刻统一发出（scheduler._confirm_pending_events）。
@@ -745,8 +757,8 @@ class Engine:
                 # 注意只认 Running——Starting / Pending 这类中间态不动计数，
                 # 否则「停→启动中→又被抢→停」会来回清零，里程碑永远到不了。
                 repo.clear_flag(f"keepalive_tries:{server_id}")
-                # 计划内开机已经到位，标记作废。留着会让之后真正的抢占也不推通知。
-                repo.clear_flag(f"keepalive_planned:{server_id}")
+                # 记下「这一轮它确实在跑」：下一轮若变成 Stopped，就是被抢占。
+                repo.set_flag(live_flag)
             results.append(
                 {
                     "keepalive": server_id,
@@ -772,18 +784,26 @@ class Engine:
         label = str(server.get("label") or f"#{server_id}")
         rest_flag = f"keepalive_rest:{server_id}"
         fail_flag = f"keepalive_rest_fail:{server_id}"
-        # 确认器抢先发现「已出窗口」时会把那条还在转的事件直接收成「单机保活暂停」
+        # 这台是「我们自己让它停的」：之后窗口开了再拉起不属于被抢占，不推通知。
+        # 每次走到休止分支都清一次，覆盖「实例本来就停着」和「这一轮才下发停机」两种情况。
+        repo.clear_flag(f"keepalive_live:{server_id}")
+        # 确认器抢先发现「已出窗口」时会把那条还在转的事件改成「等停机」
         # 并置上这个标记，这里就别再记一条同名的。
         logged = bool(repo.get_flag(rest_flag))
+        # 之前记过「停机失败」吗？成功后要把那条事件的结论补回去，
+        # 否则它在列表里永远写着「停机指令失败」，用户不知道后来停成没有。
+        was_failed = bool(repo.get_flag(fail_flag))
 
         if _is_stopped_any_mode(server):
             if logged:
-                # 确认器抢先把事件收成了「暂停」，机器本来就已经停着：把真实模式补回去
-                _keepalive_pause_result(server_id, str(server.get("stopped_mode") or ""))
+                # 确认器先把事件转成了「保活暂停」：机器本来就已经停着，把真实模式补回去
+                _keepalive_pause_progress(server_id, str(server.get("stopped_mode") or ""))
                 return
             repo.set_flag(rest_flag)
             repo.clear_flag(fail_flag)
             mode = str(server.get("stopped_mode") or "")
+            if was_failed:
+                _keepalive_rest_recovered(server_id, mode)
             _keepalive_pause_note(
                 server_id,
                 label,
@@ -809,18 +829,21 @@ class Engine:
             return
 
         repo.clear_flag(fail_flag)
+        if was_failed:
+            _keepalive_rest_recovered(server_id, mode)
         if logged:
-            # 确认器先在窗口边界把事件收成了「暂停」，这轮才真正停机：把结果补回去，
-            # 否则事件详情只有「已离开运行窗口」，看不到停机过程和真实模式。
-            _keepalive_pause_result(server_id, mode)
+            # 确认器先把事件转成了「等停机」，这轮才真正停机：把指令补回去，
+            # 收尾等确认器看到 Stopped。
+            _keepalive_pause_progress(server_id, mode)
             return
         repo.set_flag(rest_flag)
         _keepalive_pause_note(
             server_id,
             label,
             window_text,
-            f"已暂停（{messages.mode_label(mode)}）",
+            "等待停机到位",
             [f"已下发停机指令（{messages.mode_label(mode)}）"],
+            await_stop=True,
         )
 
     # -- 超限停机（保活 / 闲散共用） ---------------------------------------
@@ -852,7 +875,7 @@ class Engine:
                     repo.add_event(
                         "error",
                         messages.ev("流量超限停机失败", messages.obj_server(str(server.get('label') or ''))),
-                        str(exc),
+                        aliyun.brief_error(exc),
                         level="error",
                         server_id=server_id,
                     )
@@ -860,18 +883,37 @@ class Engine:
             repo.clear_flag(f"limit_stop_err:{scope}:{server_id}")
 
         repo.set_flag(flag)
+        # 停机是我们下的手：之后保活再把它拉起来，不该推「抢占恢复」
+        repo.clear_flag(f"keepalive_live:{server_id}")
         # 标题与通知口径一致：单机保活还要说明保活已暂停，否则事件只说「已停机」，
         # 用户不知道这台还会不会被自动拉起。
-        tail = messages.stop_phrase(mode) + (
-            "，保活已暂停" if scope == messages.SCOPE_KEEPALIVE else ""
-        )
+        # 标题只留一个逗号：保活超限的结论是「保活已暂停」，停机模式交给概览；
+        # 闲散超限的结论才是停机本身。三个短句堆在一个括号前读不过来。
+        if scope == messages.SCOPE_KEEPALIVE:
+            tail = "保活已暂停"
+        else:
+            tail = messages.stop_phrase(mode)
+        reason = f"已用 {_used_gb(server):.2f} GB（阈值 {float(server.get('threshold_gb') or 0):g} GB）"
+        stopped_already = _is_stopped_any_mode(server)
         event_id = repo.add_event(
             "limit_stop",
             messages.ev(f"流量超限，{tail}", messages.obj_server(str(server.get('label') or ''))),
-            f"已用 {_used_gb(server):.2f} GB / 阈值 {float(server.get('threshold_gb') or 0):g} GB",
+            f"等待停机到位 / {reason}",
             level="warning",
             server_id=server_id,
+            status="running",
+            pending_status="Stopped",
+            pending_kind="limit_stop",
         )
+        repo.add_event_progress(event_id, f"已用 {_used_gb(server):.2f} GB，超过阈值 {float(server.get('threshold_gb') or 0):g} GB")
+        # 已经停着的机器没有「下发指令」这一步，写清楚，别让过程看起来断了一截
+        repo.add_event_progress(
+            event_id,
+            f"实例已是停机状态（{messages.mode_label(mode) or '已停机'}），未重复下发指令"
+            if stopped_already
+            else f"已下发停机指令（{messages.mode_label(mode)}）",
+        )
+        # 事件等到 Stopped 才由确认器收尾：指令下发 ≠ 真停了，这里不能先写「已完成」
         if config.get("notify_on_limit_stop") == "1":
             results = notify.send_all(config, messages.over_limit(server, scope, mode=mode))
             notify.note_notify(event_id, results)
@@ -1042,8 +1084,8 @@ class Engine:
                 # 一次转移在事件列表里留下两条标题几乎一样的记录。
                 decision_event = repo.add_event(
                     "failover",
-                    messages.ev("当班流量超限，故障转移", messages.obj_duty(str(name), str(duty.get('label') or ''))),
-                    f"{duty.get('label')} → {replacement.get('label')}",
+                    messages.ev("当班超限，故障转移", messages.obj_duty(str(name), str(duty.get('label') or ''))),
+                    f"等待接管到位（{replacement.get('label')}）",
                     level="warning",
                     group_id=group_id,
                     server_id=int(replacement["id"]),
@@ -1080,7 +1122,7 @@ class Engine:
                 )
                 # 本地 run 快照同步过来：下面 previously_settled 按它判断，
                 # 还拿着旧的 settled 会把这次转移当成「已结算班次的恢复」，
-                # 又开一条「当班未运行，已自动拉起」。
+                # 又开一条「当班自动拉起中」。
                 run = repo.get_run(group_id, slot_key) or {}
             else:
                 # 找不到替班的两种情形：其他成员都超了，或者其他成员状态读不到。
@@ -1147,9 +1189,8 @@ class Engine:
                     repo.set_flag(flag)
                     repo.add_event(
                         "warning",
-                        messages.ev("当班起不来", messages.obj_duty(str(name), str(duty.get('label') or ''))),
-                        f"{duty.get('label')} 已等待 {stall_limit} 秒仍未运行，"
-                        "该组未启用故障转移，保持等待",
+                        messages.ev("当班未就绪", messages.obj_duty(str(name), str(duty.get('label') or ''))),
+                        f"保持等待（未启用故障转移） / 已等待 {stall_limit} 秒",
                         level="warning",
                         group_id=group_id,
                         server_id=int(duty["id"]),
@@ -1174,13 +1215,10 @@ class Engine:
                     replacement = min(candidates, key=lambda s: float(s.get("traffic_used") or 0))
                     repo.set_flag(f"failover_tried:{group_id}:{slot_key}:{int(duty['id'])}")
                     title = messages.ev(
-                        "当班疑被抢占，故障转移",
+                        "当班未就绪，故障转移",
                         messages.obj_duty(str(name), str(duty.get('label') or '')),
                     )
-                    detail = (
-                        f"{duty.get('label')}（{status_text} {stall_limit} 秒未就绪）"
-                        f" → {replacement.get('label')}"
-                    )
+                    detail = f"等待接管到位（{replacement.get('label')}）"
                     if event_id:
                         # 本班次已经有一条在进行的事件（抢占恢复的「已自动拉起」，
                         # 或跨日复位后新建的「换班进行中」）。当班换人不是另开一件事，
@@ -1191,7 +1229,7 @@ class Engine:
                             event_id, title=title, detail=detail, kind="shift_failover"
                         )
                         repo.add_event_progress(
-                            event_id, f"{duty.get('label')} 超时未就绪，改由 {replacement.get('label')} 接班"
+                            event_id, f"{duty.get('label')}（{status_text}）已 {stall_limit} 秒未就绪，改由 {replacement.get('label')} 接班"
                         )
                     else:
                         event_id = repo.add_event(
@@ -1242,7 +1280,7 @@ class Engine:
                         repo.set_flag(flag)
                         repo.add_event(
                             "error",
-                            messages.ev("当班起不来，无成员可接替", messages.obj_group(str(name))),
+                            messages.ev("当班未就绪，无成员接替", messages.obj_group(str(name))),
                             f"{duty.get('label')}（{status_text}）等待 {stall_limit} 秒仍未运行，"
                             "其余成员要么流量也已超限，要么状态读取失败",
                             level="error",
@@ -1276,10 +1314,10 @@ class Engine:
                 repo.set_flag(recovery_flag)
                 event_id = repo.add_event(
                     "recovery",
-                    messages.ev("当班未运行，已自动拉起", messages.obj_duty(str(name), str(duty.get('label') or ''))),
+                    messages.ev("当班自动拉起中", messages.obj_duty(str(name), str(duty.get('label') or ''))),
                     # 概览只写「在等什么」，和单机保活的运行中事件同一套说法；
                     # 原来是什么状态放在展开的步骤里（检测到当班 X 未运行（Stopped））
-                    "等待恢复运行",
+                    "等待运行到位",
                     level="warning",
                     group_id=group_id,
                     server_id=int(duty["id"]),
@@ -1308,13 +1346,13 @@ class Engine:
                     repo.add_event(
                         "error",
                         messages.ev("当班启动失败", messages.obj_duty(str(name), str(duty.get('label') or ''))),
-                        str(exc),
+                        aliyun.brief_error(exc),
                         level="error",
                         group_id=group_id,
                         server_id=int(duty["id"]),
                     )
                 # 事件里挂着的转圈要打上失败标志，否则「最近事件」里永远在转
-                repo.add_event_progress(event_id, f"当班启动失败：{exc}")
+                repo.add_event_progress(event_id, f"当班启动失败：{_brief_exc(exc)}")
                 repo.finish_event(event_id, "error")
                 repo.upsert_run(
                     group_id,
@@ -1415,7 +1453,7 @@ class Engine:
                     repo.add_event(
                         "error",
                         messages.ev("非当班停机失败", messages.obj_member(str(name), str(server.get('label') or ''))),
-                        f"{server.get('label')}：{exc}",
+                        aliyun.brief_error(exc),
                         level="error",
                         group_id=group_id,
                         server_id=int(server["id"]),
@@ -1470,8 +1508,8 @@ class Engine:
                     repo.add_event(
                         "error",
                         messages.ev("DDNS 未同步，换班照常结算", messages.obj_group(str(name))),
-                        f"已等待 {_DDNS_WAIT_SECONDS // 60} 分钟仍未同步（{ddns_text}），"
-                        "实例状态已到位，不再阻塞。请检查记录名、Token 与 Zone。",
+                        f"已放行结算 / 等待 {_DDNS_WAIT_SECONDS // 60} 分钟仍未同步（{ddns_text}），"
+                        "请检查记录名、Token 与 Zone",
                         level="warning",
                         group_id=group_id,
                     )
@@ -1554,7 +1592,15 @@ class Engine:
                 # 事后分不清这台是被抢了还是烧超了。
                 # 原因写进结论里而不是套第二个括号：标题末尾的括号固定留给对象，
                 # 「故障转移（保活超时）（换班组：X）」会变成两层括号。
-                label = "保活超时，故障转移" if failover_reason == "stall" else "故障转移"
+                # 与创建时（「当班未就绪，故障转移」/「当班超限，故障转移」）同一套词：
+                # 同一条事件从头到尾只有一个说法，事后不用在两句话之间对照。
+                # 原因缺失（升级前留下的老 run）不做猜测，退回中性说法。
+                if failover_reason == "stall":
+                    label = "当班未就绪，故障转移"
+                elif failover_reason == "traffic":
+                    label = "当班超限，故障转移"
+                else:
+                    label = "故障转移"
                 kind = "shift_failover"
             elif manual_switch:
                 label, kind = "手动换班完成", "manual"
@@ -1592,12 +1638,28 @@ class Engine:
                         "当班已恢复运行",
                         messages.obj_duty(str(name), str(duty.get('label') or '')),
                     ),
-                    detail=f"当班 {duty.get('label')} 已恢复运行",
+                    detail="运行中",
                     kind="recovery",
                 )
                 repo.finish_event(event_id, "done")
 
         if not notify_enabled:
+            # 不发通知，但结算结论照样要写：新建换班组走的就是这条路
+            # （notify_enabled=False 只摆状态、不推报告）。以前这里直接 return，
+            # 事件的概览永远停在「等待当班 X 到位」这种过程句上，点开才知道
+            # 这一班到底跑没跑起来。通知是加分项，事件是流水，不能混。
+            if first_settle and event_id:
+                self._record_settled(
+                    group_id,
+                    slot_key,
+                    kind,
+                    name,
+                    duty,
+                    others,
+                    str(ddns_text),
+                    is_failover=failover_flag,
+                    is_manual=manual_switch,
+                )
             return summary
 
         # 全部确认（当班 Running + 非当班节省停机 + DDNS 已同步）后才发通知。
@@ -1663,7 +1725,7 @@ class Engine:
                     repo.add_event(
                         "error",
                         messages.ev("熔断停机失败", messages.obj_member(str(name), str(server.get('label') or ''))),
-                        f"{server.get('label')}：{exc}",
+                        aliyun.brief_error(exc),
                         level="error",
                         group_id=group_id,
                         server_id=server_id,
@@ -1697,10 +1759,19 @@ class Engine:
                 event_id = repo.add_event(
                     "breaker",
                     messages.ev("全局熔断", messages.obj_group(str(name))),
-                    f"{why} / {messages.stop_tail(everyone)}",
+                    f"{messages.stop_tail(everyone)} / {why}",
                     level="error",
                     group_id=group_id,
                 )
+                # 熔断是一条结论性事件，但用户点开要知道「凭什么说全停了」：
+                # 逐台写实际状态与停机模式，最后一句给出确认口径。
+                for member in everyone:
+                    member_label = str(member.get("label") or f"#{member.get('id')}")
+                    repo.add_event_progress(
+                        event_id,
+                        f"{member_label}：{messages.stop_phrase(member.get('stopped_mode'))}",
+                    )
+                repo.add_event_progress(event_id, "已确认全部停机，本轮未再下发指令")
                 notify.note_notify(event_id, results)
 
         return {"group_id": group_id, "breaker": True}
@@ -1742,17 +1813,24 @@ class Engine:
                         event_flag = f"limit_stop_evt:{group_id}:{slot_key}"
                         if not repo.get_flag(event_flag):
                             repo.set_flag(event_flag)
-                            repo.add_event(
+                            used = _used_gb(duty)
+                            thr = float(duty.get('threshold_gb') or 0)
+                            event_id = repo.add_event(
                                 "limit_stop",
                                 messages.ev(
-                                    f"当班流量超限，{messages.stop_phrase(mode, '已强制')}",
+                                    f"当班流量超限，{messages.stop_phrase(mode)}",
                                     messages.obj_duty(str(name), str(duty.get('label') or '')),
                                 ),
-                                f"已用 {_used_gb(duty):.2f} GB / 阈值 {float(duty.get('threshold_gb') or 0):g} GB",
+                                f"等待停机到位 / 已用 {used:.2f} GB（阈值 {thr:g} GB）",
                                 level="warning",
                                 group_id=group_id,
                                 server_id=int(duty["id"]),
+                                status="running",
+                                pending_status="Stopped",
+                                pending_kind="limit_stop",
                             )
+                            repo.add_event_progress(event_id, f"已用 {used:.2f} GB，超过阈值 {thr:g} GB")
+                            repo.add_event_progress(event_id, f"已下发停机指令（{messages.mode_label(mode)}）")
                     except Exception as exc:  # noqa: BLE001
                         err_flag = f"limit_stop_err:{group_id}:{slot_key}"
                         if not repo.get_flag(err_flag):
@@ -1760,7 +1838,7 @@ class Engine:
                             repo.add_event(
                                 "error",
                                 messages.ev("当班流量超限停机失败", messages.obj_duty(str(name), str(duty.get('label') or ''))),
-                                f"{duty.get('label')}：{exc}",
+                                aliyun.brief_error(exc),
                                 level="error",
                                 group_id=group_id,
                                 server_id=int(duty["id"]),
@@ -1898,7 +1976,7 @@ class Engine:
         event_id = repo.add_event(
             "shift_done",
             messages.ev("换班进行中", messages.obj_group(str(name))),
-            f"正在启动当班 {duty_label}",
+            f"等待当班 {duty_label} 到位",
             level="info",
             group_id=group_id,
             status="running",
@@ -2142,7 +2220,7 @@ class Engine:
             event_id = repo.add_event(
                 "group_new",
                 messages.ev("新建换班组", messages.obj_group(str(name))),
-                f"排班表：{when}由 {duty.get('label')} 当班，其余 {len(others)} 台应节省停机",
+                f"等待当班 {duty.get('label')} 到位 / 其余 {len(others)} 台待停机",
                 group_id=group_id,
                 server_id=int(duty["id"]),
                 status="running",
@@ -2175,7 +2253,7 @@ class Engine:
                 except Exception as exc:  # noqa: BLE001
                     mismatched += 1
                     repo.add_event_progress(
-                        event_id, f"{label}：状态读取失败（{exc}），交给下一轮同步重试"
+                        event_id, f"{label}：状态读取失败（{_brief_exc(exc)}），交给下一轮同步重试"
                     )
                     continue
                 status = str(server.get("instance_status") or "")
@@ -2243,7 +2321,7 @@ class Engine:
             event_id = repo.add_event(
                 "group_dissolve",
                 messages.ev("解散换班组", messages.obj_group(str(name))),
-                f"组内 {len(member_ids)} 台保持当前状态 / 未下发任何启停指令",
+                f"已解散 / {len(member_ids)} 台保持原状，未下发指令",
                 group_id=0,  # 组马上就没了，事件别再挂到不存在的组上
                 status="running",
             )
@@ -2261,7 +2339,7 @@ class Engine:
                     repo.add_event_progress(event_id, f"{label}：{status}{suffix}，保持不动")
                 except Exception as exc:  # noqa: BLE001
                     repo.add_event_progress(
-                        event_id, f"{label}：状态读取失败（{exc}），保持不动"
+                        event_id, f"{label}：状态读取失败（{_brief_exc(exc)}），保持不动"
                     )
 
                 item = keepalives.get(server_id)
@@ -2409,7 +2487,7 @@ class Engine:
         event_id = repo.add_event(
             "manual",
             messages.ev("手动换班进行中", messages.obj_group(str(name))),
-            f"{from_label} → {to_label}",
+            f"等待接管到位（{to_label}，原当班 {from_label}）",
             level="info",
             group_id=group_id,
             status="running",
@@ -2534,9 +2612,11 @@ class Engine:
             aliyun.start_instance(server)
         else:
             stop_mode = stop_server_by_pref(server)
+            # 手动停机是我们下的手：保活下一轮把它拉起来不推「抢占恢复」
+            repo.clear_flag(f"keepalive_live:{server_id}")
 
         # 2) 建 running 事件，交给后台确认器轮询确认，不在这里同步等状态。
-        detail = f"已下发{label}指令"
+        detail = f"等待{label}到位"
         if action == "stop" and stop_mode:
             # 写实际生效的模式：选了节省停机但规格不支持会退化成普通停机，
             # 事件里再写死「节省停机」就是骗人（账单照扣规格费）。
@@ -2603,7 +2683,7 @@ class Engine:
         )
         results = notify.send_all(config, message)
         repo.set_flag(flag)
-        event_id = repo.add_event("daily_report", messages.ev("每日报告已推送"), f"{len(servers)} 台服务器")
+        event_id = repo.add_event("daily_report", messages.ev("每日报告已推送"), f"已推送 / {len(servers)} 台服务器")
         notify.note_notify(event_id, results)
         return True
 
@@ -2860,7 +2940,7 @@ def _keepalive_retry_note(
     if pending:
         event_id = int(pending["id"])
         tries = repo.bump_flag(tries_key)
-        detail = f"已尝试拉起 {tries} 次，仍未运行（{state_label}）"
+        detail = f"等待开机到位（已尝试 {tries} 次）"
         if error:
             detail += f"；启动指令失败：{error}"
         repo.update_event(event_id, detail=detail)
@@ -2868,12 +2948,12 @@ def _keepalive_retry_note(
         # 新的一次中断：计数从 1 重来，别接着上次中断的次数往下数
         repo.clear_flag(tries_key)
         tries = repo.bump_flag(tries_key)
-        detail = f"已尝试拉起 {tries} 次，仍未运行（{state_label}）"
+        detail = f"等待开机到位（已尝试 {tries} 次）"
         if error:
             detail += f"；启动指令失败：{error}"
         event_id = repo.add_event(
             "keepalive_quiet" if quiet else "start",
-            messages.ev("单机保活拉起", messages.obj_server(label)),
+            messages.ev("单机保活拉起中", messages.obj_server(label)),
             detail,
             level="warning",
             server_id=server_id,
@@ -2941,53 +3021,110 @@ def _keepalive_one_shot(
 
 
 def _keepalive_pause_note(
-    server_id: int, label: str, window_text: str, summary: str, steps: list[str]
+    server_id: int,
+    label: str,
+    window_text: str,
+    summary: str,
+    steps: list[str],
+    *,
+    await_stop: bool = False,
 ) -> None:
-    """离开运行窗口：收掉还在转的「保活拉起」，落一条「单机保活暂停」。
+    """离开运行窗口：落一条「单机保活暂停」，把停机这一步也算进过程。
 
     有进行中的拉起事件就复用它，不另开一条：同一件事在列表里出现「一条还在转圈、
     一条已完成」是最容易让人误判的。标题统一改写成「单机保活暂停」。
+
+    await_stop=True 表示这一轮刚下发停机指令、实例还没停稳：事件保持 running，
+    目标状态改成 Stopped，由确认器看到「已确认 Stopped」之后才收尾。就地写
+    「已暂停」是假结论 —— 用户点开只能看到「已下发指令」，然后什么都没有。
     """
-    event = repo.pending_event(server_id, "keepalive")
     repo.clear_flag(f"keepalive_tries:{server_id}")
-    # 这次中断到此为止，下一个「计划内开机」的标记也一起清掉
-    repo.clear_flag(f"keepalive_planned:{server_id}")
+    paused = repo.pending_event(server_id, "keepalive_stop")
+    if paused is not None:
+        # 确认器已经把这条转成「等停机」了：只补过程，收尾交给确认器
+        for text in steps:
+            repo.add_event_progress(int(paused["id"]), text)
+        return
+    event = repo.pending_event(server_id, "keepalive")
+    head = f"已离开运行窗口{_window_bracket(window_text)}，窗口外不再自动拉起"
     if event is not None:
         eid = int(event["id"])
         repo.update_event(eid, title=messages.ev("单机保活暂停", messages.obj_server(label)), level="info")
-        repo.add_event_progress(
-            eid, f"已离开运行窗口{_window_bracket(window_text)}，窗口外不再自动拉起"
-        )
+        if await_stop:
+            repo.update_event(eid, kind="keepalive_pause", detail="等待停机到位")
+        repo.add_event_progress(eid, head)
         for text in steps:
             repo.add_event_progress(eid, text)
+        if await_stop:
+            repo.retarget_event(eid, "Stopped", "keepalive_stop")
+            return
         repo.finish_event(eid, "done", detail=summary)
+        return
+    title = messages.ev("单机保活暂停", messages.obj_server(label))
+    if await_stop:
+        eid = repo.add_event(
+            "keepalive_pause",
+            title,
+            "等待停机到位",
+            server_id=server_id,
+            status="running",
+            pending_status="Stopped",
+            pending_kind="keepalive_stop",
+        )
+        repo.add_event_progress(eid, head)
+        for text in steps:
+            repo.add_event_progress(eid, text)
         return
     _keepalive_one_shot(
         server_id,
         "keepalive_pause",
-        messages.ev("单机保活暂停", messages.obj_server(label)),
+        title,
         summary,
-        [f"已离开运行窗口{_window_bracket(window_text)}，窗口外不再自动拉起", *steps],
+        [head, *steps],
     )
 
 
-def _keepalive_pause_result(server_id: int, mode: str) -> None:
-    """把巡检这轮的停机结果补进那条已收尾的「单机保活暂停」事件。
+def _keepalive_pause_progress(server_id: int, mode: str) -> None:
+    """把巡检这轮的停机结果补进那条「单机保活暂停」事件。
 
-    确认器 5 秒一轮，可能比巡检先发现「已出窗口」：它只负责收尾事件、不碰实例，
-    真正下发停机的是巡检。不回写的话，事件详情永远停在「已离开运行窗口」，
-    看不到「已下发停机（节省停机）」，和手动关机 / 超限停机的事件标准不一致。
+    确认器 5 秒一轮，可能比巡检先发现「已出窗口」：它只把事件转成「等停机」、
+    不碰实例，真正下发停机的是巡检。不回写的话，事件详情永远停在「已离开运行窗口」，
+    看不到「已下发停机指令（节省停机）」，和手动关机 / 超限停机的事件标准不一致。
     """
     event = repo.latest_server_event(server_id, ("keepalive_pause",), max_age=600)
     if event is None:
         return
     label = messages.mode_label(mode) or "停机"
+    done_text = f"已暂停（{label}）"
     # 巡检每分钟都会走到这里（机器一直停在窗口外），detail 已经写对就别再刷新
     # finished_at —— 否则事件的完成时间会一直往后跳。
-    if str(event.get("detail") or "") == f"已暂停（{label}）":
+    if str(event.get("detail") or "") == done_text and str(event.get("status")) == "done":
         return
     repo.add_event_progress(int(event["id"]), f"已下发停机指令（{label}）")
-    repo.finish_event(int(event["id"]), "done", detail=f"已暂停（{label}）")
+    # 还转着就继续等确认器：停机到位才算这条事件的结果
+    if str(event.get("status")) == "running":
+        repo.update_event(int(event["id"]), detail=f"等待停机到位（{label}）")
+        return
+    repo.finish_event(int(event["id"]), "done", detail=done_text)
+
+
+def _keepalive_rest_recovered(server_id: int, mode: str) -> None:
+    """休止时段停机重试成功：给那条「单机保活停机失败」补上结论。
+
+    原来只清标记、事件永远停在「停机指令失败」——点开看不到它到底停成没有，
+    和「凡是要等外部状态的动作都要有结果」这条规则相悖。事件只收一次，
+    同一模式重复进入也不重复写（巡检每分钟都会走到休止分支）。
+    """
+    event = repo.latest_server_event(server_id, ("keepalive_rest_error",), max_age=3600)
+    if event is None:
+        return
+    label = messages.mode_label(mode) or "停机"
+    done_text = f"重试成功，已停机（{label}）"
+    if str(event.get("detail") or "") == done_text:
+        return
+    eid = int(event["id"])
+    repo.add_event_progress(eid, done_text)
+    repo.update_event(eid, detail=done_text)
 
 
 def _keepalive_rest_fail_note(server_id: int, label: str, error: str) -> int:
@@ -3002,7 +3139,7 @@ def _keepalive_rest_fail_note(server_id: int, label: str, error: str) -> int:
 
 
 def _keepalive_resume_note(server: dict[str, Any], window_text: str, status: str) -> int:
-    """回到运行窗口：落一条「单机保活恢复」，并在这里把开机指令发出去。
+    """回到运行窗口：落一条「单机保活拉起中」，并在这里把开机指令发出去。
 
     这条事件同时是后续确认的载体（pending_kind=keepalive），所以它自己就能显示
     「已下发开机指令 → 已确认运行中 → DDNS」的完整过程。
@@ -3011,34 +3148,29 @@ def _keepalive_resume_note(server: dict[str, Any], window_text: str, status: str
     """
     server_id = int(server["id"])
     label = str(server.get("label") or f"#{server_id}")
-    title = messages.ev("单机保活恢复", messages.obj_server(label))
+    # 进行中叫「拉起」，收尾后由确认器改成「已恢复」：事件列表里同一个动作
+    # 只有一个名字，和「单机保活暂停」是同一套读法。
+    title = messages.ev("单机保活拉起中", messages.obj_server(label))
+    done_title = messages.ev("单机保活已恢复", messages.obj_server(label))
     head = f"已进入运行窗口{_window_bracket(window_text)}，恢复自动拉起"
-    # 到点开机是计划内的：置上标记，之后无论走确认器还是「Stopped 就拉起」重试，
-    # 新建的事件都是 keepalive_quiet，不会推「抢占恢复」。确认 Running 后由巡检清掉。
-    # 中间态（Stopping / Starting）尤其要置 —— 这一轮发不出指令，真正拉起发生在下一轮，
-    # 不置的话那次重试会退回普通「保活拉起」，正好踩中会被推通知的坑。
-    if status != "Running":
-        repo.set_flag(f"keepalive_planned:{server_id}")
     if status == "Stopped":
         try:
             aliyun.start_instance(server)
         except Exception as exc:  # noqa: BLE001
             # 指令没发出去：不建 running 事件（没有可等的东西），下一轮巡检会按
             # 「Stopped 就拉起」的老路重试，那条重试事件会正常计数与升级。
-            # 打上 planned 标记：重试成功同样不该发「抢占恢复」，这是计划内开机。
-            repo.set_flag(f"keepalive_planned:{server_id}")
             return _keepalive_one_shot(
                 server_id,
                 "keepalive_resume",
-                title,
-                "已恢复，启动指令待重试",
+                messages.ev("单机保活拉起失败", messages.obj_server(label)),
+                "启动指令失败，下一轮重试",
                 [head, f"启动指令失败：{_brief_exc(exc)}"],
                 level="warning",
             )
         event_id = repo.add_event(
             "keepalive_quiet",
             title,
-            "已恢复，正在拉起",
+            "等待开机到位",
             server_id=server_id,
             status="running",
             pending_status="Running",
@@ -3054,16 +3186,16 @@ def _keepalive_resume_note(server: dict[str, Any], window_text: str, status: str
         return _keepalive_one_shot(
             server_id,
             "keepalive_resume",
-            title,
-            "已恢复，实例在运行",
+            done_title,
+            "运行中",
             [head, "实例已在运行，无需指令"],
         )
     state_label = messages.STATUS_LABELS.get(status, status or "未知")
     return _keepalive_one_shot(
         server_id,
         "keepalive_resume",
-        title,
-        f"已恢复，当前{state_label}",
+        done_title,
+        state_label,
         [head, f"实例当前{state_label}，下一轮继续按状态处理"],
     )
 
