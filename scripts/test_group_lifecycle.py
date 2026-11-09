@@ -189,6 +189,32 @@ class NewGroupBootstrap(_Base):
         self.assertEqual(event["status"], "done")
         self.assertIn("未启用", event["detail"])
 
+    def test_disabled_group_closes_running_event(self):
+        """组停用：正在转的换班事件要收尾，不能永久停在「换班进行中」。"""
+        running_id = repo.add_event(
+            "shift_done",
+            "换班进行中（换班组：整队组）",
+            "等待当班 整队A 到位",
+            group_id=self.group_id,
+            status="running",
+        )
+        repo.upsert_group(
+            {
+                "id": self.group_id,
+                "name": "整队组",
+                "enabled": False,
+                "failover_enabled": True,
+                "members": [
+                    {"server_id": self.a, "hours": 12},
+                    {"server_id": self.b, "hours": 12},
+                ],
+            }
+        )
+        self._reconcile(self.group_id)
+        event = [e for e in self._events(self.group_id) if e["id"] == running_id][0]
+        self.assertEqual(event["status"], "error", event)
+        self.assertIn("停用", event["detail"])
+
 
 class DissolveGroup(_Base):
     def setUp(self) -> None:

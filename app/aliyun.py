@@ -126,7 +126,10 @@ def brief_error(exc: Exception | str) -> str:
         except Exception:  # noqa: BLE001
             message = ""
     if code and code.lower() not in ("sdk.httperror", "sdk.servererror", "sdk.clienterror"):
-        return f"{code}：{message}"[:140] if message else code
+        # 这一支也要过 _redact：部分接口的 Message 会回显请求参数（含
+        # AccessKeyId / Signature），整段照搬等于把凭据写进事件和通知。
+        text = f"{code}：{message}" if message else code
+        return _redact(text)[:140]
     return _redact(text)[:140]
 
 

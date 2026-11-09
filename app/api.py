@@ -741,6 +741,10 @@ def register(app: FastAPI) -> None:
             "keepalives": [
                 {
                     **item,
+                    # 与 /api/v1/keepalives 同一套判定。卡片要据此把窗口外的机器
+                    # 显示成「休止时段」，少了这个字段，窗口外已停机的卡片还会
+                    # 写着「保活运行中」，看着像机器挂了。
+                    "in_window": keepalive_window(item, now)[0],
                     "dns_record": "、".join(books.get("servers", {}).get(int(item["server_id"]), [])),
                 }
                 for item in keepalives
@@ -874,12 +878,15 @@ def register(app: FastAPI) -> None:
             start_day=start_day,
             end_day=end_day,
         )
-        # 改了窗口就当「重新开始」：休止标记留着会让新的时段到点也不恢复
+        # 改了窗口**不清** keepalive_rest：留着它，下一轮巡检看到「已在窗口内」会走
+        # _keepalive_resume_note（安静的窗口恢复）。清掉的话会落到「Stopped 就拉起」，
+        # 被当成抢占恢复，推一条「实例疑被抢占」——那只是用户刚调了时间。
+        # 再打一个 resume_pending 兜住「rest 本来就不存在」的情况（窗口外没停过机）：
+        # 首次拉起同样按窗口恢复处理；实例已是 Running 时巡检会立刻把它清掉。
         item = repo.get_keepalive(keepalive_id) or {}
         server_id = int(item.get("server_id") or 0)
         if server_id:
-            repo.clear_flag(f"keepalive_rest:{server_id}")
-            repo.clear_flag(f"keepalive_rest_fail:{server_id}")
+            repo.set_flag(f"keepalive_resume_pending:{server_id}")
         return {"ok": True}
 
     @app.post("/api/v1/keepalives/{keepalive_id}/toggle")

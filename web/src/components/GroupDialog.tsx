@@ -337,6 +337,10 @@ export default function GroupDialog({
       const start = index === 0 ? '00:00' : current[index - 1]?.end_time || '00:00'
       return current.map((row, i) => {
         if (i !== index) return row
+        // 按班次时长轮换（整组时刻都空）时只改 hours。一改就把时刻写进这一行，
+        // 整组立刻变成「部分成员填时刻」，保存时被「要么全填要么全空」拦住。
+        // 时刻表模式（这行已有起止）才联动回填，保持两边一致。
+        if (!row.start_time && !row.end_time) return { ...row, hours }
         const end = endFromStart(start, hours)
         return { ...row, hours, start_time: start, end_time: end }
       })

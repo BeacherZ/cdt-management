@@ -139,13 +139,17 @@ def refresh_due(now_ts: float | None = None) -> int:
     now = now_ts or time.time()
     refreshed = 0
     bill_ttl = _bill_ttl(config)
+    current_cycle_name = current_cycle(config)
     for server in repo.list_servers():
         if not server.get("secret_configured"):
             continue
         last = float(server.get("billing_updated_at") or 0)
         cycle = str(server.get("billing_cycle") or "")
-        # 跨月立即刷新：上个月的账单数字留着会误导
-        if last and now - last < bill_ttl and cycle == current_cycle(config):
+        # 跨月立即刷新：上个月的账单数字留着会误导。
+        # cycle 为空表示「最近一次没查成」（refresh_server 失败时不写账期），
+        # 这种情况同样要按 TTL 节流 —— 否则缺 BSS 权限的账号每 60 秒就被重打
+        # 一次账单 + 余额，TTL 形同不存在。
+        if last and now - last < bill_ttl and cycle in ("", current_cycle_name):
             continue
         try:
             if refresh_server(int(server["id"])) is not None:

@@ -295,6 +295,12 @@ def sync_record(
     if row is None:
         return ddns.DDNSResult(STATUS_UNBOUND, f"{record} 不在记录名列表里")
 
+    if ip is not None and not ip:
+        # 调用方明确给了空 IP（实例刚起、EIP 还没分配）：这一轮不同步，也**不要**
+        # 按失败把 last_status 覆盖成「IP 无效」——上次的「✅ 已同步」还要留着，
+        # 下一轮拿到真实 IP 再改。以前空串会一路走到 ddns.sync，界面开始报假异常。
+        return ddns.DDNSResult(STATUS_NO_IP, "实例还没有可用的公网 IP", ip="")
+
     if ip is None:
         target = target_info(row.get("target_kind") or "", int(row.get("target_id") or 0))
         if target is None:
@@ -334,8 +340,15 @@ def sync_record(
         # 否则下一次真失败时会被历史标记压住，界面不再提醒
         repo.clear_flags_like(f"dns_fail:{record}:")
     else:
-        # 失败时保留上次成功的 IP：界面上「现在解析到哪」要能看出来是旧的
-        repo.set_dns_state(record, row.get("last_ip") or "", result.status)
+        # 失败时保留上次成功的 IP **与时间**：「现在解析到哪」「上次真同步是什么
+        # 时候」都得能看出来是旧的。以前不传 at，last_at 被刷成当前时刻，界面显示
+        # 「刚刚」但状态是失败，跟事件里的原因自相矛盾。
+        repo.set_dns_state(
+            record,
+            row.get("last_ip") or "",
+            result.status,
+            at=int(row.get("last_at") or 0),
+        )
     return result
 
 
@@ -451,7 +464,10 @@ def _shift_busy(kind: str, target_id: int) -> bool:
         group_ids = shift.groups_of_server(int(target_id))
     else:
         return False
-    kinds = ("shift_done", "manual", "group_new")
+    # failover / shift_failover：当班超限或起不来时，事件 kind 会在转移过程中
+    # 被改写成这两个。漏掉它们，转移期间巡检会以为「没在换班」，抢在换班事件
+    # 之前单独把域名指过去，还多记一条 DNS 事件。
+    kinds = ("shift_done", "manual", "group_new", "failover", "shift_failover")
     return any(repo.running_events(group_id, kinds) for group_id in group_ids)
 
 
@@ -517,7 +533,11 @@ def reconcile(config: dict[str, str], force: bool = False) -> list[dict[str, Any
                     result.detail or target.get("label") or "",
                     level="warning",
                 )
-            # 冷却计时从现在开始：这段时间内不再为这条记录打接口
+            # 冷却计时从现在开始：这段时间内不再为这条记录打接口。
+            # set_flag 是 ON CONFLICT DO NOTHING，必须先清再置：否则 created_at
+            # 停在**第一次**失败的时刻，120 秒后判定永远过期，每轮巡检都重试，
+            # 注释承诺的冷却等于只生效一次。
+            repo.clear_flag(f"dns_retry:{record}")
             repo.set_flag(f"dns_retry:{record}")
     return results
 

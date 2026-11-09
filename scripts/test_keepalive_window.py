@@ -395,6 +395,40 @@ class KeepaliveWindowEngine(unittest.TestCase):
         self.assertEqual(len(quiet), 1, self._titles())
         self.assertEqual(self.sent, [])
 
+    def test_resume_pending_is_cleared_once_running(self):
+        """窗口恢复那轮实例还在 Starting：跑起来后标记必须作废。
+
+        留着它，之后真被抢占时会被当成「窗口到点的延续」——不推通知，
+        标题也错成「窗口恢复」。这里复刻完整顺序：恢复 → Starting →
+        Running → 之后被抢占，必须走 start 并推通知。
+        """
+        self._keepalive(start_time="08:00", end_time="23:00")
+        self._tick(_at(23, 30))
+        self._confirm()
+
+        # 08:30 还在启动中：这一轮只记一条窗口恢复，真正拉起等下一轮
+        self.state = "Starting"
+        self._tick(_at(8, 30))
+        flag = f"keepalive_resume_pending:{self.server_id}"
+        self.assertTrue(repo.get_flag(flag), "恢复那轮没开出机，应留下标记")
+
+        # 跑起来之后标记就该清掉
+        self.state = "Running"
+        self._tick(_at(8, 32))
+        self.assertFalse(
+            repo.get_flag(flag),
+            "Running 之后标记还留着，下一次真抢占的通知会被吞掉",
+        )
+
+        # 之后真被抢占：必须是普通 start，并且照常推通知
+        self.state = "Stopped"
+        self.mode = "StopCharging"
+        self._tick(_at(12, 0))
+        self.state = "Running"
+        self._confirm()
+        self.assertEqual(len(self.sent), 1, "真抢占必须推通知")
+        self.assertIn("抢占恢复", self.sent[0].title)
+
     def test_stopping_state_does_not_resend_stop(self):
         """实例还在 Stopping：每分钟一轮不能重复下发停机指令。"""
         self._keepalive(start_time="08:00", end_time="23:00")
@@ -503,6 +537,29 @@ class KeepaliveWindowEngine(unittest.TestCase):
 
         self.assertEqual(len(self.sent), 1, "真抢占必须推「抢占恢复」")
         self.assertIn("抢占恢复", self.sent[0].title)
+
+    def test_group_takeover_closes_running_pull(self):
+        """保活正拉起时被换班组接管：事件当场收尾，不能等 Running 推「抢占恢复」。
+
+        确认器对保活不设超时，事件留着会一直每 5 秒查一次；等换班组把它拉起来，
+        还会补发一条「疑被抢占」，而这次开机其实是换班组干的。
+        """
+        self._keepalive(start_time="00:00", end_time="23:59")
+        self.state = "Stopped"
+        self.mode = "StopCharging"
+        self._tick(_at(12))
+        self.assertEqual(len(self.started), 1)
+
+        # 这一轮起这台机器被换班组接管，保活让位
+        shift.engine.reconcile_keepalives(
+            repo.get_settings(), _at(12, 1), {self.server_id}
+        )
+
+        running = [e for e in self._events() if e["status"] == "running"]
+        self.assertEqual(running, [], self._titles())
+        closed = [e for e in self._events() if e["title"] == "单机保活暂停（保活机）"][0]
+        self.assertEqual(closed["status"], "done")
+        self.assertIn("换班组接管", closed["detail"])
 
     def test_readd_after_manual_stop_notifies(self):
         """移除保活 → 手动关机 → 重新开 24 小时保活：拉起后要推通知。

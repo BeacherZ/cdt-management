@@ -81,7 +81,9 @@ export default function ServersView({
       return
     }
     const [moved] = next.splice(from, 1)
-    next.splice(to, 0, moved)
+    // 向下拖时 to 是删除前算的：先 splice 掉 from，目标整体左移一位，
+    // 直接插到 to 会落在目标后面（差一格）。向上拖不受影响。
+    next.splice(from < to ? to - 1 : to, 0, moved)
     onReorder(next.map((server) => server.id))
     setDragId(null)
     setOverId(null)

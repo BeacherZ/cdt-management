@@ -329,12 +329,25 @@ def test(config: dict[str, str]) -> DDNSResult:
         return DDNSResult("✅ 连接正常", f"{len(names)} 条记录（DRY RUN，未真的访问 Cloudflare）")
     try:
         headers = _headers(config)
-        zone_id = _resolve_zone_id(headers, config, names[0])
+        # 每条记录各自解析 Zone：多条域名可能落在不同 Zone，以前统一用第一条的
+        # zone_id，第二条必然报「未找到 A 记录」，而实际 sync() 是逐条解析的。
+        # 网络异常也在 try 内 —— 以前只包了 _resolve_zone_id，_find_record 抛出
+        # 去会变成接口 500，前端拿不到任何可读提示。
+        zones: list[str] = []
+        missing: list[str] = []
+        for name in names:
+            zone_id = _resolve_zone_id(headers, config, name)
+            zones.append(zone_id)
+            if not _find_record(headers, zone_id, name):
+                missing.append(name)
     except Exception as exc:  # noqa: BLE001
         return DDNSResult(STATUS_ERROR, str(exc))
 
-    missing = [name for name in names if not _find_record(headers, zone_id, name)]
     if missing:
         return DDNSResult(STATUS_NO_RECORD_ID, f"{'、'.join(missing)} 未找到 A 记录")
-    detail = f"Zone {zone_id[:8]}… / {names[0]} 已就绪" if len(names) == 1 else f"{len(names)} 条记录均就绪"
+    detail = (
+        f"Zone {zones[0][:8]}… / {names[0]} 已就绪"
+        if len(names) == 1
+        else f"{len(names)} 条记录均就绪"
+    )
     return DDNSResult("✅ 连接正常", detail)

@@ -95,7 +95,8 @@ export default function DNSView({
       return
     }
     const [moved] = next.splice(from, 1)
-    next.splice(to, 0, moved)
+    // 与服务器列表同一处偏移：向下拖要减一，否则会插到目标后面。
+    next.splice(from < to ? to - 1 : to, 0, moved)
     setDragRecord(null)
     setOverRecord(null)
     onReorder(next)

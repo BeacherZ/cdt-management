@@ -228,6 +228,24 @@ class DnsRetryCooldown(_Base):
         dns.reconcile(config, force=True)
         self.assertEqual(len(self.calls), 2, self.calls)
 
+    def test_cooldown_restarts_after_each_failure(self):
+        """冷却按「最近一次失败」重新计时，别 120 秒后每轮都重试。"""
+        config = repo.get_settings()
+        dns.reconcile(config)
+        self.assertEqual(len(self.calls), 1, self.calls)
+        # 把标记推到 5 分钟前：冷却已过，这一轮应当重试并重置计时
+        db.execute(
+            "UPDATE flags SET created_at = created_at - 300 "
+            "WHERE key='dns_retry:demo.example.com'"
+        )
+        dns.reconcile(config)
+        self.assertEqual(len(self.calls), 2, self.calls)
+        self.assertLess(
+            repo.flag_age("dns_retry:demo.example.com"),
+            300,
+            "失败后没有重置冷却计时，下一次会立刻重试",
+        )
+
     def test_success_clears_cooldown(self):
         config = repo.get_settings()
         dns.reconcile(config)

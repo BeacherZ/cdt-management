@@ -35,6 +35,26 @@ ORIGIN_NEW_GROUP = "new_group"
 
 TRANSIENT_STATUS = {"Starting", "Pending", "Stopping"}
 
+# 换班组事件的全部 kind。组停用 / 排不出当班时按这份清单收尾，
+# 否则「换班进行中」会一直转圈，直到 14 天清理才消失。
+_GROUP_EVENT_KINDS = (
+    "shift_done",
+    "manual",
+    "group_new",
+    "failover",
+    "shift_failover",
+    "recovery",
+)
+
+
+def _close_group_events(group_id: int, note: str) -> None:
+    """流程走不下去了（组停用 / 启用成员不足）：把该组还在转的事件收尾。"""
+    for event in repo.running_events(group_id, _GROUP_EVENT_KINDS):
+        event_id = int(event["id"])
+        repo.add_event_progress(event_id, note)
+        repo.finish_event(event_id, "error", note)
+
+
 # 同一台机器在同一个班次里重复下发停机指令的最小间隔（秒）。
 # 只有在「状态读不到、库里看着还在跑」时才会重复触发，给它一个节流。
 _BREAKER_STOP_COOLDOWN = 120
@@ -620,7 +640,16 @@ class Engine:
             if not item.get("enabled"):
                 continue
             if server_id in grouped:
-                # 换班组会接管这台机器，单机保活让位，避免两边互相拉扯
+                # 换班组会接管这台机器，单机保活让位，避免两边互相拉扯。
+                # 正在转的保活事件必须当场收掉：确认器对保活不设超时，留着它会
+                # 一直每 5 秒查一次；等换班组把它拉起来，还会补发一条「疑被抢占」，
+                # 而这次开机其实是换班组干的。
+                _close_keepalive_event(
+                    server_id,
+                    str(item.get("label") or f"#{server_id}"),
+                    "已由换班组接管，停止保活拉起",
+                )
+                repo.clear_flag(f"keepalive_resume_pending:{server_id}")
                 flag = f"keepalive_conflict:{server_id}"
                 if not repo.get_flag(flag):
                     repo.set_flag(flag)
@@ -632,6 +661,10 @@ class Engine:
                         server_id=server_id,
                     )
                 continue
+
+            # 已经交回保活（换班组解散 / 停用 / 成员不足）：清掉「已停用」的去重标记，
+            # 下次再被接管才会重新提醒一次，否则这条提示一辈子只出现一次。
+            repo.clear_flag(f"keepalive_conflict:{server_id}")
 
             server = repo.get_server(server_id, decrypt_secret=True)
             if server is None:
@@ -759,6 +792,11 @@ class Engine:
                 # 注意只认 Running——Starting / Pending 这类中间态不动计数，
                 # 否则「停→启动中→又被抢→停」会来回清零，里程碑永远到不了。
                 repo.clear_flag(f"keepalive_tries:{server_id}")
+                # 窗口恢复那轮若是 Starting（还没停稳就重开），会留一个
+                # keepalive_resume_pending：「这次是窗口到点」只对紧邻的下一轮有效。
+                # 现在已经跑起来了，标记必须作废，否则将来真被抢占时会被当成
+                # 窗口恢复 —— 不推通知、标题也错成「窗口恢复」。
+                repo.clear_flag(f"keepalive_resume_pending:{server_id}")
             results.append(
                 {
                     "keepalive": server_id,
@@ -975,6 +1013,9 @@ class Engine:
         name = group.get("name") or f"#{group_id}"
 
         if not group.get("enabled"):
+            # 停用组时把仍在转的事件收尾：否则保存停用后，最近事件里那条
+            # 「换班进行中」会一直转圈，看不出是被停用中止的。
+            _close_group_events(group_id, "换班组已停用，本节流程中止")
             return {"group_id": group_id, "skipped": "disabled"}
 
         # 时刻表模式需要知道时区
@@ -986,6 +1027,8 @@ class Engine:
 
         picked = actual_duty(group, now_ts)
         if picked is None:
+            # 所有成员都停用 / 只剩一台：排不出当班，正在转的事件同样要收尾
+            _close_group_events(group_id, "启用成员不足两台，排不出当班，流程中止")
             return {"group_id": group_id, "skipped": "成员不足两台"}
         duty_member, shift_start = picked
         slot_key = str(shift_start)
@@ -1967,7 +2010,11 @@ class Engine:
         run = repo.get_run(group_id, slot_key) or {}
         event_id = int(run.get("event_id") or 0)
         if event_id:
-            return event_id
+            # 只复用还在转的那条。已经收尾的事件（组停用后重启、恢复事件已结算）
+            # 再往上写，会把它改题成「换班完成」，时间戳还停在上一次。
+            current = repo.get_event(event_id)
+            if current and str(current.get("status") or "") == "running":
+                return event_id
         event_id = repo.add_event(
             "shift_done",
             messages.ev("换班进行中", messages.obj_group(str(name))),
@@ -2470,15 +2517,20 @@ class Engine:
         """
         from_label = current.get("label") or current.get("server_id")
         to_label = target.get("label") or target.get("server_id")
-        # 上一次手动换班还没走完就又被点了一次：那条事件马上会被新事件顶掉
+        # 上一次换班还没走完就又被点了一次：那条事件马上会被新事件顶掉
         # （run.event_id 被覆盖），界面上它就永远停在「进行中」转圈。
         # 先把它收掉并写明原因，别留一条转不完的假进度。
-        for stale in repo.running_events(group_id, ("manual", "shift_done")):
+        # 新建组 / 故障转移 / 恢复这类事件同样会被顶掉，一并收尾。
+        for stale in repo.running_events(group_id, _GROUP_EVENT_KINDS):
+            stale_id = int(stale["id"])
             repo.add_event_progress(
-                int(stale["id"]), f"已被新的手动换班取代（改为 {to_label}）"
+                stale_id, f"已被新的手动换班取代（改为 {to_label}）"
             )
-            repo.update_event(int(stale["id"]), title=messages.ev("手动换班已取消", messages.obj_group(str(name))))
-            repo.finish_event(int(stale["id"]), "done")
+            if str(stale.get("kind") or "") in ("manual", "shift_done"):
+                repo.update_event(
+                    stale_id, title=messages.ev("手动换班已取消", messages.obj_group(str(name)))
+                )
+            repo.finish_event(stale_id, "done")
         event_id = repo.add_event(
             "manual",
             messages.ev("手动换班进行中", messages.obj_group(str(name))),
