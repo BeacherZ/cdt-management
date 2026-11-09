@@ -209,7 +209,7 @@ def _confirm_pending_events() -> None:
             # 运行窗口外：立刻收尾，别再等状态 —— 一是窗口外本来就不该拉起，
             # 二是万一它这会儿正好到 Running，确认器会推一条「抢占恢复」，而这次
             # 停机/不开机是计划的，推「疑被抢占」是误导。收尾时顺手置上休止标记，
-            # 巡检那一轮就不会再记一条同名的「单机保活暂停」。
+            # 巡检那一轮就不会再记一条同名的「单机保活窗口暂停」。
             if keepalive_schedules is None:
                 keepalive_schedules = repo.keepalive_schedules()
             schedule = keepalive_schedules.get(server_id)
@@ -222,7 +222,7 @@ def _confirm_pending_events() -> None:
                         event_id, f"已离开运行窗口{window_note}，窗口外不再自动拉起"
                     )
                     repo.update_event(
-                        event_id, title=messages.ev("单机保活暂停", messages.obj_server(label)), level="info", kind="keepalive_pause"
+                        event_id, title=messages.ev("单机保活窗口暂停", messages.obj_server(label)), level="info", kind="keepalive_pause"
                     )
                     # 不能就地写成「已暂停」：这时停机指令还没下发，写下去就是假结论。
                     # 改成等 Stopped，巡检下发停机、确认器看到停稳后才收尾，
@@ -231,7 +231,6 @@ def _confirm_pending_events() -> None:
                     repo.update_event(event_id, detail="等待停机到位")
                     repo.set_flag(f"keepalive_rest:{server_id}")
                     repo.clear_flag(f"keepalive_tries:{server_id}")
-                    repo.clear_flag(f"keepalive_live:{server_id}")
                     continue
 
         # 超时兜底：别让一个卡住的事件永远占着转圈。保活除外 —— 它本来就该
@@ -272,10 +271,6 @@ def _confirm_pending_events() -> None:
 
         if _status_reached(info, pending):
             suffix = messages.status_suffix(info.status, info.stopped_mode)
-            # 真的看到 Running 了：这是判断「下次停机是被抢占还是我们自己让它停的」
-            # 的唯一依据。巡检和确认器都写这个标记，谁先看到都算数。
-            if pending == "Running":
-                repo.set_flag(f"keepalive_live:{server_id}")
 
             # server 是轮询开始前取的快照：实例刚停机时它的 public_ip 还是空的。
             # 通知里的「IP / 地域 / 状态」行要用刚查到的实时值，否则报告会带着空 IP 发出去。
@@ -341,20 +336,21 @@ def _confirm_pending_events() -> None:
                         record(f"DDNS：{ddns_status}", "❌ DDNS 异常")
                     else:
                         record(f"DDNS：{ddns_report.detail}", ddns_report.brief)
-                # 标题从进行时的「保活拉起」改成完成态「已恢复」：这条事件在列表里
-                # 已经收起，还挂着「拉起」读起来像还在进行。到点开机和抢占恢复
-                # 收尾后是同一个结论，标题也就该是同一个。
+                # 收尾标题跟着来源走，别让两种拉起在列表里长得一样：
+                # 窗口到点开的（kind=keepalive_quiet）写「单机保活窗口恢复」，
+                # 其余（掉线被抢占、手动关机后重新开保活、刚加进保活）写
+                # 「单机保活抢占恢复」。进行时叫「…恢复中」，这里只换时态。
+                quiet = str(event.get("kind") or "") == "keepalive_quiet"
+                done_title = "单机保活窗口恢复" if quiet else "单机保活抢占恢复"
                 repo.update_event(
-                    event_id, title=messages.ev("单机保活已恢复", messages.obj_server(str(server.get('label') or '')))
+                    event_id,
+                    title=messages.ev(done_title, messages.obj_server(str(server.get('label') or ''))),
                 )
                 # 这次中断结束了，重试计数归零，下一次从 1 重新数
                 repo.clear_flag(f"keepalive_tries:{server_id}")
-                # 到点开机不是「被抢占」：这类事件一律不发「抢占恢复」通知，
-                # 只在事件列表里留痕（用户明确要求窗口外的拉起不推通知）。
-                if (
-                    config.get("notify_on_keepalive") == "1"
-                    and str(event.get("kind") or "") != "keepalive_quiet"
-                ):
+                # 只有窗口到点那条不发通知：那是计划内的自动开关，推「疑被抢占」
+                # 会让人以为机器被阿里云回收了。其余拉起一律走抢占恢复渠道。
+                if config.get("notify_on_keepalive") == "1" and not quiet:
                     try:
                         results = notify.send_all(
                             config,

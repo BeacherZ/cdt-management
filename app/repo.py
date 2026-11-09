@@ -592,15 +592,15 @@ def add_keepalive(
 def _clear_keepalive_flags(server_id: int) -> None:
     """清掉这台机器的保活临时标记。暂停 / 移出 / 改窗口后必须清：
 
-    keepalive_rest 留着，下一轮巡检会以为「还在休止时段」而不发「已恢复」；
-    keepalive_live 留着，之后真的被抢占也不会推「抢占恢复」通知。
+    keepalive_rest 留着，下一轮巡检会以为「还在休止时段」而不发「窗口恢复」；
+    keepalive_resume_pending 留着，下次中断会被当成「窗口到点的延续」而不推通知。
     """
     db.execute(
         "DELETE FROM flags WHERE key IN (?,?,?)",
         (
             f"keepalive_rest:{server_id}",
             f"keepalive_rest_fail:{server_id}",
-            f"keepalive_live:{server_id}",
+            f"keepalive_resume_pending:{server_id}",
         ),
     )
 

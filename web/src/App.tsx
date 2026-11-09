@@ -356,7 +356,7 @@ export default function App() {
       // 手动换班要等引擎锁（后台可能正在对账），再走完整轮换班流程
       await post(`/api/v1/groups/${group.id}/switch`, undefined, SLOW_TIMEOUT_MS)
       await loadAll()
-      toast('正在切到下一台，完成后会推送报告', 'success')
+      toast('正在切到下一台，完成后会推送通知', 'success')
     } catch (error) {
       toast(error instanceof Error ? error.message : '换班失败', 'error')
     } finally {

@@ -691,8 +691,7 @@ class Engine:
                 repo.clear_flag(f"limit_stop:{messages.SCOPE_KEEPALIVE}:{server_id}")
 
             status = str(server.get("instance_status") or "")
-            live_flag = f"keepalive_live:{server_id}"
-            # 刚从休止时段回来：先记一条「单机保活拉起中」，开机指令也在这里发。
+            # 刚从休止时段回来：先记一条「单机保活窗口恢复中」，开机指令也在这里发。
             # planned=True 时本轮不再走下面的「Stopped 就拉起」，否则一条恢复事件
             # 后面又会紧跟着建一条「保活拉起」，同一件事被记两遍。
             planned = False
@@ -709,11 +708,16 @@ class Engine:
                 # 事件只保留一条：一台机器一直起不来，重试次数续写进同一条事件的进度，
                 # 不再每次重试新开一条「保活拉起」。
                 #
-                # 是不是「被抢占」只看一个依据：我们最后一次看到它的时候它还在跑。
-                # 自己停的（窗口外休止、流量超限、手动停机）都会把这个标记清掉，
-                # 所以到点开机、刚加进保活、手动停过之后被拉起，一律不推「抢占恢复」。
-                preempted = bool(repo.get_flag(live_flag))
-                repo.clear_flag(live_flag)
+                # 走到这里就一定是「非窗口起点」的拉起：窗口到点那条走的是上面的
+                # _keepalive_resume_note，压根不进这个分支。所以这里不再判断「是不是
+                # 上一轮还看着它在跑」—— 掉线被抢占、手动关机后重新开保活、刚加进
+                # 保活，对用户来说都是「我要求它在线，现在它不在」，一律走抢占恢复
+                # 渠道并推通知；窗口自动开关那两端才是安静的。
+                #
+                # 唯一例外是上一轮窗口恢复没能开出机（还在 Stopping / 指令失败），
+                # 那一次留了标记：这一轮补拉仍算「窗口到点」，继续安静。
+                resume_pending = bool(repo.get_flag(f"keepalive_resume_pending:{server_id}"))
+                repo.clear_flag(f"keepalive_resume_pending:{server_id}")
                 state_label = messages.STATUS_LABELS.get(status, status or "未知")
                 pending = repo.pending_event(server_id, "keepalive")
                 try:
@@ -729,9 +733,7 @@ class Engine:
                         label=str(server.get("label") or f"#{server_id}"),
                         state_label=state_label,
                         pending=pending,
-                        # 上一轮还看着它在跑、这一轮已经停了 = 真被抢占；
-                        # 其余都是计划内的拉起，不进通知渠道
-                        quiet=not preempted,
+                        quiet=resume_pending,
                     )
                     if repo.get_flag(f"keepalive_fail:{server_id}"):
                         repo.clear_flag(f"keepalive_fail:{server_id}")
@@ -748,7 +750,7 @@ class Engine:
                         # _brief_exc 会剥掉异常自带的「启动实例失败：」前缀，
                         # 否则概览里会出现「启动指令失败：启动实例失败：…」两层失败
                         error=_brief_exc(exc),
-                        quiet=not preempted,
+                        quiet=resume_pending,
                     )
                 # 已经 Running 时不再下发：抢占恢复的通知由确认器在「Running 到位」
                 # 那一刻统一发出（scheduler._confirm_pending_events）。
@@ -757,8 +759,6 @@ class Engine:
                 # 注意只认 Running——Starting / Pending 这类中间态不动计数，
                 # 否则「停→启动中→又被抢→停」会来回清零，里程碑永远到不了。
                 repo.clear_flag(f"keepalive_tries:{server_id}")
-                # 记下「这一轮它确实在跑」：下一轮若变成 Stopped，就是被抢占。
-                repo.set_flag(live_flag)
             results.append(
                 {
                     "keepalive": server_id,
@@ -784,9 +784,6 @@ class Engine:
         label = str(server.get("label") or f"#{server_id}")
         rest_flag = f"keepalive_rest:{server_id}"
         fail_flag = f"keepalive_rest_fail:{server_id}"
-        # 这台是「我们自己让它停的」：之后窗口开了再拉起不属于被抢占，不推通知。
-        # 每次走到休止分支都清一次，覆盖「实例本来就停着」和「这一轮才下发停机」两种情况。
-        repo.clear_flag(f"keepalive_live:{server_id}")
         # 确认器抢先发现「已出窗口」时会把那条还在转的事件改成「等停机」
         # 并置上这个标记，这里就别再记一条同名的。
         logged = bool(repo.get_flag(rest_flag))
@@ -883,8 +880,6 @@ class Engine:
             repo.clear_flag(f"limit_stop_err:{scope}:{server_id}")
 
         repo.set_flag(flag)
-        # 停机是我们下的手：之后保活再把它拉起来，不该推「抢占恢复」
-        repo.clear_flag(f"keepalive_live:{server_id}")
         # 标题与通知口径一致：单机保活还要说明保活已暂停，否则事件只说「已停机」，
         # 用户不知道这台还会不会被自动拉起。
         # 标题只留一个逗号：保活超限的结论是「保活已暂停」，停机模式交给概览；
@@ -2612,8 +2607,6 @@ class Engine:
             aliyun.start_instance(server)
         else:
             stop_mode = stop_server_by_pref(server)
-            # 手动停机是我们下的手：保活下一轮把它拉起来不推「抢占恢复」
-            repo.clear_flag(f"keepalive_live:{server_id}")
 
         # 2) 建 running 事件，交给后台确认器轮询确认，不在这里同步等状态。
         detail = f"等待{label}到位"
@@ -2932,9 +2925,10 @@ def _keepalive_retry_note(
     error 非空表示这次连开机指令都没发出去：概览补上原因，事件仍然是 running
     —— 下一轮还会继续试，不是终局。
 
-    quiet=True 表示这次中断是计划内的（运行窗口开了、到点该跑），新建事件时
-    打上 keepalive_quiet 标记：确认器据此不发「抢占恢复」通知。到点开机不是被
-    抢占，推一条「实例疑被抢占」会让人以为机器被阿里云回收了。
+    quiet=True 只留给「窗口恢复那一轮没开成、这一轮补拉」的情况：窗口到点本来是
+    安静的，不能因为中间隔了一轮就变成「疑被抢占」。判定依据是巡检读到的
+    keepalive_resume_pending 标记，不是「上一轮有没有看到它在跑」—— 后者会把
+    「手动关机后重新开保活」误算成计划内，用户明明要求它在线却收不到消息。
     """
     tries_key = f"keepalive_tries:{server_id}"
     if pending:
@@ -2953,7 +2947,10 @@ def _keepalive_retry_note(
             detail += f"；启动指令失败：{error}"
         event_id = repo.add_event(
             "keepalive_quiet" if quiet else "start",
-            messages.ev("单机保活拉起中", messages.obj_server(label)),
+            messages.ev(
+                "单机保活窗口恢复中" if quiet else "单机保活抢占恢复中",
+                messages.obj_server(label),
+            ),
             detail,
             level="warning",
             server_id=server_id,
@@ -2977,7 +2974,7 @@ def _keepalive_retry_note(
 
 
 def _close_keepalive_event(server_id: int, label: str, note: str) -> None:
-    """保活被暂停（流量超限停机）时，把那条还在转的「保活拉起」收尾。
+    """保活被暂停（流量超限停机）时，把那条还在转的「抢占恢复」收尾。
 
     不接这一手，事件会永远 running：确认器对保活**故意不设超时**（它要「一直试
     到起来」），于是会一直每 5 秒查一次实例状态；更糟的是等流量包重置、保活恢复
@@ -3029,10 +3026,10 @@ def _keepalive_pause_note(
     *,
     await_stop: bool = False,
 ) -> None:
-    """离开运行窗口：落一条「单机保活暂停」，把停机这一步也算进过程。
+    """离开运行窗口：落一条「单机保活窗口暂停」，把停机这一步也算进过程。
 
     有进行中的拉起事件就复用它，不另开一条：同一件事在列表里出现「一条还在转圈、
-    一条已完成」是最容易让人误判的。标题统一改写成「单机保活暂停」。
+    一条已完成」是最容易让人误判的。标题统一改写成「单机保活窗口暂停」。
 
     await_stop=True 表示这一轮刚下发停机指令、实例还没停稳：事件保持 running，
     目标状态改成 Stopped，由确认器看到「已确认 Stopped」之后才收尾。就地写
@@ -3049,7 +3046,7 @@ def _keepalive_pause_note(
     head = f"已离开运行窗口{_window_bracket(window_text)}，窗口外不再自动拉起"
     if event is not None:
         eid = int(event["id"])
-        repo.update_event(eid, title=messages.ev("单机保活暂停", messages.obj_server(label)), level="info")
+        repo.update_event(eid, title=messages.ev("单机保活窗口暂停", messages.obj_server(label)), level="info")
         if await_stop:
             repo.update_event(eid, kind="keepalive_pause", detail="等待停机到位")
         repo.add_event_progress(eid, head)
@@ -3060,7 +3057,7 @@ def _keepalive_pause_note(
             return
         repo.finish_event(eid, "done", detail=summary)
         return
-    title = messages.ev("单机保活暂停", messages.obj_server(label))
+    title = messages.ev("单机保活窗口暂停", messages.obj_server(label))
     if await_stop:
         eid = repo.add_event(
             "keepalive_pause",
@@ -3085,7 +3082,7 @@ def _keepalive_pause_note(
 
 
 def _keepalive_pause_progress(server_id: int, mode: str) -> None:
-    """把巡检这轮的停机结果补进那条「单机保活暂停」事件。
+    """把巡检这轮的停机结果补进那条「单机保活窗口暂停」事件。
 
     确认器 5 秒一轮，可能比巡检先发现「已出窗口」：它只把事件转成「等停机」、
     不碰实例，真正下发停机的是巡检。不回写的话，事件详情永远停在「已离开运行窗口」，
@@ -3139,7 +3136,7 @@ def _keepalive_rest_fail_note(server_id: int, label: str, error: str) -> int:
 
 
 def _keepalive_resume_note(server: dict[str, Any], window_text: str, status: str) -> int:
-    """回到运行窗口：落一条「单机保活拉起中」，并在这里把开机指令发出去。
+    """回到运行窗口：落一条「单机保活窗口恢复中」，并在这里把开机指令发出去。
 
     这条事件同时是后续确认的载体（pending_kind=keepalive），所以它自己就能显示
     「已下发开机指令 → 已确认运行中 → DDNS」的完整过程。
@@ -3148,25 +3145,31 @@ def _keepalive_resume_note(server: dict[str, Any], window_text: str, status: str
     """
     server_id = int(server["id"])
     label = str(server.get("label") or f"#{server_id}")
-    # 进行中叫「拉起」，收尾后由确认器改成「已恢复」：事件列表里同一个动作
-    # 只有一个名字，和「单机保活暂停」是同一套读法。
-    title = messages.ev("单机保活拉起中", messages.obj_server(label))
-    done_title = messages.ev("单机保活已恢复", messages.obj_server(label))
+    # 进行中叫「窗口恢复中」，收尾后由确认器改成「窗口恢复」：事件列表里同一个
+    # 动作只有一个名字，和「单机保活窗口暂停」是同一套读法。
+    title = messages.ev("单机保活窗口恢复中", messages.obj_server(label))
+    done_title = messages.ev("单机保活窗口恢复", messages.obj_server(label))
     head = f"已进入运行窗口{_window_bracket(window_text)}，恢复自动拉起"
+    # 这一轮开不了机（指令失败 / 还在 Stopping）：真正拉起要等下一轮巡检的
+    # 「Stopped 就拉起」，那条路本来属于抢占恢复，会推通知。留一个标记把
+    # 「这次是窗口到点」传下去，下一轮建事件时仍然走安静渠道。
+    resume_flag = f"keepalive_resume_pending:{server_id}"
     if status == "Stopped":
         try:
             aliyun.start_instance(server)
         except Exception as exc:  # noqa: BLE001
             # 指令没发出去：不建 running 事件（没有可等的东西），下一轮巡检会按
             # 「Stopped 就拉起」的老路重试，那条重试事件会正常计数与升级。
+            repo.set_flag(resume_flag)
             return _keepalive_one_shot(
                 server_id,
                 "keepalive_resume",
-                messages.ev("单机保活拉起失败", messages.obj_server(label)),
+                messages.ev("单机保活窗口恢复失败", messages.obj_server(label)),
                 "启动指令失败，下一轮重试",
                 [head, f"启动指令失败：{_brief_exc(exc)}"],
                 level="warning",
             )
+        repo.clear_flag(resume_flag)
         event_id = repo.add_event(
             "keepalive_quiet",
             title,
@@ -3183,6 +3186,7 @@ def _keepalive_resume_note(server: dict[str, Any], window_text: str, status: str
         repo.bump_flag(f"keepalive_tries:{server_id}")
         return event_id
     if status == "Running":
+        repo.clear_flag(resume_flag)
         return _keepalive_one_shot(
             server_id,
             "keepalive_resume",
@@ -3190,6 +3194,7 @@ def _keepalive_resume_note(server: dict[str, Any], window_text: str, status: str
             "运行中",
             [head, "实例已在运行，无需指令"],
         )
+    repo.set_flag(resume_flag)
     state_label = messages.STATUS_LABELS.get(status, status or "未知")
     return _keepalive_one_shot(
         server_id,

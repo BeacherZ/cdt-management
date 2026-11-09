@@ -124,7 +124,7 @@ class EventFlow(unittest.TestCase):
         ) = self._orig
 
     def test_1_keepalive_notify_is_last(self):
-        """保活拉起：已确认 → DDNS → 报告已发送，通知永远是最后一步。"""
+        """保活拉起：已确认 → DDNS → 通知已发送，通知永远是最后一步。"""
         server_id = _make_server("测试机-保活", "i-test-event-01")
         # 保活事件只可能出现在「这台还在保活名单里」的时候；确认器发现它被移出
         # 保活会直接把事件收尾，所以这里要把它登记进保活，模拟真实状态。
@@ -152,7 +152,7 @@ class EventFlow(unittest.TestCase):
                 "已下发启动指令（原状态 Stopped）",
                 "已确认 Running（运行中）",
                 "DDNS：✅ 已同步 1.2.3.4（首次指向）",
-                "报告已发送",
+                "通知已发送",
             ],
         )
         event = _event(event_id)
@@ -271,7 +271,7 @@ class EventFlow(unittest.TestCase):
         # 通知里照样告诉用户域名没跟着走（报告是另一回事，不因事件省略而省略）
         self.assertEqual(len(self.sent), 1)
         # 完成态标题：不能还留着进行时的「保活拉起」
-        self.assertEqual(_event(event_id).get("title"), "单机保活已恢复（测试机-未绑定）")
+        self.assertEqual(_event(event_id).get("title"), "单机保活抢占恢复（测试机-未绑定）")
 
 
 if __name__ == "__main__":

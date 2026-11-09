@@ -55,7 +55,7 @@ def enabled_channels(config: dict[str, str]) -> list[str]:
 
 
 def send_all(config: dict[str, str], message: Message) -> dict[str, str]:
-    """逐个渠道发送，返回 {渠道: 结果}。换班报告里要回显这个结果。"""
+    """逐个渠道发送，返回 {渠道: 结果}。换班通知里要回显这个结果。"""
     results: dict[str, str] = {}
     for channel in enabled_channels(config):
         try:
@@ -67,12 +67,15 @@ def send_all(config: dict[str, str], message: Message) -> dict[str, str]:
     return results
 
 
-def result_text(results: dict[str, str], what: str = "报告") -> str:
+def result_text(results: dict[str, str], what: str = "通知") -> str:
     """把 send_all 的返回值翻成一句写进事件进度的话。
 
     事件详情里「通知」永远是最后一步，但只写「已发送」是不诚实的：
     渠道失败、压根没配渠道都得说清楚，否则用户以为推送成功去等消息。
     没启用任何渠道时返回空串 —— 什么都没发，不必在事件里占一行。
+
+    what 默认「通知」：设置页里这一栏就叫「通知」，事件里再叫「报告」是同一件事
+    两个名字（通知消息的标题仍然叫「…报告」，那是发给人的消息本身）。
     """
     failed = [channel for channel, state in results.items() if state != "ok"]
     if failed:
@@ -82,7 +85,7 @@ def result_text(results: dict[str, str], what: str = "报告") -> str:
     return f"{what}已发送"
 
 
-def note_notify(event_id: int, results: dict[str, str], what: str = "报告") -> None:
+def note_notify(event_id: int, results: dict[str, str], what: str = "通知") -> None:
     """把发送结果写成事件的最后一条进度。没渠道 / 没有事件时不做任何事。"""
     from . import repo  # 延迟导入，避免模块级循环依赖
 

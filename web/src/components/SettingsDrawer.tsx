@@ -779,7 +779,7 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
                   />
                   <Switch
                     label="实例恢复运行"
-                    hint="抢占恢复与单机保活恢复共用：实例被停掉后自动拉起成功时提醒"
+                    hint="实例被停掉后自动拉起成功时提醒（掉线被抢占、手动关机后重新开保活都算）；运行窗口到点的自动开关不提醒"
                     checked={form.notify_on_recovery || form.notify_on_keepalive}
                     onChange={(value) =>
                       patch((draft) => {

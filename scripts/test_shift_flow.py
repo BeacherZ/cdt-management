@@ -214,7 +214,7 @@ class ManualSwitch(unittest.TestCase):
         self.assertTrue(any("已下发启动当班" in t for t in texts), texts)
         self.assertTrue(any("已下发停机" in t for t in texts), texts)
         # 全部确认后发报告，报告是详情里的最后一步
-        self.assertEqual(texts[-2:], ["全部状态确认完毕", "报告已发送"], texts)
+        self.assertEqual(texts[-2:], ["全部状态确认完毕", "通知已发送"], texts)
         # 手动换班和故障转移无关
         self.assertFalse([e for e in events if e["title"].endswith("故障转移")], events)
 
@@ -602,7 +602,7 @@ class ManualSwitchTimetable(unittest.TestCase):
         texts = [step["text"] for step in manual[0]["progress"]]
         self.assertTrue(any("已下发启动当班" in t for t in texts), texts)
         self.assertTrue(any("已下发停机" in t for t in texts), texts)
-        self.assertEqual(texts[-2:], ["全部状态确认完毕", "报告已发送"], texts)
+        self.assertEqual(texts[-2:], ["全部状态确认完毕", "通知已发送"], texts)
         self.assertFalse([e["title"] for e in events if e["title"].endswith("故障转移")], events)
         # 报告标题「手动换班完成」
         self.assertEqual(self.sent, ["CDT 手动换班完成报告（换班组：时刻表组）"], self.sent)

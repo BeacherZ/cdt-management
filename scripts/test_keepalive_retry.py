@@ -209,7 +209,7 @@ class KeepaliveRetry(unittest.TestCase):
         self.assertEqual(len(events), 1, [e["title"] for e in events])
         event = events[0]
         self.assertEqual(event["status"], "running", "还在重试，不能标成已完成")
-        self.assertIn("保活拉起", event["title"])
+        self.assertIn("单机保活抢占恢复中", event["title"])
         self.assertIn("已尝试 3 次", event["detail"])
         self.assertIn("启动指令失败", event["detail"])
         self.assertIn("NoStock", event["detail"])
@@ -306,11 +306,11 @@ class KeepaliveEventLifecycle(unittest.TestCase):
         events = repo.list_events(limit=10)
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["status"], "done")
-        self.assertEqual(events[0]["title"], "单机保活已恢复（躺一天的机器）")
+        self.assertEqual(events[0]["title"], "单机保活抢占恢复（躺一天的机器）")
         self.assertFalse(repo.get_flag(f"keepalive_tries:{self.server_id}"))
 
     def test_limit_stop_closes_running_keepalive_event(self):
-        """超限停机：那条还在转的「保活拉起」当场收尾。
+        """超限停机：那条还在转的「抢占恢复」当场收尾。
 
         确认器对保活故意不设超时（要「一直试到起来」），所以不主动收的话这条
         事件永远 running、每 5 秒打一次状态接口；等流量包重置、保活恢复，还会
