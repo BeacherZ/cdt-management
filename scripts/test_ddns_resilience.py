@@ -139,8 +139,11 @@ class DdnsWaitGivesUp(_Base):
                 )
 
         shift._refresh = _fake_refresh  # noqa: SLF001
-        # 域名同步永远失败
-        shift.engine._sync_ddns = lambda *a, **kw: "❌ 更新失败"  # noqa: SLF001
+        # 域名同步永远失败（_sync_ddns 现在回的是 DDNSReport，不再是字符串）
+        shift.engine._sync_ddns = lambda *a, **kw: dns.report(  # noqa: SLF001
+            ["demo.example.com"],
+            [ddns.DDNSResult(ddns.STATUS_UPDATE_FAILED, "HTTP 500")],
+        )
         self._orig_records_of = repo.dns_records_of
         repo.dns_records_of = (
             lambda kind, target_id: ["demo.example.com"] if kind == dns.TARGET_GROUP else []

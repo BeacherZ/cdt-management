@@ -222,7 +222,7 @@ def _confirm_pending_events() -> None:
                         event_id, f"已离开运行窗口{window_note}，窗口外不再自动拉起"
                     )
                     repo.update_event(
-                        event_id, title=f"{label}：单机保活暂停", level="info", kind="keepalive_pause"
+                        event_id, title=messages.ev("单机保活暂停", messages.obj_server(label)), level="info", kind="keepalive_pause"
                     )
                     repo.finish_event(event_id, "done", "已暂停（窗口外）")
                     repo.set_flag(f"keepalive_rest:{server_id}")
@@ -308,16 +308,19 @@ def _confirm_pending_events() -> None:
                 # 保活拉起（抢占恢复）：同步这台机器绑的所有域名后补发通知。
                 # IP 必须用刚查到的实时值：server 是轮询前取的快照，实例停机期间
                 # 库里存的是空 IP，拿快照去同步只会得到「⚠️ IP 无效跳过」。
+                # verify=True：这是用户明确要求的「强制查一次」时间点，读完真实值
+                # 再决定改不改；通知里仍用 ddns_status，保持一句「✅ 已同步」。
+                ddns_report = None
                 try:
-                    ddns_status = str(
-                        engine._sync_ddns(
-                            server,
-                            config,
-                            dns.TARGET_SERVER,
-                            server_id,
-                            ip=info.public_ip,
-                        )
+                    ddns_report = engine._sync_ddns(
+                        server,
+                        config,
+                        dns.TARGET_SERVER,
+                        server_id,
+                        ip=info.public_ip,
+                        verify=True,
                     )
+                    ddns_status = ddns_report.status
                 except Exception as exc:  # noqa: BLE001
                     ddns_status = f"❌ DDNS 异常：{exc}"
                 # 只在「开了 DDNS 且这台确实挂了域名」时记这一步：换班那边是同一套
@@ -325,17 +328,19 @@ def _confirm_pending_events() -> None:
                 # 通知里照旧带 ddns_status，让用户知道域名没跟着走。
                 bound = bool(repo.dns_records_of(dns.TARGET_SERVER, server_id))
                 if config.get("ddns_enabled") == "1" and bound:
-                    # 进度里写「DDNS：…」有上下文，概览只要状态本身（✅ 已同步），
-                    # 与换班结算的尾段同一种写法；异常只留短结论，堆栈太占地方。
-                    brief = "❌ DDNS 异常" if ddns_status.startswith("❌") else ddns_status
-                    record(f"DDNS：{ddns_status}", brief)
+                    # 进度写带前后 IP 的详情，概览只要「已更新 / IP 未变化」；
+                    # 异常只留短结论，堆栈太占地方。
+                    if ddns_report is None:
+                        record(f"DDNS：{ddns_status}", "❌ DDNS 异常")
+                    else:
+                        record(f"DDNS：{ddns_report.detail}", ddns_report.brief)
                 # 标题从进行时的「保活拉起」改成完成态：事件列表里一条已经完成的事
                 # 还写着「拉起」，读起来像还在进行（换班那边收尾也会改题）。
                 # keepalive_quiet 是「运行窗口开了、到点开机」那条，标题本来就是
                 # 「单机保活恢复」，不改名。
                 if str(event.get("kind") or "") != "keepalive_quiet":
                     repo.update_event(
-                        event_id, title=f"{server.get('label')}：保活拉起完成"
+                        event_id, title=messages.ev("单机保活拉起完成", messages.obj_server(str(server.get('label') or '')))
                     )
                 # 这次中断结束了，重试计数归零，下一次从 1 重新数
                 repo.clear_flag(f"keepalive_tries:{server_id}")
@@ -366,16 +371,19 @@ def _confirm_pending_events() -> None:
                 # 那句会被当成这条解析的结果写进进度，还会把 dns_records.last_status
                 # 覆盖掉 —— 原本「✅ 已同步」的记录变成「待同步」黄点，界面开始报假异常。
                 try:
-                    names, statuses = dns.sync_target(
-                        dns.TARGET_SERVER, server_id, config, ip=info.public_ip
+                    # 手动开机到位也是「强制查一次」的时间点：不同来源（控制台/API/
+                    # 别处）改过解析时，本地缓存是过期的，这里以 CF 的真实值为准。
+                    names, results = dns.sync_target_full(
+                        dns.TARGET_SERVER,
+                        server_id,
+                        config,
+                        ip=info.public_ip,
+                        verify=True,
                     )
                     if names:
-                        # 单条就报域名，多条把清单列出来，一眼看出这台机器挂了几个域名
-                        label = names[0] if len(names) == 1 else "、".join(names)
-                        status_text = dns.combine_status(statuses)
-                        # 概览只留状态（✅ 已同步），域名留给展开的步骤；
-                        # 保活那边没有域名可报，两边这样才是一致的
-                        record(f"解析 {label} {status_text}", status_text)
+                        ddns_report = dns.report(names, results)
+                        # 详情写前后 IP，概览写「已更新 / IP 未变化」，与保活、换班同一套
+                        record(f"DDNS：{ddns_report.detail}", ddns_report.brief)
                 except Exception as exc:  # noqa: BLE001
                     record(f"解析同步失败：{exc}", "❌ 解析同步失败")
 

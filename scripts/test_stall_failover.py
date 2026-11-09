@@ -254,7 +254,7 @@ class StallEscalates(_Base):
         self.assertEqual(int(run.get("failover_from") or 0), self.a)
         self.assertIn(self.b, self.started, "应去拉起接替的那台")
         self.assertTrue(
-            any("当班疑被抢占，保活超时，故障转移" in t for t in self._titles()), self._titles()
+            any(t.startswith("当班疑被抢占，故障转移（换班组：") for t in self._titles()), self._titles()
         )
         # 原当班也进了待停名单：接替者就绪后的下一轮才真正下发停机
         self.status[self.b] = "Running"
@@ -282,7 +282,7 @@ class StallEscalates(_Base):
         self.assertNotIn("超限账号", msg.text)
         # 事件标题能区分是哪一种转移
         self.assertTrue(
-            any("故障转移（保活超时）" in t for t in self._titles()), self._titles()
+            any("保活超时，故障转移" in t for t in self._titles()), self._titles()
         )
 
     def test_no_duplicate_recovery_event_after_switch(self):
@@ -546,7 +546,7 @@ class StallRespectsSettings(_Base):
         run = repo.get_run(group_id, slot) or {}
         self.assertEqual(int(run.get("duty_server_id") or 0), self.b, "不该又切回 A")
         self.assertTrue(
-            any("没有可接替的成员" in t for t in self._titles()), self._titles()
+            any("无成员可接替" in t for t in self._titles()), self._titles()
         )
 
 

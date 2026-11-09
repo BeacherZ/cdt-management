@@ -274,7 +274,7 @@ export default function ServerDialog({
         <ConfirmDialog
           title="改成普通停机？"
           message={`「${form.label || '这台实例'}」之后每次关机都会按实例规格计费。`}
-          hint="只有需要保留实例内状态（比如本地盘数据、固定公网 IP 立即可用）时才建议这样；只想让它停机省钱就用节省停机。"
+          hint="只有「到点必须开得起来」或「IP 不能变、又不走 DDNS」时才建议这样；只想让它停机省钱就用节省停机。"
           confirmText="仍要改成普通停机"
           onCancel={() => setConfirmStop(false)}
           onConfirm={() => {

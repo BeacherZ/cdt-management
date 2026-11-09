@@ -21,29 +21,56 @@ _TMP = tempfile.mkdtemp(prefix="cdt-dns-test-")
 os.environ["CDT_DATA_DIR"] = _TMP
 os.environ["CDT_DRY_RUN"] = "1"
 
-from app import db, ddns, dns, repo  # noqa: E402
+from app import db, ddns, dns, repo, settings  # noqa: E402
 
 CALLS: list[tuple[str, str]] = []
 
 
-def _fake_sync(ip, config, force=False, record=None):  # noqa: ANN001, ARG001
+def _fake_sync(ip, config, force=False, record=None, verify=False):  # noqa: ANN001, ARG001
     CALLS.append((record or "", ip))
-    return ddns.DDNSResult(ddns.STATUS_SYNCED, f"{record} → {ip}", changed=True, ip=ip)
+    return ddns.DDNSResult(
+        ddns.STATUS_SYNCED,
+        f"{record} → {ip}",
+        changed=True,
+        ip=ip,
+        previous=str(config.get("ddns_last_ip") or ""),
+    )
 
 
-def _fake_sync_fail(ip, config, force=False, record=None):  # noqa: ANN001, ARG001
+def _fake_sync_fail(ip, config, force=False, record=None, verify=False):  # noqa: ANN001, ARG001
     CALLS.append((record or "", ip))
     return ddns.DDNSResult(ddns.STATUS_UPDATE_FAILED, "HTTP 500", ip=ip)
 
 
-def _fake_sync_real(ip, config, force=False, record=None):  # noqa: ANN001, ARG001
-    """照 ddns.sync 的真实逻辑打桩：IP 没变且上次是 ✅ 就返回 UNCHANGED（不发请求）。"""
+def _fake_sync_real(ip, config, force=False, record=None, verify=False):  # noqa: ANN001, ARG001
+    """照 ddns.sync 的真实逻辑打桩：IP 没变且上次是 ✅ 就返回 UNCHANGED（不发请求）。
+
+    verify=True 时跳过本地缓存判断 —— 真实实现是去 Cloudflare 读一次，
+    桩里没法真读，就按「记录已指向 ip」处理（等价于 CF 上说值一致）。
+    """
     CALLS.append((record or "", ip))
-    if not force and config.get("ddns_last_ip") == ip and str(
+    last_ip = str(config.get("ddns_last_ip") or "")
+    if verify:
+        if last_ip == ip:
+            return ddns.DDNSResult(
+                ddns.STATUS_UNCHANGED, f"{record} 未变化", ip=ip, previous=last_ip
+            )
+        return ddns.DDNSResult(
+            ddns.STATUS_SYNCED,
+            f"{record} → {ip}",
+            changed=True,
+            ip=ip,
+            previous=last_ip,
+        )
+    if not force and last_ip == ip and str(
         config.get("ddns_last_status") or ""
     ).startswith("✅"):
-        return ddns.DDNSResult(ddns.STATUS_UNCHANGED, f"{record} 未变化", ip=ip)
-    return ddns.DDNSResult(ddns.STATUS_SYNCED, f"{record} → {ip}", changed=True, ip=ip)
+        return ddns.DDNSResult(
+            ddns.STATUS_UNCHANGED, f"{record} 未变化", ip=ip, previous=last_ip
+        )
+    return ddns.DDNSResult(
+        ddns.STATUS_SYNCED, f"{record} → {ip}", changed=True, ip=ip, previous=last_ip
+    )
 
 
 class Base(unittest.TestCase):
@@ -567,10 +594,10 @@ class SyncTarget(Base):
         dns.bind("a.example.com", dns.TARGET_SERVER, server_id)
         dns.bind("b.example.com", dns.TARGET_SERVER, server_id)
 
-        def mixed(ip, config, force=False, record=None):  # noqa: ANN001, ARG001
+        def mixed(ip, config, force=False, record=None, verify=False):  # noqa: ANN001, ARG001
             if record == "b.example.com":
-                return _fake_sync_fail(ip, config, force, record)
-            return _fake_sync(ip, config, force, record)
+                return _fake_sync_fail(ip, config, force, record, verify)
+            return _fake_sync(ip, config, force, record, verify)
 
         ddns.sync = mixed
         _names, statuses = dns.sync_target(dns.TARGET_SERVER, server_id, self.config())
@@ -596,9 +623,9 @@ class DutyDdns(Base):
         dns.bind("own.example.com", dns.TARGET_SERVER, a)
 
         server = repo.get_server(a, decrypt_secret=True) or {}
-        status = shift.engine._sync_ddns(server, self.config(), dns.TARGET_GROUP, group_id)
+        report = shift.engine._sync_ddns(server, self.config(), dns.TARGET_GROUP, group_id)
 
-        self.assertEqual(status, "✅ 已同步（2 条）")
+        self.assertEqual(report.status, "✅ 已同步（2 条）")
         self.assertEqual(
             sorted(CALLS),
             [("group.example.com", "47.243.10.21"), ("own.example.com", "47.243.10.21")],
@@ -618,10 +645,10 @@ class DutyDdns(Base):
         dns.bind("group.example.com", dns.TARGET_GROUP, group_id)
 
         stale = {**(repo.get_server(a, decrypt_secret=True) or {}), "public_ip": ""}
-        status = shift.engine._sync_ddns(
+        report = shift.engine._sync_ddns(
             stale, self.config(), dns.TARGET_GROUP, group_id, ip="47.243.10.99"
         )
-        self.assertEqual(status, "✅ 已同步")
+        self.assertEqual(report.status, "✅ 已同步")
         self.assertEqual(CALLS, [("group.example.com", "47.243.10.99")])
 
     def test_duty_without_any_binding_is_quiet(self):
@@ -631,8 +658,8 @@ class DutyDdns(Base):
         b = self.add_server("香港-B", status="Stopped", ip="47.243.10.22")
         group_id = self.add_group("双机轮换", [a, b])
         server = repo.get_server(a, decrypt_secret=True) or {}
-        status = shift.engine._sync_ddns(server, self.config(), dns.TARGET_GROUP, group_id)
-        self.assertEqual(status, dns.STATUS_UNBOUND)
+        report = shift.engine._sync_ddns(server, self.config(), dns.TARGET_GROUP, group_id)
+        self.assertEqual(report.status, dns.STATUS_UNBOUND)
         self.assertEqual(CALLS, [])
 
 
@@ -735,6 +762,191 @@ class Order(Base):
         # 绑定关系不受排序影响
         repo.bind_dns_record("a.example.com", "server", 7)
         self.assertEqual(repo.dns_records_of("server", 7), ["a.example.com"])
+
+
+class ReportWording(unittest.TestCase):
+    """一次同步的三种说法：详情带前后 IP、概览说改没改、通知保持一句「已同步」。"""
+
+    def _result(self, *, changed: bool, ip: str = "2.2.2.2", previous: str = "1.1.1.1"):
+        return ddns.DDNSResult(ddns.STATUS_SYNCED, changed=changed, ip=ip, previous=previous)
+
+    def test_updated_writes_before_after(self):
+        report = dns.report(["a.example.com"], [self._result(changed=True)])
+        self.assertEqual(report.detail, "✅ 已同步 1.1.1.1 → 2.2.2.2")
+        self.assertEqual(report.brief, "✅ DDNS已同步（已更新）")
+        # 通知里还是老样子，不能夹带括号说明
+        self.assertEqual(report.status, "✅ 已同步")
+
+    def test_unchanged_has_no_arrow(self):
+        report = dns.report(["a.example.com"], [self._result(changed=False)])
+        self.assertEqual(report.detail, "✅ 已同步 2.2.2.2（IP 未变化）")
+        self.assertEqual(report.brief, "✅ DDNS已同步（IP 未变化）")
+        self.assertEqual(report.status, "✅ 已同步")
+
+    def test_first_time_is_marked(self):
+        report = dns.report(["a.example.com"], [self._result(changed=True, previous="")])
+        self.assertEqual(report.detail, "✅ 已同步 2.2.2.2（首次指向）")
+
+    def test_multi_records_list_name_and_count(self):
+        report = dns.report(
+            ["a.example.com", "b.example.com"],
+            [
+                self._result(changed=True, ip="2.2.2.2", previous="1.1.1.1"),
+                self._result(changed=False, ip="3.3.3.3", previous="3.3.3.3"),
+            ],
+        )
+        self.assertEqual(
+            report.detail,
+            "✅ 已同步 a.example.com 1.1.1.1 → 2.2.2.2、"
+            "b.example.com 3.3.3.3（IP 未变化）",
+        )
+        self.assertEqual(report.brief, "✅ DDNS已同步（已更新 1 条 / 未变化 1 条）")
+
+    def test_failure_keeps_plain_status(self):
+        report = dns.report(
+            ["a.example.com"],
+            [ddns.DDNSResult(ddns.STATUS_UPDATE_FAILED, "HTTP 500")],
+        )
+        self.assertEqual(report.detail, "❌ 更新失败")
+        self.assertEqual(report.brief, "❌ 更新失败")
+        self.assertEqual(report.status, "❌ 更新失败")
+
+    def test_no_binding_is_quiet(self):
+        report = dns.report([], [])
+        self.assertEqual((report.detail, report.brief, report.status), ("⏸ 未绑定",) * 3)
+
+
+class VerifyMode(Base):
+    """verify=True：先看 Cloudflare 的真实值再决定改不改，时间戳只认真实改动。"""
+
+    def _config(self) -> dict[str, str]:
+        repo.set_settings({"ddns_enabled": "1", "ddns_records": '["a.example.com"]'})
+        config = self.config()
+        # 设置里的记录名要先登记进 dns_records 表，bind 才能绑
+        dns.sync_registry(config)
+        return config
+
+    def test_unchanged_keeps_last_at(self):
+        config = self._config()
+        server_id = self.add_server("验证机", ip="47.243.10.10")
+        dns.bind("a.example.com", dns.TARGET_SERVER, server_id, config)
+        repo.set_dns_state("a.example.com", "47.243.10.10", ddns.STATUS_SYNCED, at=1000)
+
+        def fake(ip, config, force=False, record=None, verify=False):  # noqa: ANN001, ARG001
+            self.assertTrue(verify, "关键时刻必须走强制校验")
+            return ddns.DDNSResult(
+                ddns.STATUS_UNCHANGED, "IP 未变化", ip=ip, previous=ip
+            )
+
+        ddns.sync = fake
+        result = dns.sync_record(
+            "a.example.com", config, ip="47.243.10.10", verify=True
+        )
+        row = repo.get_dns_record("a.example.com") or {}
+        self.assertEqual(result.status, ddns.STATUS_UNCHANGED)
+        self.assertEqual(row.get("last_at"), 1000, "只核对没改记录，时间戳不能跳到刚刚")
+        self.assertEqual(row.get("last_ip"), "47.243.10.10")
+
+    def test_changed_refreshes_last_at_and_records_previous(self):
+        config = self._config()
+        server_id = self.add_server("验证机", ip="47.243.10.10")
+        dns.bind("a.example.com", dns.TARGET_SERVER, server_id, config)
+        repo.set_dns_state("a.example.com", "47.243.10.10", ddns.STATUS_SYNCED, at=1000)
+
+        def fake(ip, config, force=False, record=None, verify=False):  # noqa: ANN001, ARG001
+            return ddns.DDNSResult(
+                ddns.STATUS_SYNCED,
+                f"{record} → {ip}",
+                changed=True,
+                ip=ip,
+                previous="47.243.10.10",
+            )
+
+        ddns.sync = fake
+        result = dns.sync_record(
+            "a.example.com", config, ip="47.243.10.99", verify=True
+        )
+        row = repo.get_dns_record("a.example.com") or {}
+        self.assertEqual(result.previous, "47.243.10.10")
+        self.assertEqual(row.get("last_ip"), "47.243.10.99")
+        self.assertGreater(int(row.get("last_at") or 0), 1000, "真改了记录，时间戳要更新")
+
+
+class _FakeResp:
+    def __init__(self, code: int, payload: dict):
+        self.status_code = code
+        self.content = b"{}"
+        self._payload = payload
+
+    def json(self) -> dict:
+        return self._payload
+
+
+class RealVerify(unittest.TestCase):
+    """不打桩 ddns.sync：用假的 requests 验证 verify 分支真的「先读后写」。
+
+    IP 用 1.1.1.1 / 8.8.8.8 这类公网通用地址，不用文档保留段（203.0.113.0/24、
+    198.51.100.0/24）—— `is_public_ipv4` 把保留段判成私有，sync 会直接返回
+    「IP 不可用」，测不到 verify 分支。真机 IP 一律不许写进仓库。
+    """
+
+    config = {
+        "ddns_enabled": "1",
+        "ddns_cf_token": "fake-token",
+        "ddns_zone_id": "fake-zone",
+        "ddns_records": '["a.example.com"]',
+        "ddns_ttl": "60",
+    }
+
+    def setUp(self) -> None:
+        self._orig_dry = settings.DRY_RUN
+        settings.DRY_RUN = False
+        self.gets: list[dict] = []
+        self.puts: list[dict] = []
+        self.current = "1.1.1.1"
+        self._orig_get = ddns.requests.get
+        self._orig_put = ddns.requests.put
+        ddns.requests.get = self._fake_get
+        ddns.requests.put = self._fake_put
+
+    def tearDown(self) -> None:
+        settings.DRY_RUN = self._orig_dry
+        ddns.requests.get = self._orig_get
+        ddns.requests.put = self._orig_put
+
+    def _fake_get(self, url, headers=None, params=None, timeout=None):  # noqa: ANN001
+        self.gets.append(dict(params or {}))
+        return _FakeResp(
+            200,
+            {"success": True, "result": [{"id": "rec-1", "content": self.current}]},
+        )
+
+    def _fake_put(self, url, headers=None, json=None, timeout=None):  # noqa: ANN001
+        self.puts.append(dict(json or {}))
+        return _FakeResp(200, {"success": True})
+
+    def test_same_content_skips_put(self):
+        """CF 上已经是这个 IP：只读一次，不发 PUT，返回「未变化」。"""
+        result = ddns.sync(
+            "1.1.1.1", self.config, record="a.example.com", verify=True
+        )
+        self.assertEqual(result.status, ddns.STATUS_UNCHANGED)
+        self.assertFalse(result.changed)
+        self.assertEqual(result.previous, "1.1.1.1")
+        self.assertEqual(len(self.gets), 1)
+        self.assertEqual(self.puts, [])
+
+    def test_different_content_puts_and_keeps_previous(self):
+        """CF 上还是旧 IP：写一次，previous 带回旧值，详情才能写「旧 → 新」。"""
+        self.current = "1.1.1.1"
+        result = ddns.sync(
+            "8.8.8.8", self.config, record="a.example.com", verify=True
+        )
+        self.assertEqual(result.status, ddns.STATUS_SYNCED)
+        self.assertTrue(result.changed)
+        self.assertEqual(result.previous, "1.1.1.1")
+        self.assertEqual(len(self.puts), 1)
+        self.assertEqual(self.puts[0]["content"], "8.8.8.8")
 
 
 def tearDownModule() -> None:

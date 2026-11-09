@@ -344,26 +344,6 @@ def dns_snapshot(group_id: int, duty_id: int) -> str:
     return json.dumps(snapshot, ensure_ascii=False)
 
 
-def dns_transitions(snapshot_raw: str, names: list[str]) -> list[str]:
-    """对比换班前的快照和记录当前值，返回「旧 → 新」描述（没变的不列）。"""
-    try:
-        before = json.loads(snapshot_raw or "{}")
-    except Exception:  # noqa: BLE001 - 脏数据当没快照处理
-        before = {}
-    if not isinstance(before, dict):
-        before = {}
-    changes: list[str] = []
-    for name in names:
-        row = repo.get_dns_record(name) or {}
-        new = str(row.get("last_ip") or "")
-        old = str(before.get(name) or "")
-        if new and old and old != new:
-            changes.append(f"{old} → {new}" if len(names) == 1 else f"{name} {old} → {new}")
-        elif new and not old:
-            changes.append(f"首次指向 {new}" if len(names) == 1 else f"{name} 首次指向 {new}")
-    return changes
-
-
 def _day_key(group: dict[str, Any], now_ts: float) -> str:
     """组时区下的自然日（YYYY-MM-DD）。"""
     return dt.datetime.fromtimestamp(
@@ -559,7 +539,7 @@ class Engine:
                 results.extend(self.reconcile_keepalives(config, now, grouped))
             except Exception as exc:  # noqa: BLE001
                 log.exception("单机保活对账失败")
-                repo.add_event("error", "系统：单机保活同步异常", str(exc), level="error")
+                repo.add_event("error", messages.ev("单机保活同步异常"), str(exc), level="error")
 
             try:
                 results.extend(
@@ -567,7 +547,7 @@ class Engine:
                 )
             except Exception as exc:  # noqa: BLE001
                 log.exception("闲散机器超限对账失败")
-                repo.add_event("error", "系统：闲散机器超限检查异常", str(exc), level="error")
+                repo.add_event("error", messages.ev("闲散超限检查异常"), str(exc), level="error")
 
             for group in repo.list_groups():
                 try:
@@ -576,7 +556,7 @@ class Engine:
                     log.exception("换班组 %s 对账失败", group.get("id"))
                     repo.add_event(
                         "error",
-                        f"系统：换班组 {group.get('name')} 同步异常",
+                        messages.ev("换班组同步异常", messages.obj_group(str(group.get('name') or ''))),
                         str(exc),
                         level="error",
                         group_id=int(group["id"]),
@@ -642,7 +622,7 @@ class Engine:
                     repo.set_flag(flag)
                     repo.add_event(
                         "warning",
-                        f"{item.get('label')}：同时在换班组里，单机保活已让位",
+                        messages.ev("单机保活让位", messages.obj_server(str(item.get('label') or ''))),
                         "同一台服务器不要同时挂在两个模块下",
                         level="warning",
                         server_id=server_id,
@@ -660,7 +640,7 @@ class Engine:
                 # 同一条事件里持续记录，带失败时刻与重试节奏；恢复时补上恢复时刻
                 _read_error(
                     server_id=server_id,
-                    title=f"{label} 保活状态读取异常",
+                    title=messages.ev("状态读取异常", messages.obj_server(label)),
                     exc=exc,
                     tz_name=tz_name,
                 )
@@ -668,7 +648,7 @@ class Engine:
                 continue
             _read_recovered(
                 server_id=server_id,
-                title=f"{label} 保活状态读取已恢复",
+                title=messages.ev("状态读取已恢复", messages.obj_server(label)),
                 tz_name=tz_name,
             )
 
@@ -871,7 +851,7 @@ class Engine:
                     repo.set_flag(err)
                     repo.add_event(
                         "error",
-                        f"{server.get('label')}：超限停机失败",
+                        messages.ev("流量超限停机失败", messages.obj_server(str(server.get('label') or ''))),
                         str(exc),
                         level="error",
                         server_id=server_id,
@@ -887,7 +867,7 @@ class Engine:
         )
         event_id = repo.add_event(
             "limit_stop",
-            f"{server.get('label')}：流量超限，{tail}",
+            messages.ev(f"流量超限，{tail}", messages.obj_server(str(server.get('label') or ''))),
             f"已用 {_used_gb(server):.2f} GB / 阈值 {float(server.get('threshold_gb') or 0):g} GB",
             level="warning",
             server_id=server_id,
@@ -925,14 +905,14 @@ class Engine:
                 # 用户以为机器在跑。保活和换班组都有读取事件，闲散机不该是盲区。
                 _read_error(
                     server_id=server_id,
-                    title=f"{label} 状态读取异常",
+                    title=messages.ev("状态读取异常", messages.obj_server(label)),
                     exc=exc,
                     tz_name=tz_name,
                 )
                 continue
             _read_recovered(
                 server_id=server_id,
-                title=f"{label} 状态读取已恢复",
+                title=messages.ev("状态读取已恢复", messages.obj_server(label)),
                 tz_name=tz_name,
             )
             if _over_threshold(server):
@@ -1015,14 +995,14 @@ class Engine:
                 healthy_others.append(server)
                 _read_recovered(
                     server_id=member_id,
-                    title=f"{member_label} 状态读取已恢复",
+                    title=messages.ev("状态读取已恢复", messages.obj_member(str(name), member_label)),
                     tz_name=tz_name,
                 )
             except Exception as exc:  # noqa: BLE001
                 unreadable.add(member_id)
                 _read_error(
                     server_id=member_id,
-                    title=f"{member_label} 状态读取异常",
+                    title=messages.ev("状态读取异常", messages.obj_member(str(name), member_label)),
                     exc=exc,
                     group_id=group_id,
                     tz_name=tz_name,
@@ -1036,7 +1016,7 @@ class Engine:
         if duty_error:
             _read_error(
                 server_id=int(duty["id"]),
-                title=f"{name}：当班状态读取异常",
+                title=messages.ev("状态读取异常", messages.obj_duty(str(name), str(duty.get('label') or ''))),
                 exc=duty_error,
                 group_id=group_id,
                 tz_name=tz_name,
@@ -1044,7 +1024,7 @@ class Engine:
             return {"group_id": group_id, "state_unreadable": duty_error}
         _read_recovered(
             server_id=int(duty["id"]),
-            title=f"{name}：当班状态读取已恢复",
+            title=messages.ev("状态读取已恢复", messages.obj_duty(str(name), str(duty.get('label') or ''))),
             tz_name=tz_name,
         )
 
@@ -1062,7 +1042,7 @@ class Engine:
                 # 一次转移在事件列表里留下两条标题几乎一样的记录。
                 decision_event = repo.add_event(
                     "failover",
-                    f"{name}：当班流量超限，故障转移",
+                    messages.ev("当班流量超限，故障转移", messages.obj_duty(str(name), str(duty.get('label') or ''))),
                     f"{duty.get('label')} → {replacement.get('label')}",
                     level="warning",
                     group_id=group_id,
@@ -1167,7 +1147,7 @@ class Engine:
                     repo.set_flag(flag)
                     repo.add_event(
                         "warning",
-                        f"{name}：当班起不来",
+                        messages.ev("当班起不来", messages.obj_duty(str(name), str(duty.get('label') or ''))),
                         f"{duty.get('label')} 已等待 {stall_limit} 秒仍未运行，"
                         "该组未启用故障转移，保持等待",
                         level="warning",
@@ -1193,7 +1173,10 @@ class Engine:
                     # 和流量超限挑人一致：优先流量用得最少的，接着省流量额度
                     replacement = min(candidates, key=lambda s: float(s.get("traffic_used") or 0))
                     repo.set_flag(f"failover_tried:{group_id}:{slot_key}:{int(duty['id'])}")
-                    title = f"{name}：当班疑被抢占，保活超时，故障转移"
+                    title = messages.ev(
+                        "当班疑被抢占，故障转移",
+                        messages.obj_duty(str(name), str(duty.get('label') or '')),
+                    )
                     detail = (
                         f"{duty.get('label')}（{status_text} {stall_limit} 秒未就绪）"
                         f" → {replacement.get('label')}"
@@ -1259,7 +1242,7 @@ class Engine:
                         repo.set_flag(flag)
                         repo.add_event(
                             "error",
-                            f"{name}：当班起不来，也没有可接替的成员",
+                            messages.ev("当班起不来，无成员可接替", messages.obj_group(str(name))),
                             f"{duty.get('label')}（{status_text}）等待 {stall_limit} 秒仍未运行，"
                             "其余成员要么流量也已超限，要么状态读取失败",
                             level="error",
@@ -1293,7 +1276,7 @@ class Engine:
                 repo.set_flag(recovery_flag)
                 event_id = repo.add_event(
                     "recovery",
-                    f"{name}：当班未运行，已自动拉起",
+                    messages.ev("当班未运行，已自动拉起", messages.obj_duty(str(name), str(duty.get('label') or ''))),
                     # 概览只写「在等什么」，和单机保活的运行中事件同一套说法；
                     # 原来是什么状态放在展开的步骤里（检测到当班 X 未运行（Stopped））
                     "等待恢复运行",
@@ -1324,7 +1307,7 @@ class Engine:
                     repo.set_flag(flag)
                     repo.add_event(
                         "error",
-                        f"{name}：当班启动失败",
+                        messages.ev("当班启动失败", messages.obj_duty(str(name), str(duty.get('label') or ''))),
                         str(exc),
                         level="error",
                         group_id=group_id,
@@ -1431,7 +1414,7 @@ class Engine:
                     repo.set_flag(flag)
                     repo.add_event(
                         "error",
-                        f"{name}：非当班停机失败",
+                        messages.ev("非当班停机失败", messages.obj_member(str(name), str(server.get('label') or ''))),
                         f"{server.get('label')}：{exc}",
                         level="error",
                         group_id=group_id,
@@ -1446,9 +1429,19 @@ class Engine:
         #    以前是「当班一开机就同步」，非当班还在跑的时候域名已经指过去了；而且
         #    停机那一轮还会再同步一次，进度里冒出重复的「DDNS：✅ 已同步」这种没意义的一行。
         ddns_text = ""
+        ddns_report: dns.DDNSReport | None = None
         ddns_ok = True
         if all_stopped:
-            ddns_text = str(self._sync_ddns(duty, config, dns.TARGET_GROUP, group_id))
+            # 首次结算去 Cloudflare 查一次真实值（用户明确要求的时间点）；
+            # 之后每轮结算仍走本地缓存，避免每分钟打一次读请求。
+            ddns_report = self._sync_ddns(
+                duty,
+                config,
+                dns.TARGET_GROUP,
+                group_id,
+                verify=not previously_settled,
+            )
+            ddns_text = ddns_report.status
             # DDNS 只有「已设置且已绑定」时才要求同步成功，否则不卡流程：
             #   - 未启用 / 未绑定（⏸ 开头）→ 跳过确认，不阻塞
             #   - 已绑定但同步失败（❌ / ⚠️ 开头）→ 本轮不算就绪，等下一轮重试
@@ -1476,7 +1469,7 @@ class Engine:
                     repo.clear_flag(wait_key)
                     repo.add_event(
                         "error",
-                        f"{name}：DDNS 未同步，换班照常结算",
+                        messages.ev("DDNS 未同步，换班照常结算", messages.obj_group(str(name))),
                         f"已等待 {_DDNS_WAIT_SECONDS // 60} 分钟仍未同步（{ddns_text}），"
                         "实例状态已到位，不再阻塞。请检查记录名、Token 与 Zone。",
                         level="warning",
@@ -1492,18 +1485,19 @@ class Engine:
                 # 这一步要连「指到哪个 IP」一起写：域名从旧当班机换到新当班机，
                 # 光一句「已同步」看不出变化，而且巡检有可能抢先同步过，当时的
                 # 旧 IP 只能靠换班开始时存的快照还原。
-                names = list(repo.dns_records_of(dns.TARGET_GROUP, group_id))
-                for name in repo.dns_records_of(dns.TARGET_SERVER, int(duty["id"])):
-                    if name not in names:
-                        names.append(name)
-                before = str((repo.get_run(group_id, slot_key) or {}).get("dns_before") or "")
-                text = f"DDNS：{ddns_text}"
-                changes = dns_transitions(before, names)
-                if changes:
-                    text = f"{text} {'、'.join(changes)}"
-                # 跨轮可能先失败后成功，这里不用 once：文案变了就该补一条，
-                # 完全相同的相邻文案 add_event_progress 自己会吞掉。
-                repo.add_event_progress(event_id, text)
+                # 详情带前后 IP（来自 Cloudflare 实时值），概览由 report 给「已更新/未变化」。
+                # 一条换班事件可能结算多轮：首次一定有这一行；之后只有这次真的改了
+                # 才补，免得好几行「（IP 未变化）」把关键的前后对比挤走。
+                text = f"DDNS：{ddns_report.detail}"
+                existing = repo.get_event(event_id) or {}
+                logged = any(
+                    "DDNS：" in str(step.get("text") or "")
+                    for step in (existing.get("progress") or [])
+                )
+                if not logged or any(r.changed for r in ddns_report.results):
+                    # 跨轮可能先失败后成功，这里不用 once：文案变了就该补一条，
+                    # 完全相同的相邻文案 add_event_progress 自己会吞掉。
+                    repo.add_event_progress(event_id, text)
 
         ready = duty_status == "Running" and all_stopped and (has_ip or not ddns_enabled) and ddns_ok
 
@@ -1558,7 +1552,9 @@ class Engine:
             if failover_flag:
                 # 起不来那种在标题里带上原因：否则事件列表里跟「流量超限」长得一模一样，
                 # 事后分不清这台是被抢了还是烧超了。
-                label = "故障转移（保活超时）" if failover_reason == "stall" else "故障转移"
+                # 原因写进结论里而不是套第二个括号：标题末尾的括号固定留给对象，
+                # 「故障转移（保活超时）（换班组：X）」会变成两层括号。
+                label = "保活超时，故障转移" if failover_reason == "stall" else "故障转移"
                 kind = "shift_failover"
             elif manual_switch:
                 label, kind = "手动换班完成", "manual"
@@ -1566,7 +1562,11 @@ class Engine:
                 label, kind = "新建换班组", "group_new"
             else:
                 label, kind = "换班完成", "shift_done"
-            repo.update_event(event_id, title=f"{name}：{label}", kind=kind)
+            repo.update_event(
+                event_id,
+                title=messages.ev(label, messages.obj_group(str(name))),
+                kind=kind,
+            )
             repo.finish_event(event_id, "done")
             # 本班次的临时标记到此作废：粘性计时、候选黑名单、告警去重都只在这一班里有效，
             # 不清掉会随着班次累积（下一班 slot 不同本来就用不上，留着只是堆垃圾）。
@@ -1588,7 +1588,10 @@ class Engine:
                 repo.add_event_progress(event_id, "当班已恢复运行", once=True)
                 repo.update_event(
                     event_id,
-                    title=f"{name}：当班已恢复运行",
+                    title=messages.ev(
+                        "当班已恢复运行",
+                        messages.obj_duty(str(name), str(duty.get('label') or '')),
+                    ),
                     detail=f"当班 {duty.get('label')} 已恢复运行",
                     kind="recovery",
                 )
@@ -1659,7 +1662,7 @@ class Engine:
                     repo.set_flag(flag)
                     repo.add_event(
                         "error",
-                        f"{name}：熔断停机失败",
+                        messages.ev("熔断停机失败", messages.obj_member(str(name), str(server.get('label') or ''))),
                         f"{server.get('label')}：{exc}",
                         level="error",
                         group_id=group_id,
@@ -1693,7 +1696,7 @@ class Engine:
                 repo.set_flag(flag)
                 event_id = repo.add_event(
                     "breaker",
-                    f"{name}：全局熔断",
+                    messages.ev("全局熔断", messages.obj_group(str(name))),
                     f"{why} / {messages.stop_tail(everyone)}",
                     level="error",
                     group_id=group_id,
@@ -1741,7 +1744,10 @@ class Engine:
                             repo.set_flag(event_flag)
                             repo.add_event(
                                 "limit_stop",
-                                f"{name}：当班流量超限，{messages.stop_phrase(mode, '已强制')}",
+                                messages.ev(
+                                    f"当班流量超限，{messages.stop_phrase(mode, '已强制')}",
+                                    messages.obj_duty(str(name), str(duty.get('label') or '')),
+                                ),
                                 f"已用 {_used_gb(duty):.2f} GB / 阈值 {float(duty.get('threshold_gb') or 0):g} GB",
                                 level="warning",
                                 group_id=group_id,
@@ -1753,7 +1759,7 @@ class Engine:
                             repo.set_flag(err_flag)
                             repo.add_event(
                                 "error",
-                                f"{name}：超限停机失败",
+                                messages.ev("当班流量超限停机失败", messages.obj_duty(str(name), str(duty.get('label') or ''))),
                                 f"{duty.get('label')}：{exc}",
                                 level="error",
                                 group_id=group_id,
@@ -1833,7 +1839,7 @@ class Engine:
         repo.set_flag(flag)
         event_id = repo.add_event(
             "error",
-            f"{group.get('name')}：换班超时",
+            messages.ev("换班超时", messages.obj_group(str(group.get('name') or ''))),
             f"已等待 {elapsed:.0f} 分钟仍未就绪",
             level="error",
             group_id=int(group["id"]),
@@ -1848,8 +1854,9 @@ class Engine:
         kind: str,
         target_id: int,
         ip: str | None = None,
-    ) -> str:
-        """把「这台机器正在跑」写进它该占的记录，返回一句汇总状态。
+        verify: bool = False,
+    ) -> dns.DDNSReport:
+        """把「这台机器正在跑」写进它该占的记录，返回三种说法（详情/概览/通知）。
 
         同步的不止一条：
           - 目标自己绑的（换班组 → 该组绑的域名；单机 → 这台机器绑的域名）
@@ -1859,18 +1866,21 @@ class Engine:
 
         ip 由调用方从刚查到的实时状态传进来：`server` 往往是轮询开始前的数据库
         快照，实例停机时快照里的 public_ip 是空的，拿它去同步只会得到「IP 无效跳过」。
+
+        verify=True 只给「刚换班/刚开机」那一次用：去 Cloudflare 查真实值再决定
+        改不改。之后每轮结算仍走本地缓存，不会每分钟打一次读请求。
         """
         ip = str(ip or server.get("public_ip") or "")
-        names, statuses = dns.sync_target(kind, target_id, config, ip=ip)
+        names, results = dns.sync_target_full(
+            kind, target_id, config, ip=ip, verify=verify
+        )
         if kind == dns.TARGET_GROUP:
-            own_names, own_statuses = dns.sync_target(
-                dns.TARGET_SERVER, int(server.get("id") or 0), config, ip=ip
+            own_names, own_results = dns.sync_target_full(
+                dns.TARGET_SERVER, int(server.get("id") or 0), config, ip=ip, verify=verify
             )
             names = names + own_names
-            statuses = statuses + own_statuses
-        if not names:
-            return dns.STATUS_UNBOUND
-        return dns.combine_status(statuses)
+            results = results + own_results
+        return dns.report(names, results)
 
     # -- 换班进行中的事件（动态化）----------------------------------------
     def _shift_event(
@@ -1887,13 +1897,14 @@ class Engine:
             return event_id
         event_id = repo.add_event(
             "shift_done",
-            f"{name}：换班进行中",
+            messages.ev("换班进行中", messages.obj_group(str(name))),
             f"正在启动当班 {duty_label}",
             level="info",
             group_id=group_id,
             status="running",
         )
-        # 开工前先记下各域名此刻指向哪，结算那一步才能写出「旧 IP → 新 IP」
+        # 开工前记下各域名此刻指向哪，留作排查依据；事件里的「旧 → 新」以同步时
+        # 从 Cloudflare 读到的实际值为准（见 dns.report），不依赖这份快照。
         repo.upsert_run(
             group_id,
             slot_key,
@@ -2047,7 +2058,10 @@ class Engine:
         # 万一 run 里丢了 event_id，仍补一条结果事件，别让这次换班无迹可寻
         event_id = repo.add_event(
             kind,
-            f"{name}：{'故障转移' if is_failover else ('手动换班完成' if is_manual else '换班完成')}",
+            messages.ev(
+                f"{'故障转移' if is_failover else ('手动换班完成' if is_manual else '换班完成')}",
+                messages.obj_group(str(name)),
+            ),
             detail,
             group_id=group_id,
             server_id=int(duty["id"]),
@@ -2087,7 +2101,7 @@ class Engine:
             if not group.get("enabled"):
                 repo.add_event(
                     "group_new",
-                    f"{name}：新建换班组",
+                    messages.ev("新建换班组", messages.obj_group(str(name))),
                     "换班组未启用，没有对组员下发任何启停指令",
                     group_id=group_id,
                 )
@@ -2097,7 +2111,7 @@ class Engine:
             if picked is None:
                 repo.add_event(
                     "group_new",
-                    f"{name}：新建换班组",
+                    messages.ev("新建换班组", messages.obj_group(str(name))),
                     "启用成员不足两台，排不出当班，未下发任何启停指令",
                     group_id=group_id,
                 )
@@ -2109,7 +2123,7 @@ class Engine:
             if duty is None:
                 repo.add_event(
                     "group_new",
-                    f"{name}：新建换班组",
+                    messages.ev("新建换班组", messages.obj_group(str(name))),
                     "排班表指定的当班服务器已被删除，未下发任何启停指令",
                     group_id=group_id,
                 )
@@ -2127,7 +2141,7 @@ class Engine:
             when = slot_name or "当前时刻"
             event_id = repo.add_event(
                 "group_new",
-                f"{name}：新建换班组",
+                messages.ev("新建换班组", messages.obj_group(str(name))),
                 f"排班表：{when}由 {duty.get('label')} 当班，其余 {len(others)} 台应节省停机",
                 group_id=group_id,
                 server_id=int(duty["id"]),
@@ -2228,7 +2242,7 @@ class Engine:
 
             event_id = repo.add_event(
                 "group_dissolve",
-                f"{name}：解散换班组",
+                messages.ev("解散换班组", messages.obj_group(str(name))),
                 f"组内 {len(member_ids)} 台保持当前状态 / 未下发任何启停指令",
                 group_id=0,  # 组马上就没了，事件别再挂到不存在的组上
                 status="running",
@@ -2390,18 +2404,19 @@ class Engine:
             repo.add_event_progress(
                 int(stale["id"]), f"已被新的手动换班取代（改为 {to_label}）"
             )
-            repo.update_event(int(stale["id"]), title=f"{name}：手动换班已取消")
+            repo.update_event(int(stale["id"]), title=messages.ev("手动换班已取消", messages.obj_group(str(name))))
             repo.finish_event(int(stale["id"]), "done")
         event_id = repo.add_event(
             "manual",
-            f"{name}：手动换班进行中",
+            messages.ev("手动换班进行中", messages.obj_group(str(name))),
             f"{from_label} → {to_label}",
             level="info",
             group_id=group_id,
             status="running",
         )
         repo.add_event_progress(event_id, f"手动换班：{from_label} → {to_label}")
-        # 切之前先把各域名的当前指向记下来，DDNS 那一步要写「旧 IP → 新 IP」
+        # 切之前记下各域名的当前指向，留作排查依据（事件里的前后 IP 来自同步时
+        # 从 Cloudflare 读到的真实值）
         repo.upsert_run(
             group_id,
             slot_key,
@@ -2531,7 +2546,7 @@ class Engine:
 
         event_id = repo.add_event(
             "manual",
-            f"{server.get('label')}：手动{label}",
+            messages.ev(f"手动{label}", messages.obj_server(str(server.get('label') or ''))),
             detail,
             level="info",
             server_id=server_id,
@@ -2588,7 +2603,7 @@ class Engine:
         )
         results = notify.send_all(config, message)
         repo.set_flag(flag)
-        event_id = repo.add_event("daily_report", "每日报告已推送", f"{len(servers)} 台服务器")
+        event_id = repo.add_event("daily_report", messages.ev("每日报告已推送"), f"{len(servers)} 台服务器")
         notify.note_notify(event_id, results)
         return True
 
@@ -2805,7 +2820,7 @@ def _resolve_empty_traffic(server: dict[str, Any]) -> float:
             repo.set_flag(flag)
             repo.add_event(
                 "warning",
-                f"{server.get('label')}：流量读数异常",
+                messages.ev("流量读数异常", messages.obj_server(str(server.get('label') or ''))),
                 f"CDT 未返回流量明细，沿用上次读数 {known:.2f} GB 判定，不按 0 处理",
                 level="warning",
                 server_id=server_id,
@@ -2858,7 +2873,7 @@ def _keepalive_retry_note(
             detail += f"；启动指令失败：{error}"
         event_id = repo.add_event(
             "keepalive_quiet" if quiet else "start",
-            f"{label}：保活拉起",
+            messages.ev("单机保活拉起", messages.obj_server(label)),
             detail,
             level="warning",
             server_id=server_id,
@@ -2899,7 +2914,7 @@ def _close_keepalive_event(server_id: int, label: str, note: str) -> None:
         return
     eid = int(event["id"])
     repo.add_event_progress(eid, note)
-    repo.update_event(eid, title=f"{label}：保活已暂停", level="info", kind="keepalive_pause")
+    repo.update_event(eid, title=messages.ev("单机保活暂停", messages.obj_server(label)), level="info", kind="keepalive_pause")
     repo.finish_event(eid, "done", detail=note)
 
 
@@ -2939,7 +2954,7 @@ def _keepalive_pause_note(
     repo.clear_flag(f"keepalive_planned:{server_id}")
     if event is not None:
         eid = int(event["id"])
-        repo.update_event(eid, title=f"{label}：单机保活暂停", level="info")
+        repo.update_event(eid, title=messages.ev("单机保活暂停", messages.obj_server(label)), level="info")
         repo.add_event_progress(
             eid, f"已离开运行窗口{_window_bracket(window_text)}，窗口外不再自动拉起"
         )
@@ -2950,7 +2965,7 @@ def _keepalive_pause_note(
     _keepalive_one_shot(
         server_id,
         "keepalive_pause",
-        f"{label}：单机保活暂停",
+        messages.ev("单机保活暂停", messages.obj_server(label)),
         summary,
         [f"已离开运行窗口{_window_bracket(window_text)}，窗口外不再自动拉起", *steps],
     )
@@ -2979,7 +2994,7 @@ def _keepalive_rest_fail_note(server_id: int, label: str, error: str) -> int:
     """休止时段里停机没成功：只记一条，下一轮继续重试，别每分钟刷一条。"""
     return repo.add_event(
         "keepalive_rest_error",
-        f"{label}：休止时段停机失败",
+        messages.ev("单机保活停机失败", messages.obj_server(label)),
         f"停机指令失败：{error}",
         level="warning",
         server_id=server_id,
@@ -2996,7 +3011,7 @@ def _keepalive_resume_note(server: dict[str, Any], window_text: str, status: str
     """
     server_id = int(server["id"])
     label = str(server.get("label") or f"#{server_id}")
-    title = f"{label}：单机保活恢复"
+    title = messages.ev("单机保活恢复", messages.obj_server(label))
     head = f"已进入运行窗口{_window_bracket(window_text)}，恢复自动拉起"
     # 到点开机是计划内的：置上标记，之后无论走确认器还是「Stopped 就拉起」重试，
     # 新建的事件都是 keepalive_quiet，不会推「抢占恢复」。确认 Running 后由巡检清掉。

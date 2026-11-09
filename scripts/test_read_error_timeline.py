@@ -122,7 +122,7 @@ class ReadErrorTimeline(unittest.TestCase):
         sid = _make_server("Ali-CDT-02")
         shift._read_error(  # noqa: SLF001
             server_id=sid,
-            title="Ali-CDT-02 状态读取异常",
+            title="状态读取异常（Ali-CDT-02）",
             exc="CDT 流量查询失败：网络不可达（cdt.aliyuncs.com）",
         )
         event = self._event(sid)
@@ -144,7 +144,7 @@ class ReadErrorTimeline(unittest.TestCase):
         for _ in range(3):
             shift._read_error(  # noqa: SLF001
                 server_id=sid,
-                title="Ali-CDT-02 状态读取异常",
+                title="状态读取异常（Ali-CDT-02）",
                 exc="CDT 流量查询失败：网络不可达（cdt.aliyuncs.com）",
             )
         texts = [step["text"] for step in repo.get_event(self._event(sid)["id"])["progress"]]
@@ -158,7 +158,7 @@ class ReadErrorTimeline(unittest.TestCase):
         for _ in range(3):
             shift._read_error(  # noqa: SLF001
                 server_id=sid,
-                title="Ali-CDT-02 状态读取异常",
+                title="状态读取异常（Ali-CDT-02）",
                 exc="CDT 流量查询失败：网络不可达（cdt.aliyuncs.com）",
             )
         event = self._event(sid)
@@ -173,18 +173,18 @@ class ReadErrorTimeline(unittest.TestCase):
         for _ in range(3):
             shift._read_error(  # noqa: SLF001
                 server_id=sid,
-                title="Ali-CDT-02 状态读取异常",
+                title="状态读取异常（Ali-CDT-02）",
                 exc="CDT 流量查询失败：网络不可达（cdt.aliyuncs.com）",
             )
         eid = self._event(sid)["id"]
         self.assertEqual(repo.get_event(eid)["level"], "error")
         shift._read_recovered(  # noqa: SLF001
             server_id=sid,
-            title="Ali-CDT-02 状态读取已恢复",
+            title="状态读取已恢复（Ali-CDT-02）",
         )
         event = repo.get_event(eid) or {}
         self.assertEqual(event["status"], "done")
-        self.assertTrue(event["title"].endswith("读取已恢复"), event["title"])
+        self.assertTrue(event["title"].startswith("状态读取已恢复"), event["title"])
         self.assertRegex(event["detail"], r"^\d{2}:\d{2}:\d{2} 恢复正常")
         self.assertIn("连续失败 3 次", event["detail"])
         # 收尾成「完成」就不能再挂红色错误图标
@@ -198,7 +198,7 @@ class ReadErrorTimeline(unittest.TestCase):
         sid = _make_server("Ali-CDT-02")
         shift._read_recovered(  # noqa: SLF001
             server_id=sid,
-            title="Ali-CDT-02 状态读取已恢复",
+            title="状态读取已恢复（Ali-CDT-02）",
         )
         self.assertIsNone(repo.pending_event(sid, "read_error"))
         self.assertEqual(repo.list_events(group_id=0), [])
@@ -210,7 +210,7 @@ class ReadErrorTimeline(unittest.TestCase):
             sid = _make_server("Ali-CDT-02")
             shift._read_error(  # noqa: SLF001
                 server_id=sid,
-                title="Ali-CDT-02 状态读取异常",
+                title="状态读取异常（Ali-CDT-02）",
                 exc="CDT 流量查询失败：连接超时",
             )
             event = self._event(sid)
@@ -225,7 +225,7 @@ class ReadErrorTimeline(unittest.TestCase):
         for _ in range(2):
             shift._read_error(  # noqa: SLF001
                 server_id=sid,
-                title="Ali-CDT-02 状态读取异常",
+                title="状态读取异常（Ali-CDT-02）",
                 exc="CDT 流量查询失败：连接超时",
             )
         self.assertEqual(repo.flag_value(f"read_err:{sid}"), 2)
@@ -238,7 +238,7 @@ class ReadErrorTimeline(unittest.TestCase):
         # 重新纳入监控后是全新的一次中断：从第 1 次重新数，而不是接着 3
         shift._read_error(  # noqa: SLF001
             server_id=sid,
-            title="Ali-CDT-02 状态读取异常",
+            title="状态读取异常（Ali-CDT-02）",
             exc="CDT 流量查询失败：连接超时",
         )
         self.assertEqual(repo.flag_value(f"read_err:{sid}"), 1)
@@ -432,7 +432,7 @@ class IdleReadFailure(unittest.TestCase):
         self.assertIsNone(repo.pending_event(self.sid, "read_error"))
         latest = repo.list_events(limit=1)[0]
         self.assertEqual(latest["status"], "done")
-        self.assertTrue(latest["title"].endswith("读取已恢复"), latest["title"])
+        self.assertTrue(latest["title"].startswith("状态读取已恢复"), latest["title"])
         self.assertFalse(repo.get_flag(f"read_err:{self.sid}"))
 
     def test_recovery_without_failure_is_silent(self) -> None:

@@ -96,7 +96,7 @@ class ShiftFlow(unittest.TestCase):
         event = events[0]
         self.assertEqual(event["kind"], "shift_done")
         self.assertEqual(event["status"], "done")
-        self.assertTrue(event["title"].endswith("：换班完成"))
+        self.assertTrue(event["title"].startswith("换班完成（换班组："))
 
         texts = [step["text"] for step in event["progress"]]
         # 启动当班 / 停机非当班 都只是进度，不再各自开事件
@@ -130,7 +130,7 @@ class ShiftFlow(unittest.TestCase):
         events = repo.list_events(limit=50, group_id=self.group_id)
         recovery = [e for e in events if e["kind"] == "recovery"]
         self.assertEqual(len(recovery), 1, [e["title"] for e in events])
-        self.assertTrue(recovery[0]["title"].endswith("：当班已恢复运行"))
+        self.assertTrue(recovery[0]["title"].startswith("当班已恢复运行（换班组："))
         self.assertEqual(recovery[0]["status"], "done")
         # 恢复不是换班，不该留下换班超时的去重标记
         self.assertFalse(repo.get_flag(f"timeout:{self.group_id}:{slot_key}"))
@@ -206,7 +206,7 @@ class ManualSwitch(unittest.TestCase):
         events = repo.list_events(limit=50, group_id=self.group_id)
         manual = [e for e in events if e["kind"] == "manual"]
         self.assertEqual(len(manual), 1, [e["title"] for e in events])
-        self.assertTrue(manual[0]["title"].endswith("：手动换班完成"), manual[0]["title"])
+        self.assertTrue(manual[0]["title"].startswith("手动换班完成（换班组："), manual[0]["title"])
         self.assertEqual(manual[0]["status"], "done")
 
         # 一条事件里能看完整流程：起当班 → 停原当班 → 确认完毕
@@ -292,6 +292,7 @@ class PartialDdns(unittest.TestCase):
         dns.bind("bad.example.com", dns.TARGET_SERVER, self.a)
 
         self.sent: list[str] = []
+        self.verify_calls: list[bool] = []
         self._orig_send = notify.send_all
         self._orig_sync = ddns.sync
         notify.send_all = self._fake_send
@@ -305,10 +306,17 @@ class PartialDdns(unittest.TestCase):
         self.sent.append(message.title)
         return {"webhook": "ok"}
 
-    def _fake_sync(self, ip, config, force=False, record=None):  # noqa: ANN001, ARG002
+    def _fake_sync(self, ip, config, force=False, record=None, verify=False):  # noqa: ANN001, ARG002
+        self.verify_calls.append(verify)
         if record == "bad.example.com":
             return ddns.DDNSResult(ddns.STATUS_UPDATE_FAILED, "HTTP 500", ip=ip)
-        return ddns.DDNSResult(ddns.STATUS_SYNCED, f"{record} → {ip}", changed=True, ip=ip)
+        return ddns.DDNSResult(
+            ddns.STATUS_SYNCED,
+            f"{record} → {ip}",
+            changed=True,
+            ip=ip,
+            previous=str(config.get("ddns_last_ip") or ""),
+        )
 
     def test_partial_failure_blocks_settle(self):
         for _ in range(4):
@@ -325,12 +333,43 @@ class PartialDdns(unittest.TestCase):
         )
         self.assertIsNotNone(run)
         self.assertNotEqual(run["phase"], shift.PHASE_SETTLED, dict(run))
+        if self.verify_calls:
+            # 换班一直没结算成功：每轮都要重新校验并重试，否则 DDNS 失败永远修不好。
+            # 结算成功后的轮次才走本地缓存（见 test_verify_only_until_settled）。
+            self.assertTrue(all(self.verify_calls))
         self.assertEqual(self.sent, [], "就绪判定没通过，不该发换班报告")
         events = repo.list_events(limit=50, group_id=self.group_id)
         # 事件是「进行中」建的，kind 一开始就叫 shift_done，看的是它有没有被结算
         self.assertFalse([e for e in events if e["status"] == "done"], [e["title"] for e in events])
         texts = [step["text"] for e in events for step in e.get("progress") or []]
         self.assertNotIn("全部状态确认完毕", texts)
+
+    def test_verify_only_until_settled(self):
+        """结算成功后不再强制校验：同一班次只查一次 Cloudflare。"""
+
+        def ok(ip, config, force=False, record=None, verify=False):  # noqa: ANN001, ARG001
+            self.verify_calls.append(verify)
+            return ddns.DDNSResult(
+                ddns.STATUS_SYNCED,
+                f"{record} → {ip}",
+                changed=True,
+                ip=ip,
+                previous=str(config.get("ddns_last_ip") or ""),
+            )
+
+        ddns.sync = ok
+        for _ in range(3):
+            shift.engine.reconcile_group(
+                repo.get_group(self.group_id) or {},
+                repo.get_settings(),
+                _now_dt(),
+                float(time.time()),
+            )
+
+        self.assertTrue(self.verify_calls[0], "首次结算要强制校验")
+        self.assertFalse(
+            self.verify_calls[-1], "结算完成后的轮次走本地缓存，不能每分钟查 CF"
+        )
 
 
 class TrafficBreaker(unittest.TestCase):
@@ -557,7 +596,7 @@ class ManualSwitchTimetable(unittest.TestCase):
         events = repo.list_events(limit=20, group_id=self.group_id)
         manual = [e for e in events if e["kind"] == "manual"]
         self.assertEqual(len(manual), 1, [e["title"] for e in events])
-        self.assertEqual(manual[0]["title"], "时刻表组：手动换班完成")
+        self.assertEqual(manual[0]["title"], "手动换班完成（换班组：时刻表组）")
         self.assertEqual(manual[0]["status"], "done")
         # 全程一条事件：点进去就是完整流程
         texts = [step["text"] for step in manual[0]["progress"]]

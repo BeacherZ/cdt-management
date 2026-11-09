@@ -38,6 +38,9 @@ class DDNSResult:
     detail: str = ""
     changed: bool = False
     ip: str = ""
+    # 更新前记录里的值：事件详情要写「旧 → 新」，通知里也能看出改了什么。
+    # verify=True 时取自 Cloudflare 的实时内容；其余情况取本地缓存的上次 IP。
+    previous: str = ""
 
     def __str__(self) -> str:  # 直接塞进通知文案
         return self.status
@@ -172,7 +175,14 @@ def _resolve_zone_id(headers: dict[str, str], config: dict[str, str], record: st
     return str(zones[0]["id"])
 
 
-def _find_record_id(headers: dict[str, str], zone_id: str, record: str) -> str | None:
+def _find_record(
+    headers: dict[str, str], zone_id: str, record: str
+) -> tuple[str, str] | None:
+    """查询记录，返回 (记录 ID, 当前指向的 IP)。
+
+    顺手把 content 取回来：关键时刻（开机/换班）要先比对 Cloudflare 上的真实值
+    再决定要不要 PUT，光有 ID 做不到「IP 没变就不动记录」。
+    """
     response = requests.get(
         f"{API}/zones/{zone_id}/dns_records",
         headers=headers,
@@ -184,16 +194,25 @@ def _find_record_id(headers: dict[str, str], zone_id: str, record: str) -> str |
         return None
     payload = response.json()
     if payload.get("success") and payload.get("result"):
-        return str(payload["result"][0]["id"])
+        item = payload["result"][0]
+        return str(item["id"]), str(item.get("content") or "")
     return None
 
 
 def sync(
-    ip: str, config: dict[str, str], force: bool = False, record: str | None = None
+    ip: str,
+    config: dict[str, str],
+    force: bool = False,
+    record: str | None = None,
+    verify: bool = False,
 ) -> DDNSResult:
     """把 ip 同步到 Cloudflare A 记录。
 
     record 为空时用默认记录（第一条）；换班组可以指定自己那一条。
+
+    verify=True 用于「实例刚开机 / 刚换班」这类关键时刻：不信本地缓存，先查一次
+    Cloudflare 上记录的真实值，一致就不 PUT、直接算「未变化」。巡检对账不走这条
+    （verify 默认关），否则每分钟一次读请求白花。
     """
     if config.get("ddns_enabled") != "1":
         return DDNSResult(STATUS_DISABLED, ip=ip)
@@ -207,16 +226,28 @@ def sync(
 
     if settings.DRY_RUN:
         # 演示/截图模式：照常走完上面的校验，但不碰真实的 Cloudflare
+        previous = str(config.get("ddns_last_ip") or "")
         log.info("DRY RUN：假装已把 %s 同步到 %s", name, ip)
-        return DDNSResult(STATUS_SYNCED, f"{name} → {ip}", changed=True, ip=ip)
+        same = verify and not force and previous == ip
+        return DDNSResult(
+            STATUS_UNCHANGED if same else STATUS_SYNCED,
+            "IP 未变化" if same else f"{name} → {ip}",
+            changed=not same,
+            ip=ip,
+            previous=previous,
+        )
 
-    # 记录名与 IP 都没变就免掉一次 API 调用
+    # 记录名与 IP 都没变就免掉一次 API 调用。verify 时不走这条：用户要的就是
+    # 「去 Cloudflare 看一眼真实值」，本地缓存算出来的结论不作数。
     if (
         not force
+        and not verify
         and config.get("ddns_last_ip") == ip
         and (config.get("ddns_last_status") or "").startswith("✅")
     ):
-        return DDNSResult(STATUS_UNCHANGED, "IP 未变化", ip=ip)
+        return DDNSResult(
+            STATUS_UNCHANGED, "IP 未变化", ip=ip, previous=str(config.get("ddns_last_ip") or "")
+        )
 
     _force_ipv4()
     # 认证/Zone 这类配置问题重试也没用，先一次性判掉，别白等 6 秒
@@ -236,12 +267,21 @@ def sync(
     attempts = 3
     for attempt in range(1, attempts + 1):
         try:
-            record_id = _find_record_id(headers, zone_id, name)
-            if not record_id:
+            found = _find_record(headers, zone_id, name)
+            if not found:
                 last_error = "记录不存在或查询失败"
                 if attempt < attempts:
                     time.sleep(1)
                 continue
+            record_id, current = found
+
+            # 关键时刻已核对过真实值：CF 上就是这台机器的 IP，再 PUT 一遍只会
+            # 白白刷新记录的修改时间，事件里还得写「已更新」，属于谎报。
+            if verify and not force and current == ip:
+                log.info("DDNS 已是最新 %s -> %s，跳过更新", name, ip)
+                return DDNSResult(
+                    STATUS_UNCHANGED, "IP 未变化", ip=ip, previous=current
+                )
 
             response = requests.put(
                 f"{API}/zones/{zone_id}/dns_records/{record_id}",
@@ -258,7 +298,13 @@ def sync(
             payload = response.json() if response.content else {}
             if response.status_code == 200 and payload.get("success"):
                 log.info("DDNS 更新成功 %s -> %s", name, ip)
-                return DDNSResult(STATUS_SYNCED, f"{name} → {ip}", changed=True, ip=ip)
+                return DDNSResult(
+                    STATUS_SYNCED,
+                    f"{name} → {ip}",
+                    changed=True,
+                    ip=ip,
+                    previous=current,
+                )
             last_error = f"HTTP {response.status_code}"
             log.warning("DDNS 第 %s 次更新失败: %s", attempt, last_error)
         except Exception as exc:  # noqa: BLE001
@@ -287,7 +333,7 @@ def test(config: dict[str, str]) -> DDNSResult:
     except Exception as exc:  # noqa: BLE001
         return DDNSResult(STATUS_ERROR, str(exc))
 
-    missing = [name for name in names if not _find_record_id(headers, zone_id, name)]
+    missing = [name for name in names if not _find_record(headers, zone_id, name)]
     if missing:
         return DDNSResult(STATUS_NO_RECORD_ID, f"{'、'.join(missing)} 未找到 A 记录")
     detail = f"Zone {zone_id[:8]}… / {names[0]} 已就绪" if len(names) == 1 else f"{len(names)} 条记录均就绪"

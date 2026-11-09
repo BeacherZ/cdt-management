@@ -14,7 +14,7 @@ from typing import Any
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from . import aliyun, billing, ddns, dns, notify, repo, security, settings
+from . import aliyun, billing, ddns, dns, messages, notify, repo, security, settings
 from .shift import (
     PHASE_BREAKER,
     PHASE_ERROR,
@@ -664,7 +664,7 @@ def register(app: FastAPI) -> None:
                 "initialized": "1",
             }
         )
-        repo.add_event("system", "系统初始化完成", f"管理员：{username}")
+        repo.add_event("system", messages.ev("系统初始化完成"), f"管理员：{username}")
         response = JSONResponse({"ok": True})
         _attach_session(response, username)
         return response
@@ -957,7 +957,9 @@ def register(app: FastAPI) -> None:
     def add_dns_record(request: Request, payload: dict[str, Any], user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
         require_csrf(request)
         name = dns.add_record(str(payload.get("record") or ""), repo.get_settings())
-        repo.add_event("dns", "DNS 记录名已添加", name)
+        repo.add_event(
+            "dns", messages.ev("DNS 记录已添加", messages.obj_server(name)), name
+        )
         return {"record": name}
 
     @app.delete("/api/v1/dns/records/{record}")
@@ -968,7 +970,7 @@ def register(app: FastAPI) -> None:
             raise HTTPException(status_code=404, detail="记录不存在")
         dns.remove_record(record, repo.get_settings())
         repo.add_event(
-            "dns", "DNS 记录名已删除", f"{record}（绑定已一并解除）" if row.get("target_kind") else record
+            "dns", messages.ev("DNS 记录已删除", messages.obj_server(record)), f"{record}（绑定已一并解除）" if row.get("target_kind") else record
         )
         return {"ok": True}
 
@@ -1228,7 +1230,7 @@ def register(app: FastAPI) -> None:
                 # 记录名列表变了，把表里的行同步一遍（增的补上、删的连绑定一起清掉）
                 dns.sync_registry(repo.get_settings())
             if changed:
-                repo.add_event("system", "配置已更新", _setting_labels(changed))
+                repo.add_event("system", messages.ev("配置已更新"), _setting_labels(changed))
 
         if bumped_epoch is not None:
             # 改用户名 / 改密码的这个浏览器要留住，给它发一张新票据；

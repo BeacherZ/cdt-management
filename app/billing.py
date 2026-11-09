@@ -19,7 +19,7 @@ import logging
 import time
 from typing import Any
 
-from . import aliyun, repo, settings
+from . import aliyun, messages, repo, settings
 
 log = logging.getLogger("cdt-management.billing")
 
@@ -102,7 +102,7 @@ def refresh_server(server_id: int, *, force: bool = False) -> dict[str, Any] | N
         repo.update_server_site(server_id, detected_site)
         repo.add_event(
             "billing",
-            f"{server.get('label')}：站点已自动纠正",
+            messages.ev("站点已自动纠正", messages.obj_server(str(server.get('label') or ''))),
             f"{configured_site} → {detected_site}（阿里云返回的站点与配置不一致，费用接口按实际站点走）",
             server_id=server_id,
         )
@@ -167,7 +167,7 @@ def _mark_transition(server: dict[str, Any], error_text: str) -> None:
     if now_error:
         repo.add_event(
             "error",
-            f"{server.get('label')}：费用查询失败",
+            messages.ev("费用查询失败", messages.obj_server(str(server.get('label') or ''))),
             f"{error_text}（缺 BSS 权限时可在设置里关闭费用查询）",
             level="warning",
             server_id=int(server["id"]),
@@ -175,7 +175,7 @@ def _mark_transition(server: dict[str, Any], error_text: str) -> None:
     else:
         repo.add_event(
             "billing",
-            f"{server.get('label')}：费用已恢复",
+            messages.ev("费用已恢复", messages.obj_server(str(server.get('label') or ''))),
             "账单与余额查询恢复正常",
             server_id=int(server["id"]),
         )

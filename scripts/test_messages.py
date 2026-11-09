@@ -148,6 +148,16 @@ class ShiftDone(unittest.TestCase):
         self.assertIn("均已普通停机", message.html)
         self.assertNotIn("均已节省停机", message.html)
 
+    def test_stop_tail_unknown_mode_never_prints_dash(self):
+        # _mode 读不到模式时给的是「-」，以前会拼出「均已-」这种车祸；
+        # 有机器读不到就退成「均已停机」，不能替它猜「节省停机」
+        unknown = {"label": "C1", "instance_id": "i-ccc333", "instance_status": "Stopped"}
+        self.assertEqual(messages.stop_tail([unknown]), "均已停机")
+        self.assertEqual(messages.stop_tail([{**unknown, "stopped_mode": ""}]), "均已停机")
+        message = messages.breaker([{**unknown, "traffic_used": 200.0}])
+        self.assertNotIn("均已-", message.html)
+        self.assertIn("均已停机", message.html)
+
     def test_not_applicable_shown_as_normal_stop(self):
         # Not-applicable = 本实例不支持停机不收费，停机后照常收费，语义等同普通停机，
         # 不能原样漏成英文 Not-applicable

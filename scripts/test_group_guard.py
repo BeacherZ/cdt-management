@@ -357,7 +357,7 @@ class LimitStopThrottle(_Base):
             self._reconcile(self.group_id)
 
         self.assertEqual(len(calls), 1, "120 秒内只该下发一次停机指令")
-        errors = [e for e in self._events() if e["title"].endswith("超限停机失败")]
+        errors = [e for e in self._events() if "流量超限停机失败" in e["title"]]
         self.assertEqual(len(errors), 1, [e["title"] for e in self._events()])
 
     def test_stuck_instance_records_one_event(self):
@@ -406,7 +406,7 @@ class UnreadableStateNoCommand(_Base):
 
         self.assertIn("state_unreadable", first)
         self.assertEqual(started, [], "状态读不到时不该发开机指令")
-        warnings = [e for e in self._events() if "当班状态读取" in e["title"]]
+        warnings = [e for e in self._events() if "当班 " in e["title"]]
         self.assertEqual(len(warnings), 1, "同一班次只提示一次，不要每轮刷")
         self.assertIn("state_unreadable", second)
 

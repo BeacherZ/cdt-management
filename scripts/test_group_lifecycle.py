@@ -143,7 +143,7 @@ class NewGroupBootstrap(_Base):
         event = events[0]
         self.assertEqual(event["kind"], "group_new")
         self.assertEqual(event["status"], "done")
-        self.assertEqual(event["title"], "整队组：新建换班组")
+        self.assertEqual(event["title"], "新建换班组（换班组：整队组）")
 
         texts = [step["text"] for step in event["progress"]]
         self.assertTrue(any(t.startswith("按排班表核对组员状态") for t in texts), texts)
@@ -166,7 +166,7 @@ class NewGroupBootstrap(_Base):
         for _ in range(5):
             self._reconcile(self.group_id)
         titles = [e["title"] for e in self._events(self.group_id)]
-        self.assertEqual(titles, ["整队组：新建换班组"], titles)
+        self.assertEqual(titles, ["新建换班组（换班组：整队组）"], titles)
 
     def test_disabled_group_only_records_event(self):
         repo.upsert_group(
@@ -185,7 +185,7 @@ class NewGroupBootstrap(_Base):
         self.assertEqual(result.get("skipped"), "disabled")
         self.assertEqual(_status(self.b)[0], "Running")  # 原样不动
         event = self._events(self.group_id)[0]
-        self.assertEqual(event["title"], "整队组：新建换班组")
+        self.assertEqual(event["title"], "新建换班组（换班组：整队组）")
         self.assertEqual(event["status"], "done")
         self.assertIn("未启用", event["detail"])
 
@@ -239,7 +239,7 @@ class DissolveGroup(_Base):
         event = events[0]
         self.assertEqual(event["kind"], "group_dissolve")
         self.assertEqual(event["status"], "done")
-        self.assertEqual(event["title"], "解散组：解散换班组")
+        self.assertEqual(event["title"], "解散换班组（换班组：解散组）")
         texts = [step["text"] for step in event["progress"]]
         self.assertTrue(any("解散A" in t and "保持不动" in t for t in texts), texts)
         self.assertTrue(any("解散B" in t and "保持不动" in t for t in texts), texts)

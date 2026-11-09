@@ -171,7 +171,7 @@ class SettleWhenNotifyOff(_Base):
         self.assertEqual(len(events), 1, [e["title"] for e in events])
         event = events[0]
         self.assertEqual(event["status"], "done")
-        self.assertTrue(event["title"].endswith("：换班完成"), event["title"])
+        self.assertTrue(event["title"].startswith("换班完成（换班组："), event["title"])
         # 关键：概览必须是结算结论，不能还停在「正在启动当班 A」
         self.assertEqual(event["detail"], "当班 当班A / 待机 1 台 / ⏸ 未绑定")
 
@@ -198,7 +198,7 @@ class FailoverIsOneEvent(_Base):
         self.assertEqual(len(events), 1, [e["title"] for e in events])
         event = events[0]
         self.assertEqual(event["kind"], "shift_failover")
-        self.assertTrue(event["title"].endswith("：故障转移"), event["title"])
+        self.assertTrue(event["title"].startswith("故障转移（换班组："), event["title"])
         self.assertEqual(event["status"], "done")
         # 决策、启动、停机、结算都在同一条事件里
         texts = [step["text"] for step in event["progress"]]

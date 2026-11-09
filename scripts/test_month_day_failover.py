@@ -347,7 +347,7 @@ class MonthDayFailover(_Base):
         settled = [
             e
             for e in repo.list_events(limit=100)
-            if e.get("kind") == "shift_failover" and "故障转移（保活超时）" in e["title"]
+            if e.get("kind") == "shift_failover" and "保活超时，故障转移" in e["title"]
         ]
         self.assertTrue(settled, self._titles())
 

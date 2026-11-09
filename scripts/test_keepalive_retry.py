@@ -306,7 +306,7 @@ class KeepaliveEventLifecycle(unittest.TestCase):
         events = repo.list_events(limit=10)
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["status"], "done")
-        self.assertEqual(events[0]["title"], "躺一天的机器：保活拉起完成")
+        self.assertEqual(events[0]["title"], "单机保活拉起完成（躺一天的机器）")
         self.assertFalse(repo.get_flag(f"keepalive_tries:{self.server_id}"))
 
     def test_limit_stop_closes_running_keepalive_event(self):

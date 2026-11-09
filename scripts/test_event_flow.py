@@ -46,13 +46,21 @@ def _make_server(label: str, instance_id: str) -> int:
 
 
 class _FakeDDNS:
-    def __str__(self) -> str:
-        return "✅ 已同步"
+    """保活路径的同步桩：详情/概览/通知三种说法各一份。"""
+
+    detail = "✅ 已同步 1.2.3.4（首次指向）"
+    brief = "✅ DDNS已同步（已更新）"
+    status = "✅ 已同步"
+    results: list = []
 
 
 class _FakeSync:
-    # 跟真实 ddns.STATUS_SYNCED 一致：概览里同步结果就是这句，不带「DDNS：」前缀
+    """手动开机路径的 sync_record 桩：够 dns.report() 拼出三种说法即可。"""
+
     status = "✅ 已同步"
+    changed = True
+    ip = "1.2.3.4"
+    previous = ""
 
 
 def _texts(event_id: int) -> list[str]:
@@ -82,13 +90,24 @@ class EventFlow(unittest.TestCase):
             scheduler.dns.sync_record,
         )
         self.sent: list[str] = []
+        # 三个「强制校验」时间点：确认器必须把 verify 传下去
+        self.verify_calls: list[bool] = []
         scheduler.aliyun.get_instance = lambda server: aliyun.InstanceInfo(
             "Running", "", "1.2.3.4", "cn-hongkong"
         )
-        scheduler.engine._sync_ddns = (
-            lambda server, config, kind, target_id, ip=None: _FakeDDNS()
-        )
-        scheduler.dns.sync_record = lambda *args, **kwargs: _FakeSync()
+
+        def _fake_sync_ddns(
+            server, config, kind, target_id, ip=None, verify=False
+        ):  # noqa: ANN001
+            self.verify_calls.append(verify)
+            return _FakeDDNS()
+
+        def _fake_sync_record(*args, **kwargs):  # noqa: ANN002
+            self.verify_calls.append(bool(kwargs.get("verify")))
+            return _FakeSync()
+
+        scheduler.engine._sync_ddns = _fake_sync_ddns
+        scheduler.dns.sync_record = _fake_sync_record
 
         def _send(config, message):
             self.sent.append(message.title)
@@ -132,19 +151,21 @@ class EventFlow(unittest.TestCase):
             [
                 "已下发启动指令（原状态 Stopped）",
                 "已确认 Running（运行中）",
-                "DDNS：✅ 已同步",
+                "DDNS：✅ 已同步 1.2.3.4（首次指向）",
                 "报告已发送",
             ],
         )
         event = _event(event_id)
         self.assertEqual(event.get("status"), "done")
         # 收起状态只显示 detail：概览只讲结果，「原状态 Stopped」「已下发指令」
-        # 这些过程留给展开的步骤列表，摘要就是「最终状态 / 域名同步结果」。
+        # 这些过程留给展开的步骤列表；DDNS 汇总带「已更新 / IP 未变化」。
         self.assertEqual(
             event.get("detail"),
-            "运行中 / ✅ 已同步",
+            "运行中 / ✅ DDNS已同步（已更新）",
         )
         self.assertEqual(len(self.sent), 1)
+        # 保活拉起是「强制向 CF 校验一次」的时间点
+        self.assertEqual(self.verify_calls, [True])
 
     def test_2_manual_start_dns_after_confirm(self):
         """手动开机：解析同步也排在「已确认」之后，且事件里没有更靠后的动作。"""
@@ -172,14 +193,16 @@ class EventFlow(unittest.TestCase):
             [
                 "已下发开机指令",
                 "已确认 Running（运行中）",
-                "解析 demo.example.com ✅ 已同步",
+                "DDNS：✅ 已同步 1.2.3.4（首次指向）",
             ],
         )
         # 手动开机同样只写结果：状态 + 同步结果，与保活、换班同一种写法
         self.assertEqual(
             _event(event_id).get("detail"),
-            "运行中 / ✅ 已同步",
+            "运行中 / ✅ DDNS已同步（已更新）",
         )
+        # 手动开机也是「强制校验」时间点
+        self.assertEqual(self.verify_calls, [True])
 
     def test_3_ddns_off_writes_no_dns_step(self):
         """DDNS 关着：手动开机不许写「解析 … ⏸ DDNS 未启用」。
@@ -248,7 +271,7 @@ class EventFlow(unittest.TestCase):
         # 通知里照样告诉用户域名没跟着走（报告是另一回事，不因事件省略而省略）
         self.assertEqual(len(self.sent), 1)
         # 完成态标题：不能还留着进行时的「保活拉起」
-        self.assertEqual(_event(event_id).get("title"), "测试机-未绑定：保活拉起完成")
+        self.assertEqual(_event(event_id).get("title"), "单机保活拉起完成（测试机-未绑定）")
 
 
 if __name__ == "__main__":

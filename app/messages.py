@@ -110,9 +110,14 @@ def result_label(status: str | None, stopped_mode: str | None) -> str:
 def stop_tail(servers: list[dict[str, Any]]) -> str:
     """一句话说明这批机器到底是怎么停的，按实例返回的真实 StoppedMode。"""
     modes = {_mode(s) for s in servers}
+    # _mode 读不到模式时给的是「-」而不是空串，不排掉就会写出「均已-」这种车祸。
+    # 有机器模式读不到就不猜，退成「均已停机」——说「均已节省停机」而实际照扣
+    # 规格费比含糊更糟。
+    if "-" in modes or "" in modes:
+        return "均已停机"
     if modes == {"StopCharging"}:
         return "均已节省停机"
-    if len(modes) == 1 and "" not in modes:
+    if len(modes) == 1:
         return f"均已{mode_label(next(iter(modes)))}"
     return "均已停机"
 
@@ -223,6 +228,36 @@ def title_of(
 ) -> str:
     """统一拼标题。event 不带「报告」二字，例如「换班完成」「全局熔断」。"""
     return f"CDT {event}报告{scope_tag(group_name, scope, note)}"
+
+
+# --------------------------------------------------------------------------
+# 事件标题：{结论}（{对象}）
+# --------------------------------------------------------------------------
+# 与通知标题同构 —— 结论在前、对象进括号，扫列表时先看「发生了什么」，
+# 需要再确认「是谁」。结论里不再重复对象名，也不再用「对象：结论」的写法：
+# 以前「别名：保活拉起完成」和「别名 状态读取已恢复」两种写法混在一起，
+# 名字长短一变，结论就没法对齐，列表看着很乱。
+def ev(conclusion: str, obj: str = "") -> str:
+    """事件标题。obj 为空时按系统级事件处理，写成「（系统）」。"""
+    return f"{conclusion}（{obj or '系统'}）"
+
+
+def obj_server(label: str) -> str:
+    """单台服务器：裸别名。换班组才带前缀，避免与同名实例混淆。"""
+    return str(label or "—")
+
+
+def obj_group(name: str) -> str:
+    return f"{SCOPE_GROUP}：{name or '—'}"
+
+
+def obj_duty(name: str, label: str) -> str:
+    """换班组里的当班机：点名到具体实例，一眼看出是谁出问题。"""
+    return f"{SCOPE_GROUP}：{name or '—'}，当班 {label or '—'}"
+
+
+def obj_member(name: str, label: str) -> str:
+    return f"{SCOPE_GROUP}：{name or '—'}，成员 {label or '—'}"
 
 
 def _message(kind: str, title_html: str, title: str, body: str) -> notify.Message:

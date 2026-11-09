@@ -188,7 +188,7 @@ class ManualConsistency(unittest.TestCase):
         self.assertEqual(len(manual), 3, [e["title"] for e in manual])
         for event in manual:
             self.assertEqual(event["status"], "done", event["title"])
-            self.assertEqual(event["title"], "一致性组：手动换班完成")
+            self.assertEqual(event["title"], "手动换班完成（换班组：一致性组）")
 
     # -- 4. 上一轮没切完就再点：旧事件不能永远转圈 -----------------------
     def test_rapid_second_click_closes_previous_event(self):
@@ -208,7 +208,7 @@ class ManualConsistency(unittest.TestCase):
         # 后点的那次正常走完，两条都必须是终态。
         titles = sorted(e["title"] for e in manual)
         self.assertEqual(
-            titles, ["一致性组：手动换班完成", "一致性组：手动换班已取消"], titles
+            titles, ["手动换班完成（换班组：一致性组）", "手动换班已取消（换班组：一致性组）"], titles
         )
 
     # -- 5. 手动换完，域名确实指向当班机 ---------------------------------
