@@ -1529,6 +1529,9 @@ class Engine:
         #    以前是「当班一开机就同步」，非当班还在跑的时候域名已经指过去了；而且
         #    停机那一轮还会再同步一次，进度里冒出重复的「DDNS：✅ 已同步」这种没意义的一行。
         ddns_text = ""
+        # 概览和通知是两套文案：status 给通知（短），brief 给事件概览（带「已更新 / IP 未变化」）。
+        # 换班概览以前错用了 status，列表里就只剩「✅ 已同步」，和保活、手动开机不一致。
+        ddns_brief = ""
         ddns_report: dns.DDNSReport | None = None
         ddns_ok = True
         if all_stopped:
@@ -1542,6 +1545,7 @@ class Engine:
                 verify=not previously_settled,
             )
             ddns_text = ddns_report.status
+            ddns_brief = ddns_report.brief
             # DDNS 只有「已设置且已绑定」时才要求同步成功，否则不卡流程：
             #   - 未启用 / 未绑定（⏸ 开头）→ 跳过确认，不阻塞
             #   - 已绑定但同步失败（❌ / ⚠️ 开头）→ 本轮不算就绪，等下一轮重试
@@ -1727,7 +1731,7 @@ class Engine:
                     name,
                     duty,
                     others,
-                    str(ddns_text),
+                    str(ddns_brief),
                     is_failover=failover_flag,
                     is_manual=manual_switch,
                 )
@@ -1739,6 +1743,7 @@ class Engine:
             self._notify_settled(
                 group, config, duty, others, ddns_text, failover_flag, slot_key,
                 manual=manual_switch, shift_event_id=event_id, now_ts=now_ts,
+                ddns_brief=ddns_brief,
             )
         elif recovered and config.get("notify_on_recovery") == "1":
             results = notify.send_all(
@@ -2078,7 +2083,11 @@ class Engine:
         manual: bool = False,
         shift_event_id: int = 0,
         now_ts: float = 0.0,
+        ddns_brief: str = "",
     ) -> None:
+        # ddns_status 进通知（短），ddns_brief 进事件概览（带「已更新 / IP 未变化」）。
+        # 没传 brief 的旧调用退回 status，概览不至于缺一段。
+        ddns_brief = ddns_brief or str(ddns_status)
         group_id = int(group["id"])
         name = group.get("name") or ""
         is_failover = bool(failover)
@@ -2112,7 +2121,7 @@ class Engine:
                 name,
                 duty,
                 others,
-                str(ddns_status),
+                str(ddns_brief),
                 is_failover=is_failover,
                 is_manual=is_manual,
             )
@@ -2132,7 +2141,7 @@ class Engine:
                 name,
                 duty,
                 others,
-                str(ddns_status),
+                str(ddns_brief),
                 is_failover=is_failover,
                 is_manual=is_manual,
             )
@@ -2183,7 +2192,7 @@ class Engine:
             name,
             duty,
             others,
-            str(ddns_status),
+            str(ddns_brief),
             is_failover=is_failover,
             is_manual=is_manual,
             results=results,
@@ -2197,7 +2206,7 @@ class Engine:
         name: str,
         duty: dict[str, Any],
         others: list[dict[str, Any]],
-        ddns_status: str,
+        ddns_brief: str,
         *,
         is_failover: bool,
         is_manual: bool,
@@ -2208,8 +2217,10 @@ class Engine:
         换班过程的那条 running 事件已经在 reconcile 里改题、finish 过了，这里只补
         摘要，不再另开一条 0 秒完成的 done 事件。results 为 None 表示这次没发通知
         （通知开关关着或调用方没发）—— 摘要照样写，事件是系统自己的流水。
+        DDNS 这段用 brief（「✅ DDNS已同步（…）」），与保活、手动开机的概览一致；
+        通知里仍用 status，保持短句。
         """
-        detail = f"当班 {duty.get('label')} / 待机 {len(others)} 台 / {ddns_status}"
+        detail = f"当班 {duty.get('label')} / 待机 {len(others)} 台 / {ddns_brief}"
         run = repo.get_run(group_id, slot_key) or {}
         run_event_id = int(run.get("event_id") or 0)
         if run_event_id:

@@ -289,7 +289,7 @@ def _confirm_pending_events(now_ts: float | None = None) -> None:
             # 概览收起时只显示 detail 这一行，所以摘要只放「结果」：
             # 「原状态 Stopped」「已下发开机指令」都属于过程，展开后的步骤列表里还在，
             # 这里再写一遍就是啰嗦。steps 里的每一段都是可以直接读的结果短语，
-            # 用「 / 」连起来，与换班结算（当班 X / 待机 N 台 / ✅ 已同步）同一套写法。
+            # 用「 / 」连起来，与换班结算（当班 X / 待机 N 台 / ✅ DDNS已同步（…））同一套写法。
             steps: list[str] = []
 
             def record(text: str, summary: str | None = None) -> None:

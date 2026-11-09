@@ -112,6 +112,10 @@ class ShiftFlow(unittest.TestCase):
         # 换班事件的 DDNS 那一步要说清域名指到哪个 IP
         ddns_step = next(t for t in texts if t.startswith("DDNS："))
         self.assertTrue("首次指向" in ddns_step or "→" in ddns_step, ddns_step)
+        # 概览的 DDNS 用 brief，和保活恢复、手动开机一字不差：
+        # 以前这里错用了通知的 status，只显示「✅ 已同步」，少了「DDNS」和改没改的说明
+        self.assertTrue(event["detail"].startswith("当班 机器A / 待机 1 台 / "), event["detail"])
+        self.assertIn("✅ DDNS已同步（", event["detail"], event["detail"])
         # 通知里的 DDNS 行照旧只有「已同步 / 未绑定」，不带 IP 详情
         self.assertNotIn("→", str(summary.get("ddns") or ""), summary.get("ddns"))
         self.assertNotIn("首次指向", str(summary.get("ddns") or ""), summary.get("ddns"))
