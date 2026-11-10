@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 APP_NAME = "cdt-management"
-VERSION = "1.3.10"
+VERSION = "1.3.11"
 
 DATA_DIR = Path(os.environ.get("CDT_DATA_DIR", "./data")).resolve()
 DB_PATH = DATA_DIR / "cdt-management.db"
@@ -37,8 +37,15 @@ EVENT_RETAIN_DAYS = max(1, int(os.environ.get("CDT_EVENT_RETAIN_DAYS", "14")))
 # 换班超时（分钟）：超时仍未就绪判定为换班异常
 SHIFT_TIMEOUT_MINUTES = max(2, int(os.environ.get("CDT_SHIFT_TIMEOUT_MINUTES", "10")))
 
-# 当班迟迟起不来（被抢占后拉不动、或启动指令一直卡在中间态）的容忍秒数。
-# 超过就按流量超限那套做故障转移，换一台顶这一班。
+# 当班被抢占后「尝试几次仍拉不起来」才做故障转移，换一台顶这一班。
+# 判据是**次数**，不是墙钟：巡检间隔可配（CDT_RECONCILE_INTERVAL，最小 30 秒），
+# 按固定秒数算的话，间隔调成 5 分钟就变成「试 1 次就换人」、调成 30 秒又变成
+# 试 6 次，和说明里写的「尝试 3 次无法拉起」对不上。次数只统计真正下发过
+# start_instance 的那些轮（卡在启动中的轮次不会再下发，不计数）。
+DUTY_START_TRIES = max(2, int(os.environ.get("CDT_DUTY_START_TRIES", "3")))
+
+# 当班迟迟起不来的容忍秒数 —— 现在只用于**中间态兜底**：
+# 实例停在 Starting / Pending 时不会再下发启动指令、次数不涨，只能按时间判死。
 # 不能设太短：竞价实例冷启动本身就要几十秒，太短会把「慢」当成「死」。
 DUTY_STALL_SECONDS = max(60, int(os.environ.get("CDT_DUTY_STALL_SECONDS", "180")))
 

@@ -146,10 +146,29 @@ class _Base(unittest.TestCase):
         return [e["title"] for e in self._events()]
 
     def _age_flag(self, key: str, seconds: float) -> None:
-        """把标记的时间往前推，模拟「已经等了这么久」。"""
+        """把标记的时间往前推，模拟「已经等了这么久」（只对中间态兜底有效）。"""
         db.execute(
             "UPDATE flags SET created_at=? WHERE key=?",
             (int(time.time() - seconds), key),
+        )
+
+    def _give_up(self, stall_key: str) -> None:
+        """模拟「已经试满 DUTY_START_TRIES 次还是起不来」。
+
+        判死看次数不看墙钟：真实运行时每轮下发一次 start_instance 才 +1，
+        测试里不方便真的跑三轮，直接把计数放到阈值上，顺带把计时也推老。
+        """
+        self._age_flag(stall_key, 3600)
+        tries_key = stall_key.replace("duty_stall:", "duty_tries:", 1)
+        db.execute(
+            "INSERT INTO flags(key, created_at, value) VALUES(?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=?",
+            (
+                tries_key,
+                int(time.time()),
+                settings.DUTY_START_TRIES,
+                settings.DUTY_START_TRIES,
+            ),
         )
 
 
@@ -426,7 +445,7 @@ class DayCycleStall(_Base):
         self._reconcile_at(self.t0)
         self.assertEqual(self.started, [self.duty], "第一轮先试着拉起原当班")
 
-        self._age_flag(f"duty_stall:{self.group_id}:{self.slot}", STALL + 5)
+        self._give_up(f"duty_stall:{self.group_id}:{self.slot}")
         self._reconcile_at(self.t0)
 
         run = self._run(self.slot)
@@ -443,7 +462,7 @@ class DayCycleStall(_Base):
         # 本节：原当班起不来 → 另一台顶班
         self.status[self.duty] = "Stopped"
         self._reconcile_at(self.t0)
-        self._age_flag(f"duty_stall:{self.group_id}:{self.slot}", STALL + 5)
+        self._give_up(f"duty_stall:{self.group_id}:{self.slot}")
         self._reconcile_at(self.t0)
         self.assertEqual(int(self._run(self.slot).get("duty_server_id") or 0), self.other)
 
@@ -461,7 +480,7 @@ class DayCycleStall(_Base):
         self.assertNotIn(self.other, self.stopped, "新当班还没起来前不能把当前在跑的停掉")
 
         # 还是起不来：这一班同样交给另一台，不会空着
-        self._age_flag(f"duty_stall:{self.group_id}:{slot}", STALL + 5)
+        self._give_up(f"duty_stall:{self.group_id}:{slot}")
         self._reconcile_at(later)
         self.assertEqual(
             int(self._run(slot).get("duty_server_id") or 0), self.other, "这一班也要有人顶"
@@ -640,6 +659,151 @@ class RecoveryAfterFailedStart(_Base):
         self.assertEqual(recovery[0]["status"], "done")
         self.assertTrue(recovery[0]["title"].startswith("当班已恢复运行"), self._titles())
         self.assertEqual(recovery[0]["detail"], "运行中 / ⏸ DDNS未启用")
+
+
+class TriesNotClock(_Base):
+    """判死看「尝试 3 次」，不看墙钟。
+
+    巡检间隔可配（最小 30 秒，也可调到 5 分钟），按固定秒数判死会出现
+    「间隔调大就只试 1 次就换人」，与说明里的「尝试 3 次无法拉起」对不上。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.a = _make_server("当班A", "Running")
+        self.b = _make_server("待机B")
+        self.status = {self.a: "Running", self.b: "Stopped"}
+        # 开机指令发下去也还是 Stopped：真被抢占就是这样，每轮都要再试一次
+        self._wire(start_to="Stopped")
+        self.group_id = repo.upsert_group(
+            {
+                "name": "换班组",
+                "enabled": True,
+                "members": [
+                    {"server_id": self.a, "hours": 12},
+                    {"server_id": self.b, "hours": 12},
+                ],
+            }
+        )
+        self._reconcile(self.group_id)
+        self.slot = str(repo.recent_runs(1)[0]["slot"])
+        self.stall = f"duty_stall:{self.group_id}:{self.slot}"
+        self.status[self.a] = "Stopped"
+        self.started.clear()
+        self.stopped.clear()
+
+    def _duty(self) -> int:
+        run = repo.get_run(self.group_id, self.slot) or {}
+        return int(run.get("duty_server_id") or 0)
+
+    def test_clock_alone_does_not_trigger_failover(self):
+        """计时推老 10 倍，只试过 1 次也不许换人（间隔调大时就是这么算的）。"""
+        self._reconcile(self.group_id)  # 第 1 次
+        self.assertEqual(len([s for s in self.started if s == self.a]), 1, self.started)
+
+        self._age_flag(self.stall, settings.DUTY_STALL_SECONDS * 10)
+        self._reconcile(self.group_id)  # 第 2 次
+        self.assertEqual(self._duty(), self.a, "才试 2 次，不许换人")
+
+        self._age_flag(self.stall, settings.DUTY_STALL_SECONDS * 10)
+        self._reconcile(self.group_id)  # 第 3 次
+        self.assertEqual(self._duty(), self.a, "第 3 次刚发出去，还该再等一轮")
+        self.assertEqual(len([s for s in self.started if s == self.a]), 3, self.started)
+
+    def test_failover_right_after_third_failed_attempt(self):
+        """试满 3 次仍起不来 → 下一轮换人，事件里写清试了几次。"""
+        for _ in range(3):
+            self._reconcile(self.group_id)
+        self.assertEqual(self._duty(), self.a)
+
+        self._reconcile(self.group_id)  # 第 4 轮：判死、换人
+        self.assertEqual(self._duty(), self.b, self._titles())
+        run = repo.get_run(self.group_id, self.slot) or {}
+        self.assertEqual(str(run.get("failover_reason")), "stall")
+        steps = [step["text"] for e in self._events() for step in e.get("progress", [])]
+        self.assertTrue(
+            any(f"已尝试 {settings.DUTY_START_TRIES} 次仍未能拉起" in t for t in steps), steps
+        )
+
+
+class StartFailureReports(_Base):
+    """起不来要叫人 —— 「换班异常」是 README 承诺会主动推的。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        repo.set_settings({"notify_on_error": "1", "notify_on_shift": "1"})
+        self.a = _make_server("当班A", "Running")
+        self.b = _make_server("待机B")
+        self.status = {self.a: "Running", self.b: "Stopped"}
+        self._wire()
+        # 故障转移关掉：不许换人，只能一直重试（欠费 / 库存不足是全账号现象，
+        # 换到哪台都一样，转移没有意义）。这一条路径以前一条通知都不发。
+        self.group_id = repo.upsert_group(
+            {
+                "name": "换班组",
+                "enabled": True,
+                "failover_enabled": False,
+                "members": [
+                    {"server_id": self.a, "hours": 12},
+                    {"server_id": self.b, "hours": 12},
+                ],
+            }
+        )
+        self._reconcile(self.group_id)
+        self.slot = str(repo.recent_runs(1)[0]["slot"])
+        self.sent.clear()
+
+        def _boom(server):  # noqa: ANN001, ARG001
+            raise aliyun.AliyunError("启动实例失败：欠费")
+
+        aliyun.start_instance = _boom
+        self.status[self.a] = "Stopped"
+
+    def _errors(self) -> list[notify.Message]:
+        return [m for m in self.sent if m.kind == "shift_error"]
+
+    def _wait_minutes(self, minutes: int) -> None:
+        """把「本班次开始处理」拨到 minutes 分钟前。"""
+        repo.upsert_run(
+            self.group_id, self.slot, started_at=int(time.time() - minutes * 60)
+        )
+
+    def test_failed_start_reports_once(self):
+        self._reconcile(self.group_id)  # 第 1 次失败：刚失败，还不该报
+        self.assertEqual(self._errors(), [], [m.kind for m in self.sent])
+
+        self._wait_minutes(11)
+        self._reconcile(self.group_id)
+        errors = self._errors()
+        self.assertEqual(len(errors), 1, [m.kind for m in self.sent])
+        self.assertIn("换班异常", errors[0].text)
+        self.assertIn("当班A", errors[0].text)
+
+        # 同一个班次只报一条：后面几轮不再重复轰炸
+        self._reconcile(self.group_id)
+        self._reconcile(self.group_id)
+        self.assertEqual(len(self._errors()), 1, [m.kind for m in self.sent])
+
+    def test_manual_switch_failure_also_reports(self):
+        repo.upsert_run(self.group_id, self.slot, manual=1, duty_server_id=self.a)
+        self._reconcile(self.group_id)
+        self.assertEqual(self._errors(), [], "刚点完按钮不该立刻报超时")
+
+        self._wait_minutes(11)
+        self._reconcile(self.group_id)
+        self.assertEqual(len(self._errors()), 1, [m.kind for m in self.sent])
+
+    def test_manual_switch_resets_slot_clock(self):
+        """手动换班要把本班次的计时起点拨到此刻。
+
+        时刻表模式（固定时刻表 / 一月一轮）的 slot 起点可能是几小时前，
+        不重置的话第一次对账就会按「已经等了 5 小时」误报换班异常。
+        """
+        before = int(time.time())
+        self.status[self.a] = "Running"  # 别让手切时真的下发失败
+        shift.engine.manual_switch(self.group_id)
+        run = repo.recent_runs(1)[0]
+        self.assertGreaterEqual(int(run.get("started_at") or 0), before, run)
 
 
 class MessageMapping(unittest.TestCase):

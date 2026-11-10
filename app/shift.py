@@ -462,6 +462,7 @@ def _reset_month_day_failover(
         repo.finish_event(old_event_id, "done", "跨日复位，本节重新尝试原当班")
     for prefix in (
         f"duty_stall:{group_id}:{slot_key}",
+        f"duty_tries:{group_id}:{slot_key}",
         f"stall_nocand:{group_id}:{slot_key}",
         f"stall_disabled:{group_id}:{slot_key}",
         f"failover_tried:{group_id}:{slot_key}:",
@@ -1235,16 +1236,23 @@ class Engine:
         #      被抢占后拉不起来、或启动指令一直卡在中间态，超时后换一台顶这一班；
         #      否则整班空着只能等人工，与「只留一台在线」的目的相悖。
         #
-        #      计时用独立 flag 而不是 run.started_at：后者的语义是「本班次从什么时候
-        #      开始处理」（换班超时按它算），正常换班里它不等同于「这次拉起多久了」。
+        #      判死有两种口径，按状态分（都写在 README 的「流量保护」里）：
+        #        - 确实没在跑（Stopped / 状态读不到）→ 按**次数**。试满
+        #          DUTY_START_TRIES 次 start_instance 还起不来才换人。不能用墙钟：
+        #          巡检间隔可配，180 秒在 30 秒间隔下是试 6 次、在 5 分钟间隔下是
+        #          试 1 次，和「尝试 3 次无法拉起」对不上。
+        #        - 正在起（Starting / Pending）→ 按**时间**。这一阶段不会再下发
+        #          指令、次数不涨，只能靠宽限兜底；Windows 正常开机要 2–3 分钟，
+        #          拿 180 秒去卡它等于把慢启动判成起不来，换完人还会把正在启动的
+        #          原当班停机，白启动一次。这一段给 DUTY_START_GRACE（默认 480 秒，
+        #          比 10 分钟的换班超时早一档，先转移再报警），真卡死照样转移。
         #
-        #      阈值按状态分两档：Stopped 是「确实没在跑」，180 秒足够判死；Starting /
-        #      Pending 是「正在起」，Windows 实例正常开机就要 2–3 分钟，用 180 秒去卡
-        #      等于把慢启动判成起不来 —— 换完人还会把正在启动的原当班主动停机，白启动
-        #      一次。这一段给 DUTY_START_GRACE（默认 480 秒，比 10 分钟的换班超时
-        #      早一档，先转移再报警），真卡死照样转移。
+        #      计时/计次都用独立 flag 而不是 run.started_at：后者的语义是「本班次
+        #      从什么时候开始处理」（换班超时按它算），不等同于「这次拉起多久了」。
         stall_flag = f"duty_stall:{group_id}:{slot_key}"
+        tries_flag = f"duty_tries:{group_id}:{slot_key}"
         duty_now = str(duty.get("instance_status") or "")
+        tries = repo.flag_value(tries_flag)
         stall_limit = (
             settings.DUTY_START_GRACE
             if duty_now in TRANSIENT_STATUS
@@ -1253,13 +1261,23 @@ class Engine:
         stall = False
         if not failover and not manual_switch and duty_now != "Running":
             if repo.flag_age(stall_flag) < 0:
-                # 第一次发现当班没在跑：先记时，本轮照常尝试拉起（第 3 步）。
+                # 第一次发现当班没在跑：先记时（中间态兜底要用），本轮照常拉起。
                 repo.set_flag(stall_flag)
-            elif repo.flag_age(stall_flag) >= stall_limit:
-                stall = True
+            if duty_now in TRANSIENT_STATUS:
+                stall = repo.flag_age(stall_flag) >= stall_limit
+            else:
+                stall = tries >= settings.DUTY_START_TRIES
+            # 事件里说清「为什么判死」，两种口径说法不一样
+            stall_reason = (
+                f"已 {stall_limit} 秒未就绪"
+                if duty_now in TRANSIENT_STATUS
+                else f"已尝试 {tries} 次仍未能拉起"
+            )
         else:
             # 当班已经在跑，或者这次是人手动切的（人盯着界面，系统别自作主张）
             repo.clear_flag(stall_flag)
+            repo.clear_flag(tries_flag)
+            stall_reason = ""
 
         if stall:
             if not group.get("failover_enabled"):
@@ -1271,7 +1289,7 @@ class Engine:
                     repo.add_event(
                         "warning",
                         messages.ev("当班未就绪", messages.obj_duty(str(name), str(duty.get('label') or ''))),
-                        f"保持等待（未启用故障转移） / 已等待 {stall_limit} 秒",
+                        f"保持等待（未启用故障转移） / {stall_reason}",
                         level="warning",
                         group_id=group_id,
                         server_id=int(duty["id"]),
@@ -1310,7 +1328,9 @@ class Engine:
                             event_id, title=title, detail=detail, kind="shift_failover"
                         )
                         repo.add_event_progress(
-                            event_id, f"{duty.get('label')}（{status_text}）已 {stall_limit} 秒未就绪，改由 {replacement.get('label')} 接班"
+                            event_id,
+                            f"{duty.get('label')}（{status_text}）{stall_reason}，"
+                            f"改由 {replacement.get('label')} 接班",
                         )
                     else:
                         event_id = repo.add_event(
@@ -1330,6 +1350,9 @@ class Engine:
                     duty = replacement
                     failover = True
                     repo.clear_flag(stall_flag)
+                    # 次数归零：新当班要享有一份完整的「试 3 次」额度，
+                    # 不清的话它一上来就继承原当班的 3 次，下一轮立刻又被判死。
+                    repo.clear_flag(tries_flag)
                     # 当班换人等于开了一段新的换班过程：阶段回到切换中、计时与
                     # 10 分钟超时都从新当班重新算，但事件还是同一条（继续往下记）。
                     # 一月一轮额外记下「今天是哪一天代班的」，隔天 0 点靠它判断
@@ -1362,7 +1385,7 @@ class Engine:
                         repo.add_event(
                             "error",
                             messages.ev("当班未就绪，无成员接替", messages.obj_group(str(name))),
-                            f"{duty.get('label')}（{status_text}）等待 {stall_limit} 秒仍未运行，"
+                            f"{duty.get('label')}（{status_text}）{stall_reason}，"
                             "其余成员要么流量也已超限，要么状态读取失败",
                             level="error",
                             group_id=group_id,
@@ -1411,6 +1434,10 @@ class Engine:
                     group_id, slot_key, name, duty.get("label") or "", int(duty["id"])
                 )
 
+            # 记一次「尝试拉起」：判死只看次数，不看墙钟（巡检间隔可配）。
+            # 异常也算一次 —— 指令被拒（欠费 / 库存不足 / 权限）同样是一次没拉起来
+            # 的尝试，读不到异常原因的轮次也一样，否则次数永远涨不到 3。
+            repo.bump_flag(tries_flag)
             try:
                 aliyun.start_instance(duty)
                 repo.clear_flag(f"start_err:{group_id}:{slot_key}")
@@ -1449,6 +1476,14 @@ class Engine:
                     standby_server_ids=_encode_ids(others),
                     failover=failover_flag,
                     note=str(exc)[:200],
+                )
+                # 「起不来」也算换班异常，得叫人 —— 以前这里直接 return，绕过了
+                # 超时上报，而 error 事件本身不推通知（send_all 是唯一出口），
+                # 于是欠费 / 库存不足时用户一条消息都收不到，只能自己翻事件。
+                # 放到这里上报还顺带修掉一个怪现象：等了一小时才拉起来的那一轮，
+                # 突然收到「已等待 60 分钟仍未就绪」——报警应该发生在等待期间。
+                self._maybe_report_timeout(
+                    group, config, now_ts, slot_key, shift_start, duty, others, notify_enabled
                 )
                 return {"group_id": group_id, "error": str(exc)}
         elif not previously_settled:
@@ -1724,6 +1759,7 @@ class Engine:
             # 不清掉会随着班次累积（下一班 slot 不同本来就用不上，留着只是堆垃圾）。
             for prefix in (
                 f"duty_stall:{group_id}:{slot_key}",
+                f"duty_tries:{group_id}:{slot_key}",
                 f"stall_nocand:{group_id}:{slot_key}",
                 f"stall_disabled:{group_id}:{slot_key}",
                 f"failover_tried:{group_id}:{slot_key}:",
@@ -1998,12 +2034,11 @@ class Engine:
     ) -> None:
         if not notify_enabled or config.get("notify_on_error") != "1":
             return
-        # 手动换班没有「班次开始时刻」的概念：shift_start 是本班次的起点（可能
-        # 已经过去好几个小时），用它算 elapsed 会把刚发起的切换误判成超时。
-        # 手动换班是用户主动操作，界面会盯着结果，这里跳过超时报告。
+        # 手动换班也报：README 承诺「换班异常主动推给你」，手动换班起不来同样
+        # 是换班异常。以前这里整段跳过，原因是时刻表模式的 slot 起点可能是几小时
+        # 前、一算就误报超时；现在 manual_switch 会把 started_at 重置成点按钮的
+        # 那一刻，按它算就是「这次手切等了多久」，不会误报。
         run = repo.get_run(group["id"], slot_key) or {}
-        if run.get("manual"):
-            return
         # 超时从「第一次开始处理这个班次」计时（run.started_at），而不是班次开始
         # 时刻。时刻表模式下 shift_start 是当天班次起点（如 18:00），容器在班次
         # 中途重启后第一次 reconcile 时 elapsed 已经很大，会被误判成超时。
@@ -2586,6 +2621,9 @@ class Engine:
                     manual=1,
                     failover=0,
                     duty_server_id=int(picked[0]["server_id"]),
+                    # 这次切换从此刻开始计时：换班超时按它算，起不来超过阈值
+                    # 才会如实报「换班异常」，不会被当成已经等了一整天。
+                    started_at=int(now_ts),
                 )
                 self._manual_event(
                     group_id, slot_key, group.get("name") or "", current_member, picked[0]
@@ -2697,6 +2735,9 @@ class Engine:
             duty_server_id=int(next_member["server_id"]),
             failover=0,
             manual=1,
+            # 同上：时刻表模式的 slot 起点可能是几小时前，必须从这次手切重新计时，
+            # 否则第一次对账就会被判成「已经等了 5 小时」。
+            started_at=int(now_ts),
         )
         # 只开一条事件，后面启动 / 停机 / DDNS / 结算全部追加到它上面
         self._manual_event(group_id, slot_key, group.get("name") or "", current_member, next_member)
