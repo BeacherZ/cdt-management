@@ -19,11 +19,11 @@
 ![docker](https://img.shields.io/badge/docker-amd64%20%7C%20arm64-2496ed)
 
 
-## 界面
+## 🖥️界面
 
 ![概览](docs/screenshots/02-dashboard.png)
 
-## 主要功能
+## ✨主要功能
 
 ### 单机保活
 
@@ -176,7 +176,7 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 
 两条都会问一次 `yes`，输对了才动手。
 
-## 阿里云 RAM 权限
+## 🔑阿里云 RAM 权限
 
 完整使用本项目功能需要给当前用户添加以下三种 RAM 权限：  
 （RAM 访问控制 - 身份管理 - 用户 - 权限管理）
@@ -192,7 +192,7 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 - 国内站和国际站的 AK 不通用，一台实例一套凭据
 - RAM 控制台：[国内站](https://ram.console.aliyun.com/users) · [国际站](https://ram.console.alibabacloud.com/users)
 
-## 配一遍的流程
+## 🧭配一遍的流程
 
 1. **服务器** → 添加服务器：填别名、Region、AccessKey ID/Secret、实例 ID、配额与限流阈值，按需选停机模式（默认节省停机）
 2. 二选一（或都要，但**同一台不要同时挂两边**）：
@@ -203,7 +203,7 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 5. **设置 → 通知**：填 Telegram Bot Token + Chat ID，点「发送测试」确认能收到
 6. 回概览点「立即同步」，看第一轮结果
 
-## 数据放在哪
+## 💾数据放在哪
 
 | 路径 | 内容 |
 | --- | --- |
@@ -212,11 +212,11 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 
 备份就把整个目录拷走；换宿主机时两个文件一起搬。
 
-## 公网部署与安全
+## 🔒公网部署与安全
 
 直接暴露到公网（或通过端口映射）并不安全，**建议套一层 HTTPS 反向代理**。
 
-## 常见问题
+## ❓常见问题
 
 **换班了但没收到通知？** 先看「设置 → 通知」里渠道是否启用、点测试能不能发出去；再看概览的「最近事件」有没有对应记录。通知失败只记事件，不会阻塞换班。
 
@@ -226,7 +226,7 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 
 **忘了面板密码？** 删掉数据目录里的 `cdt-management.db` 会重置所有配置。
 
-## 本地开发
+## 🛠️本地开发
 
 ```bash
 python -m venv .venv && ./.venv/bin/pip install -r requirements.txt
@@ -237,7 +237,7 @@ CDT_DRY_RUN=1 ./.venv/bin/python -m app.main # 不调真实阿里云
 
 `CDT_DRY_RUN=1` 时阿里云调用走内存桩，整条换班链路能在本地跑通，不会碰真实账号。
 
-## 致谢与许可
+## 📄致谢与许可
 
 - 面板的信息架构、视觉语言、交互细节参考 [**wang4386/CDT-Monitor**](https://github.com/wang4386/CDT-Monitor)，作者 **青柠**，MIT 协议。
 - 一键安装脚本的形态参考 [**BeacherZ/dailycheckin-plus**](https://github.com/BeacherZ/dailycheckin-plus)。
