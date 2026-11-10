@@ -386,6 +386,24 @@ def dns_snapshot(group_id: int, duty_id: int) -> str:
     return json.dumps(snapshot, ensure_ascii=False)
 
 
+def _ddns_state_of(group_id: int, duty_id: int) -> str:
+    """域名此刻指向哪：读库里的记录状态拼一句，不打 Cloudflare、不改任何状态。
+
+    只给「换班异常」这类没有走到同步步骤的报告用 —— 换班正常结算时有
+    DDNSReport 的 status，超时报告拿不到，只能看最后一次同步的结果。
+    从没同步过的记录写「⏸ 待同步」，别混进「未绑定」里（绑定其实是有的）。
+    """
+    names = list(repo.dns_records_of(dns.TARGET_GROUP, int(group_id)))
+    for name in repo.dns_records_of(dns.TARGET_SERVER, int(duty_id)):
+        if name not in names:
+            names.append(name)
+    statuses: list[str] = []
+    for name in names:
+        status = str((repo.get_dns_record(name) or {}).get("last_status") or "").strip()
+        statuses.append(status or "⏸ 待同步")
+    return dns.combine_status(statuses)
+
+
 def _day_key(group: dict[str, Any], now_ts: float) -> str:
     """组时区下的自然日（YYYY-MM-DD）。"""
     return dt.datetime.fromtimestamp(
@@ -678,7 +696,7 @@ class Engine:
                     repo.add_event(
                         "warning",
                         messages.ev("单机保活已停用", messages.obj_server(str(item.get('label') or ''))),
-                        "已由换班组接管，单机保活自动停用，避免两边互相拉扯",
+                        "已停用 / 由换班组接管，避免两边互相拉扯",
                         level="warning",
                         server_id=server_id,
                     )
@@ -1396,7 +1414,9 @@ class Engine:
             try:
                 aliyun.start_instance(duty)
                 repo.clear_flag(f"start_err:{group_id}:{slot_key}")
-                repo.add_event_progress(event_id, f"已下发启动当班 {duty.get('label')}")
+                repo.add_event_progress(
+                    event_id, f"已下发开机指令（当班 {duty.get('label')}）"
+                )
                 # 上一轮失败时概览写的是失败原因，这里开机成功就把它拨回「等待」，
                 # 别让列表里刚发起的这次启动还挂着上次的「当班启动失败」。
                 repo.update_event(event_id, detail="等待开机到位")
@@ -1509,7 +1529,7 @@ class Engine:
                 # 不支持会退化成普通停机，这里不写清就是在骗人。
                 repo.add_event_progress(
                     event_id,
-                    f"已下发停机 {server.get('label')}（{messages.mode_label(stop_mode)}）",
+                    f"已下发停机指令（{server.get('label')}，{messages.mode_label(stop_mode)}）",
                 )
             except Exception as exc:  # noqa: BLE001
                 flag = f"stop_err:{server['id']}"
@@ -1589,13 +1609,12 @@ class Engine:
                         level="warning",
                         group_id=group_id,
                     )
-            # 自动换班只在「开了 DDNS 且确实挂了域名」时记这一步 —— 定时换班
-            # 每分钟都可能来一轮，没绑域名时写「DDNS：⏸ 未绑定」纯噪音。
-            # 手动换班例外：用户点了按钮，就想要一份完整的流程，
-            # 没绑域名也留一行「DDNS：⏸ 未绑定」，跟以前一样。
-            if not previously_settled and (
-                manual_switch or (ddns_enabled and ddns_bound)
-            ):
+            # 每班首次结算都写这一行：绑没绑域名、DDNS 开没开，详情里都要有
+            # 「DDNS：…」。以前只在「开了 DDNS 且绑了域名」时才写，概览里明明写着
+            # 「⏸ DDNS未绑定」，点开却找不到对应步骤，两处对不上。
+            # 只会出现在首次结算（下面 previously_settled 之后不再写），
+            # 定时换班每分钟一轮也不会刷屏。
+            if not previously_settled:
                 # 这一步要连「指到哪个 IP」一起写：域名从旧当班机换到新当班机，
                 # 光一句「已同步」看不出变化，而且巡检有可能抢先同步过，当时的
                 # 旧 IP 只能靠换班开始时存的快照还原。
@@ -1717,13 +1736,17 @@ class Engine:
             repo.clear_flag(recovery_flag)
             if event_id:
                 repo.add_event_progress(event_id, "当班已恢复运行", once=True)
+                # 概览跟换班完成同一套：结果 + DDNS 那一段（未绑/未启用也写），
+                # 以前只写「运行中」，详情里有 DDNS 行、概览里没有，两处对不上。
                 repo.update_event(
                     event_id,
                     title=messages.ev(
                         "当班已恢复运行",
                         messages.obj_duty(str(name), str(duty.get('label') or '')),
                     ),
-                    detail="运行中",
+                    detail=(
+                        f"运行中 / {ddns_brief}" if ddns_brief else "运行中"
+                    ),
                     kind="recovery",
                 )
                 repo.finish_event(event_id, "done")
@@ -1995,7 +2018,11 @@ class Engine:
         results = notify.send_all(
             config,
             messages.shift_error(
-                duty, others, settings.SHIFT_TIMEOUT_MINUTES, group_name=group.get("name") or ""
+                duty,
+                others,
+                settings.SHIFT_TIMEOUT_MINUTES,
+                group_name=group.get("name") or "",
+                ddns_status=_ddns_state_of(int(group["id"]), int(duty.get("id") or 0)),
             ),
         )
         repo.set_flag(flag)
@@ -2033,6 +2060,11 @@ class Engine:
         改不改。之后每轮结算仍走本地缓存，不会每分钟打一次读请求。
         """
         ip = str(ip or server.get("public_ip") or "")
+        # DDNS 整个关着：统一写成「⏸ 未启用」，一条记录都不碰。走 sync_record
+        # 虽然也会返回同一个状态，但会顺手把 last_status 覆盖成「未启用」——
+        # DNS 页原本「✅ 已同步」的记录突然变灰，像是这边出了问题。
+        if config.get("ddns_enabled") != "1":
+            return dns.no_sync_report(config)
         names, results = dns.sync_target_full(
             kind, target_id, config, ip=ip, verify=verify
         )
@@ -2426,10 +2458,15 @@ class Engine:
             bound = repo.dns_records_of(dns.TARGET_GROUP, group_id)
             keepalives = {int(item["server_id"]): item for item in repo.list_keepalives()}
 
+            # 概览同样带 DDNS 那一段：解散会把组绑的域名一起解掉，用户看列表
+            # 那一行就该知道，不用点开才发现。
+            detail = f"已解散 / {len(member_ids)} 台保持原状，未下发指令"
+            if bound:
+                detail += " / DDNS 绑定已解除"
             event_id = repo.add_event(
                 "group_dissolve",
                 messages.ev("解散换班组", messages.obj_group(str(name))),
-                f"已解散 / {len(member_ids)} 台保持原状，未下发指令",
+                detail,
                 group_id=0,  # 组马上就没了，事件别再挂到不存在的组上
                 status="running",
             )
@@ -2593,8 +2630,12 @@ class Engine:
                 stale_id, f"已被新的手动换班取代（改为 {to_label}）"
             )
             if str(stale.get("kind") or "") in ("manual", "shift_done"):
+                # 标题改成「已取消」之后，概览不能还停在「等待接管到位…」——
+                # 那两行会自相矛盾（已经取消了还在等）。写清改成了谁。
                 repo.update_event(
-                    stale_id, title=messages.ev("手动换班已取消", messages.obj_group(str(name)))
+                    stale_id,
+                    title=messages.ev("手动换班已取消", messages.obj_group(str(name))),
+                    detail=f"已取消 / 改为 {to_label}",
                 )
             repo.finish_event(stale_id, "done")
         event_id = repo.add_event(
@@ -3078,7 +3119,7 @@ def _keepalive_retry_note(
         )
         repo.add_event_progress(
             event_id,
-            f"启动指令失败：{error}" if error else f"已下发启动指令（原状态 {state_label}）",
+            f"启动指令失败：{error}" if error else f"已下发开机指令（原状态 {state_label}）",
         )
 
     # 进度只留里程碑：一天 1440 轮，每分钟一行同义句会把事件点开糊成一片，

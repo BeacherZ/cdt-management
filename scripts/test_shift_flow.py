@@ -100,7 +100,7 @@ class ShiftFlow(unittest.TestCase):
 
         texts = [step["text"] for step in event["progress"]]
         # 启动当班 / 停机非当班 都只是进度，不再各自开事件
-        self.assertEqual(sum("已下发启动当班" in t for t in texts), 1, texts)
+        self.assertEqual(sum("已下发开机指令" in t for t in texts), 1, texts)
         self.assertEqual(sum("已下发停机" in t for t in texts), 1, texts)
         self.assertEqual(sum(t.startswith("DDNS：") for t in texts), 1, texts)
         # DDNS 排在停机之后，且是最后一步之前
@@ -215,15 +215,20 @@ class ManualSwitch(unittest.TestCase):
 
         # 一条事件里能看完整流程：起当班 → 停原当班 → 确认完毕
         texts = [step["text"] for step in manual[0]["progress"]]
-        self.assertTrue(any("已下发启动当班" in t for t in texts), texts)
+        self.assertTrue(any("已下发开机指令" in t for t in texts), texts)
         self.assertTrue(any("已下发停机" in t for t in texts), texts)
         # 全部确认后发报告，报告是详情里的最后一步
         self.assertEqual(texts[-2:], ["全部状态确认完毕", "通知已发送"], texts)
         # 手动换班和故障转移无关
         self.assertFalse([e for e in events if e["title"].endswith("故障转移")], events)
 
-    def test_manual_switch_keeps_ddns_line_when_unbound(self):
-        """手动换班没绑域名也留一行「DDNS：⏸ 未绑定」；自动换班不记。"""
+    def test_ddns_line_present_for_both_manual_and_auto(self):
+        """手动换班和自动换班的首结算都留一行「DDNS：…」。
+
+        以前自动换班在「没绑域名」时整段不写，同一个列表里有的有、有的没有，
+        看着像漏了；现在两边都写，值按真实状态给（未启用 / 未绑定 / 已同步）。
+        只写首次结算，后续轮次不再重复，定时换班不会刷屏。
+        """
         for _ in range(3):
             self._reconcile()
         sent_before = len(self.sent)
@@ -234,15 +239,17 @@ class ManualSwitch(unittest.TestCase):
         events = repo.list_events(limit=50, group_id=self.group_id)
         manual = [e for e in events if e["kind"] == "manual"][0]
         manual_texts = [step["text"] for step in manual["progress"]]
-        self.assertIn(f"DDNS：{dns.STATUS_UNBOUND}", manual_texts)
+        self.assertIn(f"DDNS：{ddns.STATUS_DISABLED}", manual_texts)
 
         # 报告里同样保留这一行
         self.assertEqual(len(self.sent), sent_before + 1, self.sent)
 
-        # 自动换班照旧不记：没绑域名的组每分钟刷一行「未绑定」是纯噪音
         auto = [e for e in events if e["kind"] == "shift_done"][0]
         auto_texts = [step["text"] for step in auto["progress"]]
-        self.assertFalse([t for t in auto_texts if t.startswith("DDNS：")], auto_texts)
+        self.assertTrue(
+            [t for t in auto_texts if t.startswith("DDNS：")],
+            f"自动换班首次结算也要有 DDNS 行：{auto_texts}",
+        )
 
 
 class PartialDdns(unittest.TestCase):
@@ -569,7 +576,10 @@ class TrafficBreaker(unittest.TestCase):
         ]
         self.assertEqual(len(recovered), 1, titles)
         self.assertEqual(recovered[0]["status"], "done")
-        self.assertEqual(recovered[0]["detail"], "运行中", "恢复事件摘要不该停在过程句")
+        self.assertTrue(
+            recovered[0]["detail"].startswith("运行中 / "),
+            f"恢复事件摘要要带 DDNS 段，与换班完成一致：{recovered[0]['detail']}",
+        )
 
 
 def _now_dt():
@@ -668,7 +678,7 @@ class ManualSwitchTimetable(unittest.TestCase):
         self.assertEqual(manual[0]["status"], "done")
         # 全程一条事件：点进去就是完整流程
         texts = [step["text"] for step in manual[0]["progress"]]
-        self.assertTrue(any("已下发启动当班" in t for t in texts), texts)
+        self.assertTrue(any("已下发开机指令" in t for t in texts), texts)
         self.assertTrue(any("已下发停机" in t for t in texts), texts)
         self.assertEqual(texts[-2:], ["全部状态确认完毕", "通知已发送"], texts)
         self.assertFalse([e["title"] for e in events if e["title"].endswith("故障转移")], events)

@@ -349,7 +349,7 @@ class KeepaliveWindowEngine(unittest.TestCase):
         self.assertEqual(self.sent, [], "计划内开机不推「抢占恢复」")
         event = [e for e in self._events() if e["title"] == "单机保活窗口恢复（保活机）"][0]
         self.assertEqual(event["status"], "done")
-        self.assertEqual(event["detail"], "运行中")
+        self.assertEqual(event["detail"], "运行中 / ⏸ DDNS未启用")
         self.assertIn("已确认 Running（运行中）", self._texts(event))
 
     def test_resume_event_when_already_running(self):
@@ -364,6 +364,8 @@ class KeepaliveWindowEngine(unittest.TestCase):
         self.assertEqual(self.started, [], "已经在跑，不该再下发开机")
         event = [e for e in self._events() if e["title"] == "单机保活窗口恢复（保活机）"][0]
         self.assertEqual(event["status"], "done")
+        # 这条是「本来就在跑、无需指令」的一次性记录：没有下发任何动作，
+        # 也就没有同步过解析 —— 不编造 DDNS 结论，概览只写状态。
         self.assertEqual(event["detail"], "运行中")
 
     def test_mid_state_resume_does_not_fall_back_to_normal_pull(self):
@@ -431,7 +433,7 @@ class KeepaliveWindowEngine(unittest.TestCase):
         resumes = [e for e in self._events() if e["title"].startswith("单机保活窗口恢复")]
         self.assertEqual(len(resumes), 1, self._titles())
         self.assertEqual(resumes[0]["status"], "done")
-        self.assertEqual(resumes[0]["detail"], "运行中")
+        self.assertEqual(resumes[0]["detail"], "运行中 / ⏸ DDNS未启用")
 
     def test_resume_pending_is_cleared_once_running(self):
         """窗口恢复那轮实例还在 Starting：跑起来后标记必须作废。
@@ -649,7 +651,7 @@ class KeepaliveWindowEngine(unittest.TestCase):
         event = [e for e in self._events() if "抢占恢复" in e["title"]][0]
         self.assertEqual(event["title"], "单机保活抢占恢复（保活机）")
         self.assertEqual(event["status"], "done")
-        self.assertEqual(event["detail"], "运行中")
+        self.assertEqual(event["detail"], "运行中 / ⏸ DDNS未启用")
 
     def test_stop_failure_event_gets_its_result(self):
         """停机失败一次、下一轮停成：那条失败事件要补上「重试成功」。

@@ -639,7 +639,7 @@ class RecoveryAfterFailedStart(_Base):
         self.assertEqual(len(recovery), 1, self._titles())
         self.assertEqual(recovery[0]["status"], "done")
         self.assertTrue(recovery[0]["title"].startswith("当班已恢复运行"), self._titles())
-        self.assertEqual(recovery[0]["detail"], "运行中")
+        self.assertEqual(recovery[0]["detail"], "运行中 / ⏸ DDNS未启用")
 
 
 class MessageMapping(unittest.TestCase):

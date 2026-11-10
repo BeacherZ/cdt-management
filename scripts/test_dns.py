@@ -276,9 +276,13 @@ class Binding(Base):
         self.assertEqual(CALLS, [("a.example.com", "47.243.10.10")])
         self.assertEqual(result["sync"]["status"], ddns.STATUS_SYNCED)
         self.assertEqual(repo.get_dns_record("a.example.com")["last_ip"], "47.243.10.10")
-        # 绑定事件里一并记下这次同步的结果
+        # 绑定事件里一并记下这次同步的结果：概览和详情都带「DDNS」前缀，
+        # 与换班结算、保活拉起、手动开机同一套写法
         event = repo.list_events(limit=1, kind="dns")[0]
-        self.assertIn("绑定后立即同步", event["detail"])
+        self.assertEqual(event["detail"], "已指向 香港-主力 / ✅ DDNS已同步（已更新）")
+        steps = [step["text"] for step in event["progress"]]
+        self.assertEqual(steps[0], "已指向 香港-主力")
+        self.assertTrue(steps[1].startswith("DDNS：✅ 已同步"), steps)
 
     def test_binding_does_not_sync_when_ddns_disabled(self):
         repo.set_settings({"ddns_enabled": "0"})
@@ -835,7 +839,12 @@ class ReportWording(unittest.TestCase):
 
     def test_no_binding_is_quiet(self):
         report = dns.report([], [])
-        self.assertEqual((report.detail, report.brief, report.status), ("⏸ 未绑定",) * 3)
+        # 概览那一行要带「DDNS」，跟「✅ DDNS已同步（…）」对齐；
+        # 详情和通知仍是短句「⏸ 未绑定」，后面已经跟着「DDNS：」前缀。
+        self.assertEqual(
+            (report.detail, report.brief, report.status),
+            ("⏸ 未绑定", "⏸ DDNS未绑定", "⏸ 未绑定"),
+        )
 
 
 class VerifyMode(Base):

@@ -148,7 +148,7 @@ class KeepaliveRetry(unittest.TestCase):
         self.assertEqual(
             texts,
             [
-                "已下发启动指令（原状态 已停机）",
+                "已下发开机指令（原状态 已停机）",
                 "仍未运行（已停机），已尝试拉起 3 次",
             ],
             texts,

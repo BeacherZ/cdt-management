@@ -28,8 +28,11 @@ STATUS_UNCHANGED = "✅ 已同步"
 STATUS_INVALID_IP = "⚠️ IP 无效跳过"
 STATUS_NO_RECORD_ID = "❌ 获取 ID 失败"
 STATUS_UPDATE_FAILED = "❌ 更新失败"
-STATUS_DISABLED = "⏸ DDNS 未启用"
-STATUS_ERROR = "❌ DDNS 异常"
+# 状态值是「短句」：后面经常跟在「DDNS：」前缀后面（事件进度、通知里的
+# `┃ ☁️ DDNS：…`），再带一个 DDNS 就重复了。概览那一行另由
+# dns.STATUS_DISABLED_BRIEF 补前缀，和「✅ DDNS已同步（…）」对齐。
+STATUS_DISABLED = "⏸ 未启用"
+STATUS_ERROR = "❌ 同步异常"
 
 
 @dataclass

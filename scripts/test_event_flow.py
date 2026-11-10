@@ -143,14 +143,14 @@ class EventFlow(unittest.TestCase):
             pending_status="Running",
             pending_kind="keepalive",
         )
-        repo.add_event_progress(event_id, "已下发启动指令（原状态 Stopped）")
+        repo.add_event_progress(event_id, "已下发开机指令（原状态 Stopped）")
 
         scheduler._confirm_pending_events()
 
         self.assertEqual(
             _texts(event_id),
             [
-                "已下发启动指令（原状态 Stopped）",
+                "已下发开机指令（原状态 Stopped）",
                 "已确认 Running（运行中）",
                 "DDNS：✅ 已同步 1.2.3.4（首次指向）",
                 "通知已发送",
@@ -205,11 +205,12 @@ class EventFlow(unittest.TestCase):
         # 手动开机也是「强制校验」时间点
         self.assertEqual(self.verify_calls, [True])
 
-    def test_3_ddns_off_writes_no_dns_step(self):
-        """DDNS 关着：手动开机不许写「解析 … ⏸ DDNS 未启用」。
+    def test_3_ddns_off_writes_disabled_step(self):
+        """DDNS 关着：写一句「未启用」，但一次同步都不许走。
 
         这条曾经会污染记录状态：sync_record 把「⏸ DDNS 未启用」当成这条域名的
         同步结果落库，原本「✅ 已同步」的记录在 DNS 页变成「待同步」黄点。
+        现在只拼文案（dns.no_sync_report），记录状态一个字节都不动。
         """
         repo.set_settings({"ddns_enabled": "0"})
         server_id = _make_server("测试机-DDNS关", "i-test-event-03")
@@ -232,20 +233,20 @@ class EventFlow(unittest.TestCase):
             scheduler.repo.dns_records_of = orig_record_of
 
         texts = _texts(event_id)
-        self.assertEqual(texts, ["已下发开机指令", "已确认 Running（运行中）"])
-        self.assertFalse(
-            any("DDNS 未启用" in text for text in texts),
-            f"DDNS 关闭时不该出现同步步骤：{texts}",
+        # 概览和详情都留 DDNS 这一段，值统一写「未启用」；不打接口、不碰记录
+        self.assertEqual(
+            texts,
+            ["已下发开机指令", "已确认 Running（运行中）", "DDNS：⏸ 未启用"],
         )
-        # 没有域名同步这一步，摘要就只有结果状态，不留尾部分隔符
-        self.assertEqual(_event(event_id).get("detail"), "运行中")
+        self.assertEqual(_event(event_id).get("detail"), "运行中 / ⏸ DDNS未启用")
 
-    def test_4_keepalive_without_binding_writes_no_dns_step(self):
-        """DDNS 开着但这台没绑域名：保活事件里不该冒出「DDNS：⏸ 未绑定」。
+    def test_4_keepalive_without_binding_still_shows_ddns(self):
+        """DDNS 开着但这台没绑域名：保活事件也要写「DDNS：⏸ DDNS未绑定」。
 
-        换班那边一直是「没绑域名就不写这一步」，保活这边以前照写，同一个功能
-        两条路径两种样子；这里锁死两边一致。
+        以前未绑就整段不写，列表里「运行中」和「运行中 / ✅ DDNS已同步（…）」
+        两种形状混着，分不清是没绑域名还是漏写了。
         """
+        scheduler.engine._sync_ddns = self._orig[1]  # 用真实实现，走「没有记录」分支
         server_id = _make_server("测试机-未绑定", "i-test-event-04")
         # 同上：保活事件出现的先决条件是这台还在保活名单里
         repo.add_keepalive(server_id, enabled=True)
@@ -259,16 +260,13 @@ class EventFlow(unittest.TestCase):
             pending_status="Running",
             pending_kind="keepalive",
         )
-        repo.add_event_progress(event_id, "已下发启动指令（原状态 Stopped）")
+        repo.add_event_progress(event_id, "已下发开机指令（原状态 Stopped）")
 
         scheduler._confirm_pending_events()
 
         texts = _texts(event_id)
-        self.assertFalse(
-            any("未绑定" in text for text in texts),
-            f"没绑域名不该写 DDNS 步骤：{texts}",
-        )
-        self.assertEqual(_event(event_id).get("detail"), "运行中")
+        self.assertIn("DDNS：⏸ 未绑定", texts)
+        self.assertEqual(_event(event_id).get("detail"), "运行中 / ⏸ DDNS未绑定")
         # 通知里照样告诉用户域名没跟着走（报告是另一回事，不因事件省略而省略）
         self.assertEqual(len(self.sent), 1)
         # 完成态标题：不能还留着进行时的「保活拉起」

@@ -103,7 +103,8 @@ def refresh_server(server_id: int, *, force: bool = False) -> dict[str, Any] | N
         repo.add_event(
             "billing",
             messages.ev("站点已自动纠正", messages.obj_server(str(server.get('label') or ''))),
-            f"{configured_site} → {detected_site}（阿里云返回的站点与配置不一致，费用接口按实际站点走）",
+            f"已纠正 / {configured_site} → {detected_site}"
+            "（阿里云返回的站点与配置不一致，费用接口按实际站点走）",
             server_id=server_id,
         )
         log.info("站点自动纠正 server=%s: %s -> %s", server_id, configured_site, detected_site)
@@ -180,7 +181,7 @@ def _mark_transition(server: dict[str, Any], error_text: str) -> None:
         repo.add_event(
             "billing",
             messages.ev("费用已恢复", messages.obj_server(str(server.get('label') or ''))),
-            "账单与余额查询恢复正常",
+            "已恢复 / 账单与余额查询正常",
             server_id=int(server["id"]),
         )
 

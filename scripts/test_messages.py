@@ -194,8 +194,8 @@ class DdnsStatus(unittest.TestCase):
         self.assertIn("┃ ☁️ DDNS：⏸ 未绑定", message.html)
 
     def test_disabled_is_shown_verbatim(self):
-        message = messages.shift_done(A, [B], "AM", "⏸ DDNS 未启用")
-        self.assertIn("┃ ☁️ DDNS：⏸ DDNS 未启用", message.html)
+        message = messages.shift_done(A, [B], "AM", "⏸ 未启用")
+        self.assertIn("┃ ☁️ DDNS：⏸ 未启用", message.html)
 
 
 class ShiftFailover(unittest.TestCase):
@@ -330,7 +330,7 @@ class OtherReports(unittest.TestCase):
 
     def test_keepalive_reuses_recovery_layout(self):
         message = messages.recovery(
-            A, "⏸ DDNS 未启用", headline="实例疑被抢占，已自动恢复运行。", kind="keepalive"
+            A, "⏸ 未启用", headline="实例疑被抢占，已自动恢复运行。", kind="keepalive"
         )
         # 单机保活标题后面挂「（单机保活）」，换班组是「（换班组：组名）」
         self.assertTrue(
@@ -348,7 +348,7 @@ class OtherReports(unittest.TestCase):
 
     def test_shift_error(self):
         # duty=B 是 Stopped（该运行没运行 → ⚪），stopped=[A] 是 Running（该停没停 → 🟢）
-        message = messages.shift_error(B, [A], 10)
+        message = messages.shift_error(B, [A], 10, ddns_status="⏸ 目标未运行")
         self.assertTrue(message.html.startswith("⚠️ <b>CDT 换班异常报告（换班组）</b>\n\n"))
         self.assertIn("⏳ <b>换班超时：换班指令已执行 10 分钟，但状态未就绪。</b>", message.html)
         self.assertIn("🚩 <b>应当运行账号 </b>", message.html)
@@ -356,6 +356,8 @@ class OtherReports(unittest.TestCase):
         # 状态图标跟着真实状态走，不再写死 🚧
         self.assertIn("┃ ⚪ 状态：Stopped (StopCharging)", message.html)
         self.assertIn("┃ 🟢 状态：Running", message.html)
+        # 域名的状态行：其它换班报告都有，异常报告同样要有（只挂在应当运行那台）
+        self.assertIn("┃ ☁️ DDNS：⏸ 目标未运行", message.html)
 
     def test_every_notification_has_region_line(self):
         # 所有通知的实例块都要跟每日报告一样带「地域」行（IP 下面一行；熔断块没有 IP 行，

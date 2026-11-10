@@ -29,7 +29,7 @@ os.environ["CDT_DATA_DIR"] = _TMP
 os.environ["CDT_DRY_RUN"] = "1"
 os.environ["CDT_MOCK_OP_DELAY"] = "0"
 
-from app import aliyun, db, notify, repo, shift  # noqa: E402
+from app import aliyun, db, dns, notify, repo, shift  # noqa: E402
 
 TZ = dt.timezone(dt.timedelta(hours=8))
 
@@ -173,7 +173,7 @@ class SettleWhenNotifyOff(_Base):
         self.assertEqual(event["status"], "done")
         self.assertTrue(event["title"].startswith("换班完成（换班组："), event["title"])
         # 关键：概览必须是结算结论，不能还停在「正在启动当班 A」
-        self.assertEqual(event["detail"], "当班 当班A / 待机 1 台 / ⏸ 未绑定")
+        self.assertEqual(event["detail"], "当班 当班A / 待机 1 台 / ⏸ DDNS未启用")
 
 
 class SettleWhenNotifyDisabled(_Base):
@@ -211,9 +211,43 @@ class SettleWhenNotifyDisabled(_Base):
         self.assertEqual(event["status"], "done")
         self.assertEqual(
             event["detail"],
-            "当班 当班A / 待机 1 台 / ⏸ 未绑定",
+            "当班 当班A / 待机 1 台 / ⏸ DDNS未启用",
             "概览必须是结算结论，不能停在「等待当班 A 到位」",
         )
+
+
+class NewGroupEventShowsDdns(_Base):
+    """新建换班组也是用户点出来的动作：DDNS 那一段要写全。
+
+    以前组没绑域名时，概览只写「⏸ 未绑定」——分不清是 DDNS 还是别的什么没绑；
+    详情里干脆没有这一行，与手动换班、换班结算的写法对不上。
+    """
+
+    def test_unbound_group_still_shows_ddns_line(self):
+        # 开着 DDNS 但一条记录都没绑：这是「未绑定」，不是「未启用」
+        repo.set_settings({"ddns_enabled": "1"})
+        a = _make_server("当班A", "Running")
+        b = _make_server("待机B", "Stopped")
+        self.status = {a: "Running", b: "Stopped"}
+        self._wire()
+        group_id = self._group(
+            [
+                {"server_id": a, "hours": 12},
+                {"server_id": b, "hours": 12},
+            ]
+        )
+
+        shift.engine.bootstrap_group(group_id)
+        for _ in range(4):
+            self._reconcile(group_id)
+
+        events = repo.list_events(limit=50, group_id=group_id)
+        event = [e for e in events if e["kind"] == "group_new"][0]
+        # 概览：DDNS 那一段自带前缀，和「✅ DDNS已同步（…）」同一套写法
+        self.assertTrue(event["detail"].endswith(" / ⏸ DDNS未绑定"), event["detail"])
+        # 详情：新建组也要能看到「DDNS：…」这一步，而不是只有手动换班才有
+        texts = [step["text"] for step in event["progress"]]
+        self.assertIn(f"DDNS：{dns.STATUS_UNBOUND}", texts, texts)
 
 
 class FailoverIsOneEvent(_Base):
@@ -245,7 +279,7 @@ class FailoverIsOneEvent(_Base):
         self.assertIn(
             "当班 当班A 流量超限（195.00 GB / 阈值 188 GB），改由 待机B 接班", texts
         )
-        self.assertIn("已下发启动当班 待机B", texts)
+        self.assertIn("已下发开机指令（当班 待机B）", texts)
         self.assertIn("全部状态确认完毕", texts)
         self.assertEqual(event["detail"].split(" / ")[0], "当班 待机B")
         # 报告只发一条

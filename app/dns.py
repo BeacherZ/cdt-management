@@ -28,6 +28,10 @@ TARGET_GROUP = "group"
 TARGET_NONE = ""
 
 STATUS_UNBOUND = "⏸ 未绑定"
+# 概览摘要里统一带「DDNS」前缀（`✅ DDNS已同步（…）` / `⏸ DDNS未绑定`），
+# 事件列表收起时那一行能直接看出是哪一项没绑；详情和通知仍用短句。
+STATUS_UNBOUND_BRIEF = "⏸ DDNS未绑定"
+STATUS_DISABLED_BRIEF = "⏸ DDNS未启用"
 STATUS_IDLE = "⏸ 目标未运行"
 STATUS_NO_IP = "⚠️ 目标没有公网 IP"
 
@@ -408,7 +412,7 @@ def report(names: list[str], results: list[ddns.DDNSResult]) -> DDNSReport:
     通知仍用 status（`✅ 已同步`），不夹带括号说明，保持短。
     """
     if not results:
-        return DDNSReport(STATUS_UNBOUND, STATUS_UNBOUND, STATUS_UNBOUND, [])
+        return DDNSReport(STATUS_UNBOUND, STATUS_UNBOUND_BRIEF, STATUS_UNBOUND, [])
 
     status = combine_status([result.status for result in results])
     # 有失败就照旧把原因摆出来，不包装成「已同步（…）」
@@ -443,6 +447,21 @@ def report(names: list[str], results: list[ddns.DDNSResult]) -> DDNSReport:
 
     detail = f"{ddns.STATUS_SYNCED} " + "、".join(parts)
     return DDNSReport(detail, brief, status, results)
+
+
+def no_sync_report(config: dict[str, str]) -> DDNSReport:
+    """这一步没有可同步的东西时的统一说法：DDNS 关着 → 未启用，开着没绑 → 未绑定。
+
+    事件概览里 DDNS 那一段必须始终在：「运行中」和「运行中 / ✅ DDNS已同步（…）」
+    两种形状混在一个列表里，用户分不清是没绑域名还是漏写了。这里只拼文案，
+    不碰记录状态、不打接口 —— DDNS 关着时更不能走 sync_record，它会顺手把
+    记录的 last_status 刷成「未启用」，DNS 页开始报假状态。
+    """
+    if config.get("ddns_enabled") != "1":
+        return DDNSReport(
+            ddns.STATUS_DISABLED, STATUS_DISABLED_BRIEF, ddns.STATUS_DISABLED, []
+        )
+    return DDNSReport(STATUS_UNBOUND, STATUS_UNBOUND_BRIEF, STATUS_UNBOUND, [])
 
 
 # 换班进行中，巡检让位多久（秒）。
@@ -610,16 +629,27 @@ def bind(record: str, kind: str, target_id: int, config: dict[str, str] | None =
 
     # 绑完立刻同步一次：用户刚把域名指到这台机器/这个换班组，不该等到下一轮
     # 巡检（最长一分钟）才生效。目标没在跑就只写状态，不硬塞 IP。
+    synced: ddns.DDNSResult | None = None
     if config is not None and config.get("ddns_enabled") == "1":
         synced = sync_record(record, config)
         result["sync"] = {"status": synced.status, "detail": synced.detail, "ip": synced.ip}
 
-    detail = f"已指向 {label}"
+    # 概览和详情统一带「DDNS」：概览用 brief（✅ DDNS已同步（已更新）），
+    # 详情写带前后 IP 的那一行，与换班结算、保活拉起、手动开机同一套写法。
+    # 以前写「绑定后立即同步：✅ 已同步」，列表里这一条和其他事件对不上。
+    summary = f"已指向 {label}"
     if len(records) > 1:
-        detail += f"（该目标现有 {len(records)} 条记录）"
-    if result.get("sync"):
-        detail += f"\n绑定后立即同步：{result['sync']['status']}"
-    repo.add_event("dns", messages.ev("DNS 绑定已更新", record), detail)
+        summary += f"（该目标现有 {len(records)} 条记录）"
+    synced_report = report([record], [synced]) if synced is not None else None
+    if synced_report is not None:
+        summary += f" / {synced_report.brief}"
+    # detail 留空：一次性事件会把 detail 按行拆成过程条目，这里概览和过程要分开写
+    # —— 概览是「已指向 X / ✅ DDNS已同步（…）」，过程第一步只写「已指向 X」。
+    event_id = repo.add_event("dns", messages.ev("DNS 绑定已更新", record), "")
+    repo.add_event_progress(event_id, f"已指向 {label}")
+    if synced_report is not None:
+        repo.add_event_progress(event_id, f"DDNS：{synced_report.detail}")
+    repo.update_event(event_id, detail=summary)
     return result
 
 

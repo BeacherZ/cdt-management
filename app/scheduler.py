@@ -318,28 +318,32 @@ def _confirm_pending_events(now_ts: float | None = None) -> None:
                 # 再决定改不改；通知里仍用 ddns_status，保持一句「✅ 已同步」。
                 ddns_report = None
                 try:
-                    ddns_report = engine._sync_ddns(
-                        server,
-                        config,
-                        dns.TARGET_SERVER,
-                        server_id,
-                        ip=info.public_ip,
-                        verify=True,
+                    # DDNS 关着时一步都别走：sync_record 会把记录的 last_status
+                    # 刷成「未启用」，DNS 页开始报假状态。用统一说法顶上。
+                    ddns_report = (
+                        engine._sync_ddns(
+                            server,
+                            config,
+                            dns.TARGET_SERVER,
+                            server_id,
+                            ip=info.public_ip,
+                            verify=True,
+                        )
+                        if config.get("ddns_enabled") == "1"
+                        else dns.no_sync_report(config)
                     )
                     ddns_status = ddns_report.status
                 except Exception as exc:  # noqa: BLE001
-                    ddns_status = f"❌ DDNS 异常：{exc}"
-                # 只在「开了 DDNS 且这台确实挂了域名」时记这一步：换班那边是同一套
-                # 判断，没绑域名时两边都不该多一行「DDNS：⏸ 未绑定」的噪音。
-                # 通知里照旧带 ddns_status，让用户知道域名没跟着走。
-                bound = bool(repo.dns_records_of(dns.TARGET_SERVER, server_id))
-                if config.get("ddns_enabled") == "1" and bound:
+                    ddns_status = f"{ddns.STATUS_ERROR}：{exc}"
+                # 概览和详情都带 DDNS 那一段：没绑域名写「⏸ DDNS未绑定」、关着写
+                # 「⏸ DDNS未启用」。以前未绑就整段不写，列表里「运行中」和
+                # 「运行中 / ✅ DDNS已同步（…）」混着，分不清是没绑还是漏写。
+                if ddns_report is None:
+                    record(f"DDNS：{ddns_status}", ddns.STATUS_ERROR)
+                else:
                     # 进度写带前后 IP 的详情，概览只要「已更新 / IP 未变化」；
                     # 异常只留短结论，堆栈太占地方。
-                    if ddns_report is None:
-                        record(f"DDNS：{ddns_status}", "❌ DDNS 异常")
-                    else:
-                        record(f"DDNS：{ddns_report.detail}", ddns_report.brief)
+                    record(f"DDNS：{ddns_report.detail}", ddns_report.brief)
                 # 收尾标题跟着来源走，别让两种拉起在列表里长得一样：
                 # 窗口到点开的（kind=keepalive_quiet）写「单机保活窗口恢复」，
                 # 其余（掉线被抢占、手动关机后重新开保活、刚加进保活）写
@@ -369,27 +373,39 @@ def _confirm_pending_events(now_ts: float | None = None) -> None:
                         notify.note_notify(event_id, results)
                     except Exception as exc:  # noqa: BLE001
                         record(f"通知发送失败：{exc}", "❌ 通知发送失败")
-            elif pending == "Running" and info.public_ip and config.get("ddns_enabled") == "1":
+            elif pending == "Running":
                 # 手动开机到位后，把这台机器绑的域名全指过来（一台可以挂好几条）。
-                # DDNS 关着的时候一步都别走：sync_record 会返回「⏸ DDNS 未启用」，
-                # 那句会被当成这条解析的结果写进进度，还会把 dns_records.last_status
-                # 覆盖掉 —— 原本「✅ 已同步」的记录变成「待同步」黄点，界面开始报假异常。
-                try:
-                    # 手动开机到位也是「强制查一次」的时间点：不同来源（控制台/API/
-                    # 别处）改过解析时，本地缓存是过期的，这里以 CF 的真实值为准。
-                    names, results = dns.sync_target_full(
-                        dns.TARGET_SERVER,
-                        server_id,
-                        config,
-                        ip=info.public_ip,
-                        verify=True,
+                # 手动是用户点的动作，DDNS 这一段无论绑没绑、开没开都要写出来，
+                # 否则概览只剩「运行中」，和手动换班的完整流程对不上。
+                ddns_report = None
+                if config.get("ddns_enabled") != "1":
+                    # DDNS 关着的时候一步都别走：sync_record 会返回「⏸ 未启用」，
+                    # 那句会被当成这条解析的结果写进进度，还会把 dns_records.last_status
+                    # 覆盖掉 —— 原本「✅ 已同步」的记录变成「待同步」黄点，界面开始报假异常。
+                    ddns_report = dns.no_sync_report(config)
+                elif not info.public_ip:
+                    # 到位了但 EIP 还没分配：这一轮不同步，但也要如实说明，
+                    # 不能让概览只剩一个「运行中」。
+                    ddns_report = dns.DDNSReport(
+                        dns.STATUS_NO_IP, dns.STATUS_NO_IP, dns.STATUS_NO_IP, []
                     )
-                    if names:
+                else:
+                    try:
+                        # 手动开机到位也是「强制查一次」的时间点：不同来源（控制台/API/
+                        # 别处）改过解析时，本地缓存是过期的，这里以 CF 的真实值为准。
+                        names, results = dns.sync_target_full(
+                            dns.TARGET_SERVER,
+                            server_id,
+                            config,
+                            ip=info.public_ip,
+                            verify=True,
+                        )
                         ddns_report = dns.report(names, results)
-                        # 详情写前后 IP，概览写「已更新 / IP 未变化」，与保活、换班同一套
-                        record(f"DDNS：{ddns_report.detail}", ddns_report.brief)
-                except Exception as exc:  # noqa: BLE001
-                    record(f"解析同步失败：{exc}", "❌ 解析同步失败")
+                    except Exception as exc:  # noqa: BLE001
+                        record(f"解析同步失败：{exc}", "❌ 解析同步失败")
+                if ddns_report is not None:
+                    # 详情写前后 IP，概览写「已更新 / IP 未变化」，与保活、换班同一套
+                    record(f"DDNS：{ddns_report.detail}", ddns_report.brief)
 
             # 收起时这一行就是事件的全部可见信息：只讲结果，段与段之间统一用「 / 」
             summary = " / ".join(steps)

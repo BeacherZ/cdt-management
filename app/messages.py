@@ -575,20 +575,25 @@ def shift_error(
     stopped: list[dict[str, Any]],
     minutes: int,
     group_name: str = "",
+    ddns_status: str = "",
 ) -> notify.Message:
-    """⚠️ 换班异常（超时未就绪）。"""
-    parts = [
-        "\n".join(
-            [
-                "🚩 <b>应当运行账号 </b>",
-                f"┃ 🏷 别名：{_label(duty)}",
-                f"┃ 📦 实例：<code>{_instance(duty)}</code>",
-                f"┃ 🌐 ＩＰ：{_ip(duty)}",
-                f"┃ 📍 地域：{_region(duty)}",
-                f"┃ {_state_icon(duty)} 状态：{_status(duty)}",
-            ]
-        )
+    """⚠️ 换班异常（超时未就绪）。
+
+    ddns_status 与其它换班报告取同一套文案（`✅ 已同步` / `❌ 更新失败`），
+    只挂在「应当运行账号」那台上 —— 域名本来就该指向它。异常时这一行尤其有用：
+    用户不用切到 DNS 页就知道解析此刻有没有跟着走。
+    """
+    duty_lines = [
+        "🚩 <b>应当运行账号 </b>",
+        f"┃ 🏷 别名：{_label(duty)}",
+        f"┃ 📦 实例：<code>{_instance(duty)}</code>",
+        f"┃ 🌐 ＩＰ：{_ip(duty)}",
+        f"┃ 📍 地域：{_region(duty)}",
     ]
+    if ddns_status:
+        duty_lines.append(f"┃ ☁️ DDNS：{ddns_status}")
+    duty_lines.append(f"┃ {_state_icon(duty)} 状态：{_status(duty)}")
+    parts = ["\n".join(duty_lines)]
     for server in stopped:
         parts.append(
             "\n".join(

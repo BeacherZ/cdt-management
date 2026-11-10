@@ -150,7 +150,7 @@ class NewGroupBootstrap(_Base):
         # 核对阶段就点出哪台不符合，用户不用等动作下发完
         self.assertTrue(any("需要开机" in t for t in texts), texts)
         self.assertTrue(any("需要节省停机" in t for t in texts), texts)
-        self.assertEqual(sum("已下发启动当班" in t for t in texts), 1, texts)
+        self.assertEqual(sum("已下发开机指令" in t for t in texts), 1, texts)
         self.assertEqual(sum("已下发停机" in t for t in texts), 1, texts)
         # DDNS 排在停机之后：状态没全部到位不碰域名
         ddns_at = next(i for i, t in enumerate(texts) if t.startswith("DDNS："))
@@ -266,6 +266,8 @@ class DissolveGroup(_Base):
         self.assertEqual(event["kind"], "group_dissolve")
         self.assertEqual(event["status"], "done")
         self.assertEqual(event["title"], "解散换班组（换班组：解散组）")
+        # 概览也要说清域名被解绑了，不能只在步骤里写
+        self.assertIn("DDNS 绑定已解除", event["detail"], event["detail"])
         texts = [step["text"] for step in event["progress"]]
         self.assertTrue(any("解散A" in t and "保持不动" in t for t in texts), texts)
         self.assertTrue(any("解散B" in t and "保持不动" in t for t in texts), texts)
