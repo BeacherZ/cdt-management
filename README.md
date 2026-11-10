@@ -89,7 +89,7 @@
   <img src="docs/screenshots/24-notify-daily.png" width="31%" align="top" alt="CDT 每日报告">
 </p>
 
-## 快速开始
+## 🚀快速开始
 
 三种装法任选一种。默认数据目录 `/opt/docker/cdt-management`，宿主机端口 `8282`，容器端口 `8080`。
 
