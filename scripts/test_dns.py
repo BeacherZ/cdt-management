@@ -424,7 +424,7 @@ class Sync(Base):
 
 
 class ShiftQuiet(Base):
-    """换班过程中的解析变化不再单开事件，交给换班事件的那一步写清楚。"""
+    """换班期间的解析由结算统一改，巡检一行都不碰，也不单开事件。"""
 
     def setUp(self) -> None:
         super().setUp()
@@ -438,27 +438,49 @@ class ShiftQuiet(Base):
             if "DNS 记录已更新" in e["title"]
         ]
 
-    def test_shift_suppresses_standalone_dns_event(self):
+    def _造一次换班(self) -> tuple[int, int]:
         a = self.add_server("香港-A", ip="47.243.10.21")
         b = self.add_server("香港-B", status="Stopped", ip="47.243.10.22")
         group_id = self.add_group("双机轮换", [a, b])
         dns.bind("a.example.com", dns.TARGET_GROUP, group_id, self.config())
-        # 假装记录还指着上一台机器的 IP，巡检这会该改它
+        # bind 自己会同步一次（用户刚绑上等不起一分钟），这一步的调用不算巡检
+        CALLS.clear()
+        # 假装记录还指着上一台机器的 IP，巡检平时这会该改它
         repo.set_dns_state("a.example.com", "1.1.1.1", ddns.STATUS_SYNCED)
-
         event_id = repo.add_event(
             "shift_done", "双机轮换：换班进行中", group_id=group_id, status="running"
         )
+        return group_id, event_id
+
+    def test_shift_holds_dns_until_settled(self):
+        """换班进行中巡检不发请求：改记录是结算的事。
+
+        巡检抢在结算前改掉，结算那一轮去 Cloudflare 一看值已经对了，事件里只能写
+        「IP 未变化」—— 域名明明刚跟着机器换过，用户看着像压根没动。
+        """
+        _group_id, event_id = self._造一次换班()
         dns.reconcile(self.config())
-        # 解析确实改了，但不该冒出独立事件
-        self.assertEqual(repo.get_dns_record("a.example.com")["last_ip"], "47.243.10.21")
+        self.assertEqual(CALLS, [], "换班期间不该打 Cloudflare")
+        self.assertEqual(repo.get_dns_record("a.example.com")["last_ip"], "1.1.1.1")
         self.assertEqual(self._解析事件(), [])
 
-        # 换班结束（事件不再是 running）之后再变，就该单独记一条
+        # 结算完（事件不再是 running）：巡检照常接手
         repo.finish_event(event_id, "done")
-        repo.set_dns_state("a.example.com", "1.1.1.1", ddns.STATUS_SYNCED)
         dns.reconcile(self.config())
+        self.assertEqual(repo.get_dns_record("a.example.com")["last_ip"], "47.243.10.21")
         self.assertEqual(len(self._解析事件()), 1, self._解析事件())
+
+    def test_stuck_shift_lets_reconcile_take_over(self):
+        """换班卡死超过 15 分钟：巡检接手，域名不能一直指着已经停掉的旧机器。"""
+        _group_id, event_id = self._造一次换班()
+        db.execute(
+            "UPDATE events SET ts=? WHERE id=?",
+            (int(time.time() - dns._SHIFT_DNS_HOLD - 60), event_id),
+        )
+        dns.reconcile(self.config())
+        self.assertEqual(repo.get_dns_record("a.example.com")["last_ip"], "47.243.10.21")
+        # 换班事件还挂着，仍然不单开一条 DNS 事件
+        self.assertEqual(self._解析事件(), [])
 
 
 class Regression(Base):

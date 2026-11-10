@@ -445,16 +445,17 @@ def report(names: list[str], results: list[ddns.DDNSResult]) -> DDNSReport:
     return DDNSReport(detail, brief, status, results)
 
 
-def _shift_busy(kind: str, target_id: int) -> bool:
-    """这个目标是不是正处在一次换班里（换班事件自己会记 DDNS 那一步）。
+# 换班进行中，巡检让位多久（秒）。
+# 换班本身最多 10 分钟就该结算完（超时会报「换班超时」），这里给到 15 分钟：
+# 正常换班全程由结算统一写解析；真要卡死（非当班一直停不下来），超过这个时长
+# 就由巡检接手，不能让域名长期指着已经停掉的旧机器。
+_SHIFT_DNS_HOLD = 15 * 60
 
-    换班过程中当班机的 IP 变了，巡检也会发现「解析对不上」并同步。这次同步的结果
-    不该再单开一条「xxx：解析已更新」事件 —— 用户点开换班事件时看到旁边还挂着
-    一条 DNS 事件，读不出两者是一次操作。此时交给换班事件在「DDNS：…」那一步里
-    写清楚前后 IP（由 report() 按 Cloudflare 的实际值生成）。
-    """
+
+def _shift_events(kind: str, target_id: int) -> list[dict[str, Any]]:
+    """这个目标身上还挂着哪些「进行中」的换班事件。"""
     if not target_id:
-        return False
+        return []
     from . import shift  # 延迟导入：shift 反过来要用本模块
 
     if kind == TARGET_GROUP:
@@ -463,12 +464,42 @@ def _shift_busy(kind: str, target_id: int) -> bool:
         # 这台机器自己绑的域名，换班时也会被一起指过去
         group_ids = shift.groups_of_server(int(target_id))
     else:
-        return False
+        return []
     # failover / shift_failover：当班超限或起不来时，事件 kind 会在转移过程中
     # 被改写成这两个。漏掉它们，转移期间巡检会以为「没在换班」，抢在换班事件
     # 之前单独把域名指过去，还多记一条 DNS 事件。
     kinds = ("shift_done", "manual", "group_new", "failover", "shift_failover")
-    return any(repo.running_events(group_id, kinds) for group_id in group_ids)
+    events: list[dict[str, Any]] = []
+    for group_id in group_ids:
+        events.extend(repo.running_events(group_id, kinds))
+    return events
+
+
+def _shift_busy(kind: str, target_id: int) -> bool:
+    """这个目标是不是正处在一次换班里（换班事件自己会记 DDNS 那一步）。
+
+    换班过程中当班机的 IP 变了，巡检也会发现「解析对不上」并同步。这次同步的结果
+    不该再单开一条「xxx：解析已更新」事件 —— 用户点开换班事件时看到旁边还挂着
+    一条 DNS 事件，读不出两者是一次操作。此时交给换班事件在「DDNS：…」那一步里
+    写清楚前后 IP（由 report() 按 Cloudflare 的实际值生成）。
+    """
+    return bool(_shift_events(kind, target_id))
+
+
+def _shift_hold(kind: str, target_id: int, now_ts: float | None = None) -> bool:
+    """换班还在进行、且没有卡死：这一刻巡检**不要动解析**。
+
+    只压事件是不够的。巡检抢在结算前把记录改动，结算那一轮去 Cloudflare 一看
+    「已经对了」，事件里只能写「IP 未变化」—— 域名明明刚跟着机器换过，用户看到
+    的却像没动（1.3.8 把这句话加进概览之后，一眼就能看出不对劲）。
+    所以换班期间解析一律留给结算去改：它按 Cloudflare 的真实值决定改不改，并把
+    「旧 IP → 新 IP」写进详情。超过 _SHIFT_DNS_HOLD 视为换班卡死，巡检接手。
+    """
+    events = _shift_events(kind, target_id)
+    if not events:
+        return False
+    now = time.time() if now_ts is None else now_ts
+    return any(now - float(event.get("ts") or 0) < _SHIFT_DNS_HOLD for event in events)
 
 
 def reconcile(config: dict[str, str], force: bool = False) -> list[dict[str, Any]]:
@@ -502,6 +533,10 @@ def reconcile(config: dict[str, str], force: bool = False) -> list[dict[str, Any
         if not force:
             cooled = repo.flag_age(f"dns_retry:{record}")
             if 0 <= cooled < _RETRY_COOLDOWN:
+                continue
+            # 换班进行中（且没卡死）：解析交给换班结算统一改。抢在结算前同步的话，
+            # 结算去 Cloudflare 核对时值已经对了，事件只能写「IP 未变化」。
+            if _shift_hold(kind, int(row.get("target_id") or 0), now_ts):
                 continue
 
         previous = row.get("last_ip") or ""

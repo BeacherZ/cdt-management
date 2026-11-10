@@ -853,8 +853,11 @@ class Engine:
 
         if _is_stopped_any_mode(server):
             if logged:
-                # 确认器先把事件转成了「保活暂停」：机器本来就已经停着，把真实模式补回去
-                _keepalive_pause_progress(server_id, str(server.get("stopped_mode") or ""))
+                # 确认器先把事件转成了「保活暂停」：机器本来就已经停着，把真实模式补回去。
+                # issued=False：这条路径一行指令都没下发过，不能写「已下发停机指令」。
+                _keepalive_pause_progress(
+                    server_id, str(server.get("stopped_mode") or ""), issued=False
+                )
                 return
             repo.set_flag(rest_flag)
             repo.clear_flag(fail_flag)
@@ -1556,6 +1559,13 @@ class Engine:
             # 一台机器可能挂着好几条域名，汇总文案「✅ 已同步 / ❌ 更新失败」开头也是 ✅，
             # 单看前缀会把「有一条没指过去」当成全部成功，于是事件打完成、通知照发。
             ddns_ok = (not ddns_enabled) or (not ddns_bound) or dns.is_success(ddns_text)
+            if previously_settled and not ddns_ok:
+                # 已经结算过的班次不再因为 DDNS 失败被打回「换班中」：开机、停机
+                # 都早就到位了，解析只是收尾动作。凭证过期这类问题会一直失败，
+                # 打回 switching 会让徽章在「已就绪 / 换班中」之间来回跳，事件
+                # 完成时间也被反复刷新；解析交给每分钟的 DNS 巡检重试（那边有
+                # 自己的失败冷却与事件），换班这边只如实保留失败文案。
+                ddns_ok = True
 
             # DDNS 失败不能无限期卡住结算：绑定记录被删、Token 过期这类配置问题
             # 重试到天亮也不会好，而每轮都「不算就绪」→ 10 分钟超时报告，看着像
@@ -3189,12 +3199,16 @@ def _keepalive_pause_note(
     )
 
 
-def _keepalive_pause_progress(server_id: int, mode: str) -> None:
+def _keepalive_pause_progress(server_id: int, mode: str, *, issued: bool = True) -> None:
     """把巡检这轮的停机结果补进那条「单机保活窗口暂停」事件。
 
     确认器 5 秒一轮，可能比巡检先发现「已出窗口」：它只把事件转成「等停机」、
     不碰实例，真正下发停机的是巡检。不回写的话，事件详情永远停在「已离开运行窗口」，
     看不到「已下发停机指令（节省停机）」，和手动关机 / 超限停机的事件标准不一致。
+
+    issued=False 用于「实例本来就已经停着」：这轮一行指令都没发，进度里只能写
+    「已是停机状态」，写「已下发停机指令」就是编造过程 —— 用户点开事件会发现
+    根本没有这个动作。
     """
     event = repo.latest_server_event(server_id, ("keepalive_pause",), max_age=600)
     if event is None:
@@ -3205,7 +3219,10 @@ def _keepalive_pause_progress(server_id: int, mode: str) -> None:
     # finished_at —— 否则事件的完成时间会一直往后跳。
     if str(event.get("detail") or "") == done_text and str(event.get("status")) == "done":
         return
-    repo.add_event_progress(int(event["id"]), f"已下发停机指令（{label}）")
+    step_text = (
+        f"已下发停机指令（{label}）" if issued else f"实例已是停机状态（{label}），未重复下发指令"
+    )
+    repo.add_event_progress(int(event["id"]), step_text)
     # 还转着就继续等确认器：停机到位才算这条事件的结果
     if str(event.get("status")) == "running":
         repo.update_event(int(event["id"]), detail=f"等待停机到位（{label}）")

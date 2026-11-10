@@ -511,6 +511,30 @@ class KeepaliveWindowEngine(unittest.TestCase):
         self.assertEqual(event["detail"], "已暂停（节省停机）")
         self.assertIn("已确认 Stopped（节省停机）", self._texts(event))
 
+    def test_already_stopped_does_not_claim_stop_was_sent(self):
+        """确认器改题时机器本来就停着：进度里不能出现「已下发停机指令」。
+
+        这条路径一行指令都没发（本来就没在跑），写「已下发」就是编造过程 ——
+        用户点开事件会发现根本没有这个动作，和手动关机的事件对不上。
+        """
+        self._keepalive(start_time="08:00", end_time="23:00")
+        self.state = "Stopped"
+        self._tick(_at(12))  # 建一条还在转的「保活拉起」，等 Running
+        repo.update_keepalive(
+            int(repo.list_keepalives()[0]["id"]),
+            enabled=True,
+            start_time="00:00",
+            end_time="00:01",
+        )
+        self._confirm()  # 改题成「等停机」，但没碰实例
+        self._tick(_at(12))  # 巡检这一轮：本来就没在跑，不会下发停机
+
+        self.assertEqual(self.stopped, [], "本来就没跑，不该再下发停机指令")
+        event = [e for e in self._events() if e["title"] == "单机保活窗口暂停（保活机）"][0]
+        texts = self._texts(event)
+        self.assertNotIn("已下发停机指令（节省停机）", texts, texts)
+        self.assertIn("实例已是停机状态（节省停机），未重复下发指令", texts, texts)
+
     def test_confirm_closes_pull_when_window_closes(self):
         """确认器先发现出窗口：转成「等停机」，全程不推通知，巡检不再重复记。"""
         self._keepalive(start_time="08:00", end_time="23:00")

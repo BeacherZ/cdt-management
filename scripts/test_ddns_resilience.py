@@ -99,8 +99,8 @@ class _Base(unittest.TestCase):
         shift.engine._sync_ddns = self._orig_sync_ddns  # noqa: SLF001
 
 
-class DdnsWaitGivesUp(_Base):
-    """DDNS 同步失败不能把换班卡到超时。"""
+class _DdnsFailBase(_Base):
+    """换班结算时 DDNS 永远失败的一套夹具（不真的等 3 分钟、不发通知）。"""
 
     def setUp(self) -> None:
         super().setUp()
@@ -159,6 +159,10 @@ class DdnsWaitGivesUp(_Base):
             group, repo.get_settings(), _now_dt(), float(time.time())
         )
 
+
+class DdnsWaitGivesUp(_DdnsFailBase):
+    """DDNS 同步失败不能把换班卡到超时。"""
+
     def test_first_round_waits(self):
         self._run()
         row = db.query_one("SELECT key FROM flags WHERE key LIKE 'ddns_wait:%'")
@@ -191,6 +195,41 @@ class DdnsWaitGivesUp(_Base):
         self.assertIsNone(
             db.query_one("SELECT key FROM flags WHERE key LIKE 'ddns_wait:%'")
         )
+
+
+class SettledShiftStaysSettled(_DdnsFailBase):
+    """DDNS 一直失败时，已经结算过的班次不能被打回「换班中」。
+
+    1.3.8 的现象：换班早就完成，徽章却在「已就绪 / 换班中」之间来回跳，
+    「换班完成」的时间也被反复刷新。开机、停机都到位了，解析只是收尾动作，
+    Token 过期这类问题重试到天亮也不会好 —— 失败文案照留，状态别动，
+    重试交给每分钟的 DNS 巡检（那边有自己的冷却和告警事件）。
+    """
+
+    def test_does_not_revert_to_switching(self):
+        old_wait = shift._DDNS_WAIT_SECONDS  # noqa: SLF001
+        shift._DDNS_WAIT_SECONDS = 0  # noqa: SLF001  不用真等 3 分钟
+        try:
+            self._run()  # 第一轮：开始等待
+            self._run()  # 第二轮：等满放行，结算
+            phase = db.query_one(
+                "SELECT phase FROM shift_runs WHERE group_id=?", (self.group_id,)
+            )["phase"]
+            self.assertEqual(phase, shift.PHASE_SETTLED)
+
+            # 后面每一轮结算 DDNS 都还在失败：状态必须留在 settled
+            for _ in range(3):
+                self._run()
+                phase = db.query_one(
+                    "SELECT phase FROM shift_runs WHERE group_id=?", (self.group_id,)
+                )["phase"]
+                self.assertEqual(phase, shift.PHASE_SETTLED, f"被打回了 {phase}")
+        finally:
+            shift._DDNS_WAIT_SECONDS = old_wait  # noqa: SLF001
+
+        # 失败本身不能藏：文案还在，只是不阻塞结算
+        titles = [e["title"] for e in repo.list_events(limit=50)]
+        self.assertTrue(any("DDNS 未同步" in t for t in titles), titles)
 
 
 class DnsRetryCooldown(_Base):
