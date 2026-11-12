@@ -93,7 +93,7 @@ export default function ServersView({
     <>
       <div className="page-head">
         <div>
-          <h1>服务器</h1>
+          <h1>实例管理</h1>
           <p>
             这里登记的是「阿里云账号 + 一台 ECS 实例」。AccessKey Secret 用本机主密钥加密后存
             SQLite，界面上不显示，只在编辑弹窗里能换。
@@ -122,14 +122,14 @@ export default function ServersView({
             </div>
           )}
           <button className="btn primary" onClick={onAdd}>
-            <Plus size={14} /> 添加服务器
+            <Plus size={14} /> 添加实例
           </button>
         </div>
       </div>
 
       {servers.length === 0 ? (
         <div className="card">
-          <Empty icon={<ServerIcon size={20} />} title="还没有服务器">
+          <Empty icon={<ServerIcon size={20} />} title="还没有实例">
             添加后可以把它放进「单机保活」或「联合换班」。建议使用只授予 ECS 启停/查询与 CDT
             只读权限的 RAM 子账号。
           </Empty>
@@ -224,7 +224,7 @@ export default function ServersView({
                 </div>
 
                 <div className="meta-line">
-                  <code style={{ fontSize: 11 }}>{server.instance_id || '未填实例 ID'}</code>
+                  <code style={{ fontSize: 12 }}>{server.instance_id || '未填实例 ID'}</code>
                 </div>
                 <div className="meta-line">
                   <span className="card-region" title={server.region_id}>
@@ -258,12 +258,12 @@ export default function ServersView({
 
                 {server.instance_status === 'Stopped' &&
                   stoppedModeLabel(server.stopped_mode) === '普通停机' && (
-                    <div style={{ fontSize: 11, color: 'var(--amber)' }}>
+                    <div style={{ fontSize: 12, color: 'var(--amber)' }}>
                       普通停机（KeepCharging）仍计实例规格费
                     </div>
                   )}
                 {server.remark && (
-                  <div style={{ fontSize: 11.5, color: 'var(--muted-soft)' }}>{server.remark}</div>
+                  <div style={{ fontSize: 12, color: 'var(--muted-soft)' }}>{server.remark}</div>
                 )}
 
                 <div className="card-foot">
@@ -316,7 +316,7 @@ export default function ServersView({
   )
 }
 
-/** 表格视图：一屏看全所有服务器的核心字段，适合机器多的时候快速对比 */
+/** 表格视图：一屏看全所有实例的核心字段，适合机器多的时候快速对比 */
 function ServerTable({
   servers,
   busyId,
@@ -355,7 +355,7 @@ function ServerTable({
         </colgroup>
         <thead>
           <tr>
-            <th>服务器 / 实例 ID</th>
+            <th>实例 / 实例 ID</th>
             <th>状态</th>
             <th>地域 / 站点</th>
             <th>公网 IP</th>
@@ -375,7 +375,7 @@ function ServerTable({
             const ownerText = ownerLabel(owner)
             return (
               <tr key={server.id}>
-                <td data-label="服务器">
+                <td data-label="实例">
                   <div className="server-table-title" title={server.label}>
                     {server.label}
                   </div>

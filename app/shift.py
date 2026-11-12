@@ -115,8 +115,13 @@ def _hhmm_to_minutes(value: str) -> int:
 def keepalive_window(item: dict[str, Any], now: dt.datetime) -> tuple[bool, str]:
     """单机保活的运行窗口：(此刻能不能跑, 人话摘要)。
 
-    两个维度取交集：时段（每天几点到几点，**不跨零点**，结束写 00:00 表示到 24:00）
-    与日期（每月几号到几号，**不跨月**）。都为空 = 全天全月，等价于没设窗口。
+    两个维度取交集：时段（每天几点到几点，**可跨天**）与日期（每月几号到几号，
+    **不跨月**）。都为空 = 全天全月，等价于没设窗口。
+
+    时段按 24 小时循环理解：结束晚于开始 = 当天内；结束早于开始 = 跨天到次日
+    （「20:00–06:00」即今天 20 点跑到次日早上 6 点）；结束填 00:00 且开始非零
+    仍按老习惯显示成「24:00」（当天到午夜，等价于跨天到次日 0 点）；起止相同 =
+    正好 24 小时整，等于不限。
 
     日期超过当月天数时按月末截断：2 月填「1–31 日」就是 1 号到 28/29 号，
     否则那个月一天都匹配不上，机器整个月不干活。
@@ -128,11 +133,8 @@ def keepalive_window(item: dict[str, Any], now: dt.datetime) -> tuple[bool, str]
     end_raw = str(item.get("end_time") or "").strip()
     start = _hhmm_to_minutes(start_raw) if start_raw else -1
     end = _hhmm_to_minutes(end_raw) if end_raw else -1
-    # 结束 00:00 = 当天到午夜（24:00），和联合换班是同一套写法：
-    # 「08:00–00:00」表示整段跑到午夜，不是零长度。
-    if end == 0 and start > 0:
-        end = 24 * 60
-    timed = start >= 0 and end > start
+    # 起止相同 = 24 小时整，等于不限；半截 / 格式错（start 或 end 为 -1）同样按不限。
+    timed = start >= 0 and end >= 0 and start != end
 
     # 手改库写坏的半截配置按「不限」处理：int() 遇到文本会抛，不能让一行坏配置
     # 把整轮巡检掀翻（注释承诺的是「照常保活」，不是让机器全停）。
@@ -145,8 +147,13 @@ def keepalive_window(item: dict[str, Any], now: dt.datetime) -> tuple[bool, str]
 
     parts: list[str] = []
     if timed:
-        # 摘要按面板习惯写 24:00：写「每天 08:00–00:00」会被读成零长度
-        end_label = "24:00" if end == 24 * 60 else end_raw
+        # 摘要：当天内写原值；跨天写「次日 HH:MM」；结束 00:00 按老习惯写 24:00
+        if end > start:
+            end_label = end_raw
+        elif end == 0:
+            end_label = "24:00"
+        else:
+            end_label = f"次日 {end_raw}"
         parts.append(f"每天 {start_raw}–{end_label}")
     if dated:
         parts.append(f"{day_start}–{day_end} 日")
@@ -154,8 +161,12 @@ def keepalive_window(item: dict[str, Any], now: dt.datetime) -> tuple[bool, str]
 
     if timed:
         minute = now.hour * 60 + now.minute
-        if not (start <= minute < end):
-            return False, summary
+        if end > start:
+            if not (start <= minute < end):
+                return False, summary
+        else:  # end < start：今天 start 之后，或次日 end 之前
+            if not (minute >= start or minute < end):
+                return False, summary
     if dated:
         month_days = calendar.monthrange(now.year, now.month)[1]
         if not (min(day_start, month_days) <= now.day <= min(day_end, month_days)):
@@ -1434,10 +1445,6 @@ class Engine:
                     group_id, slot_key, name, duty.get("label") or "", int(duty["id"])
                 )
 
-            # 记一次「尝试拉起」：判死只看次数，不看墙钟（巡检间隔可配）。
-            # 异常也算一次 —— 指令被拒（欠费 / 库存不足 / 权限）同样是一次没拉起来
-            # 的尝试，读不到异常原因的轮次也一样，否则次数永远涨不到 3。
-            repo.bump_flag(tries_flag)
             try:
                 aliyun.start_instance(duty)
                 repo.clear_flag(f"start_err:{group_id}:{slot_key}")
@@ -1449,6 +1456,12 @@ class Engine:
                 repo.update_event(event_id, detail="等待开机到位")
                 duty_status = "Starting"
             except Exception as exc:  # noqa: BLE001
+                # 记一次「尝试拉起」：判死只看次数，不看墙钟。但欠费/权限(auth)、
+                # 限流(throttle) 这两类重试无解或属瞬时的失败不计入 —— 否则白烧
+                # DUTY_START_TRIES 次尝试后触发无意义故障转移（换机同账号一样欠费）。
+                kind = getattr(exc, "kind", "") or aliyun.classify_error(exc)
+                if kind not in ("auth", "throttle"):
+                    repo.bump_flag(tries_flag)
                 flag = f"start_err:{group_id}:{slot_key}"
                 if not repo.get_flag(flag):
                     repo.set_flag(flag)

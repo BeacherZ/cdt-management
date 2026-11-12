@@ -5,6 +5,15 @@
    做出质感，而不是靠高饱和色块堆砌。浅色像陶瓷，深色像磨砂玻璃。
    ========================================================================== */
 
+/* 字体阶梯（全项目统一，只允许用这 6 档，禁止再加 12.5 / 13.5 之类中间值）：
+   11px 微标签（纯徽标/角标：类型标签、状态点、计数角标）
+   12px 辅助（说明、表单标签、meta、表格次要、时间戳、等宽代码/IP）
+   13px 正文（默认正文、导航、按钮、输入框、卡片内容）
+   14px 强调（卡片标题、弹窗标题、小节标题、主状态文字）
+   16px 标题（页面标题、区块标题、品牌名）
+   24px 展示（统计大数字、登录页主标题）
+   要改整体字号就整档平移，保持层级关系。 */
+
 :root {
   font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI',
     'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
@@ -25,8 +34,8 @@
   /* 文字 */
   --ink: #101318;
   --ink-soft: #343b45;
-  --muted: #666e7a;
-  --muted-soft: #8b929c;
+  --muted: #4d545f;
+  --muted-soft: #69717e;
 
   /* 线 */
   --line: rgba(19, 28, 41, 0.1);
@@ -83,8 +92,8 @@
 
     --ink: #e9eef5;
     --ink-soft: #c2cbd6;
-    --muted: #8d97a5;
-    --muted-soft: #6d7784;
+    --muted: #aab4c1;
+    --muted-soft: #828c9a;
 
     --line: rgba(255, 255, 255, 0.09);
     --line-strong: rgba(255, 255, 255, 0.16);
@@ -161,7 +170,7 @@ body {
 body {
   background: var(--bg);
   color: var(--ink);
-  font-size: 13.5px;
+  font-size: 13px;
   line-height: 1.55;
   position: relative;
   overflow-x: hidden;
@@ -269,7 +278,7 @@ a:hover {
   border: 1px solid var(--btn-border);
   background: var(--btn-bg);
   color: var(--ink);
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 550;
   font-family: inherit;
   letter-spacing: -0.005em;
@@ -383,7 +392,7 @@ a:hover {
 .btn.block {
   width: 100%;
   height: 40px;
-  font-size: 13.5px;
+  font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.01em;
 }
@@ -412,7 +421,7 @@ label {
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--ink-soft);
 }
@@ -423,7 +432,7 @@ label {
 }
 
 .hint {
-  font-size: 11.5px;
+  font-size: 13px;
   line-height: 1.6;
   color: var(--muted-soft);
 }
@@ -483,7 +492,7 @@ label {
   border-radius: calc(var(--radius-md) - 4px);
   background: transparent;
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 550;
   color: var(--muted);
   cursor: pointer;
@@ -527,12 +536,12 @@ label {
   border-radius: var(--radius-sm);
   border: 1px solid var(--line);
   background: var(--panel-inset);
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--ink-soft);
 }
 
 .readonly-value code {
-  font-size: 11.5px;
+  font-size: 13px;
   color: var(--ink);
 }
 
@@ -612,7 +621,7 @@ label {
 }
 
 .dns-name {
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--ink);
   overflow: hidden;
@@ -626,7 +635,7 @@ label {
   border-radius: 999px;
   border: 1px solid var(--line);
   background: var(--panel-inset);
-  font-size: 10px;
+  font-size: 11px;
   color: var(--muted-soft);
 }
 
@@ -645,7 +654,7 @@ label {
 
 .dns-bind > label {
   flex: none;
-  font-size: 11.5px;
+  font-size: 13px;
   color: var(--muted);
 }
 
@@ -662,7 +671,7 @@ label {
   gap: 12px;
   row-gap: 4px;
   flex-wrap: wrap;
-  font-size: 11.5px;
+  font-size: 13px;
   color: var(--muted);
 }
 
@@ -683,7 +692,7 @@ label {
   padding: 0 6px;
   border-radius: 999px;
   border: 1px solid var(--line);
-  font-size: 10px;
+  font-size: 11px;
   color: var(--muted-soft);
 }
 
@@ -699,7 +708,7 @@ label {
 }
 
 .dns-ip code {
-  font-size: 11px;
+  font-size: 12px;
   padding: 1px 5px;
   border-radius: 5px;
   background: var(--panel-inset);
@@ -751,7 +760,7 @@ label {
 
 .input.mono {
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: 13px;
   letter-spacing: -0.01em;
 }
 
@@ -846,7 +855,7 @@ input[type='number']::-webkit-inner-spin-button {
   border: 1px solid var(--line);
   background: var(--panel-soft);
   color: var(--ink-soft);
-  font-size: 11.5px;
+  font-size: 13px;
   font-weight: 550;
   line-height: 1.6;
   white-space: nowrap;
@@ -913,7 +922,7 @@ input[type='number']::-webkit-inner-spin-button {
   align-items: center;
   padding: 1px 7px;
   border-radius: 999px;
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.01em;
   color: var(--green);
@@ -968,7 +977,7 @@ input[type='number']::-webkit-inner-spin-button {
 
 .ring-text {
   position: absolute;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 650;
   color: var(--ink-soft);
   font-variant-numeric: tabular-nums;
@@ -1026,7 +1035,7 @@ input[type='number']::-webkit-inner-spin-button {
   display: flex;
   justify-content: space-between;
   gap: 8px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   /* 用量和「百分比 / 阈值」各自是一句话，绝不能断成「12.06」/「GB」两行。
@@ -1060,13 +1069,13 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 .toggle-text strong {
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--ink);
 }
 
 .toggle-text span {
-  font-size: 11.5px;
+  font-size: 13px;
   color: var(--muted-soft);
   line-height: 1.55;
 }
@@ -1253,7 +1262,7 @@ input[type='number']::-webkit-inner-spin-button {
   position: absolute;
   top: 12px;
   right: 14px;
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1;
   color: var(--muted-soft);
   opacity: 0;
@@ -1280,7 +1289,7 @@ input[type='number']::-webkit-inner-spin-button {
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -1293,7 +1302,7 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 .stat .value {
-  font-size: 27px;
+  font-size: 24px;
   font-weight: 660;
   line-height: 1.15;
   letter-spacing: -0.03em;
@@ -1311,7 +1320,7 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 .stat .sub {
-  font-size: 11.5px;
+  font-size: 13px;
   color: var(--muted-soft);
 }
 
@@ -1361,13 +1370,13 @@ input[type='number']::-webkit-inner-spin-button {
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 11.5px;
+  font-size: 13px;
   color: var(--muted);
   min-width: 0;
 }
 
 .meta-line code {
-  font-size: 11px;
+  font-size: 12px;
   padding: 1.5px 6px;
   border-radius: 6px;
   background: var(--panel-inset);
@@ -1403,7 +1412,7 @@ input[type='number']::-webkit-inner-spin-button {
 .card-ip {
   margin-left: auto;
   font-family: ui-monospace, Consolas, monospace;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--ink-soft);
   white-space: nowrap;
 }
@@ -1419,7 +1428,7 @@ input[type='number']::-webkit-inner-spin-button {
   border: 1px solid var(--line);
   background: var(--panel-inset);
   font-family: ui-monospace, Consolas, monospace;
-  font-size: 10px;
+  font-size: 12px;
   color: var(--ink-soft);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1473,14 +1482,14 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 .cost-key {
-  font-size: 10.5px;
+  font-size: 12px;
   letter-spacing: 0.04em;
   color: var(--muted-soft);
   flex-shrink: 0;
 }
 
 .cost-item b {
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 650;
   font-variant-numeric: tabular-nums;
   color: var(--ink);
@@ -1495,7 +1504,7 @@ input[type='number']::-webkit-inner-spin-button {
 
 .cost-stale {
   font-style: normal;
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1.4;
   padding: 0 3px;
   border-radius: 3px;
@@ -1513,7 +1522,7 @@ input[type='number']::-webkit-inner-spin-button {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 560;
   line-height: 1;
   letter-spacing: 0.008em;
@@ -1562,7 +1571,7 @@ input[type='number']::-webkit-inner-spin-button {
 
 .foot-actions .btn.sm {
   padding: 5px 10px;
-  font-size: 11.5px;
+  font-size: 13px;
 }
 
 /* 托管中的机器按钮直接灰掉：绿色的「开机」即使半透明也像能点，
@@ -1629,13 +1638,13 @@ input[type='number']::-webkit-inner-spin-button {
      不会把表格撑出容器 —— 之前 min-width:880px + 不换行，宽屏下也会被拉出横向滚动条 */
   table-layout: fixed;
   border-collapse: collapse;
-  font-size: 12.5px;
+  font-size: 13px;
 }
 
 .server-table th {
   text-align: left;
   padding: 10px 12px;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 650;
   color: var(--muted);
   letter-spacing: 0.02em;
@@ -1672,7 +1681,7 @@ input[type='number']::-webkit-inner-spin-button {
   display: block;
   margin-top: 2px;
   font-family: ui-monospace, Consolas, monospace;
-  font-size: 10.5px;
+  font-size: 12px;
   color: var(--muted-soft);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1696,7 +1705,7 @@ input[type='number']::-webkit-inner-spin-button {
 
 .server-table-mono {
   font-family: ui-monospace, Consolas, monospace;
-  font-size: 11.5px;
+  font-size: 13px;
   color: var(--ink-soft);
   white-space: nowrap;
 }
@@ -1827,7 +1836,7 @@ input[type='number']::-webkit-inner-spin-button {
 
   .server-table {
     min-width: 0;
-    font-size: 12.5px;
+    font-size: 13px;
   }
 
   .server-table tbody tr {
@@ -1857,7 +1866,7 @@ input[type='number']::-webkit-inner-spin-button {
 
   .server-table td::before {
     content: attr(data-label);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--muted);
     white-space: nowrap;
@@ -1930,7 +1939,7 @@ input[type='number']::-webkit-inner-spin-button {
   }
 
   .server-table-title {
-    font-size: 13.5px;
+    font-size: 13px;
     max-width: 100%;
   }
 
@@ -1969,7 +1978,7 @@ input[type='number']::-webkit-inner-spin-button {
   align-items: center;
   gap: 8px;
   justify-content: space-between;
-  font-size: 11.5px;
+  font-size: 13px;
   color: var(--muted);
 }
 
@@ -1979,7 +1988,7 @@ input[type='number']::-webkit-inner-spin-button {
   align-items: center;
   padding: 1px 8px;
   border-radius: 999px;
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 650;
   letter-spacing: 0.02em;
   color: #fff;
@@ -2028,7 +2037,7 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 .slot-ip {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   text-align: right;
   overflow: hidden;
@@ -2037,7 +2046,7 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 .slot-name {
-  font-size: 13.5px;
+  font-size: 14px;
   font-weight: 600;
   letter-spacing: -0.012em;
   color: var(--ink);
@@ -2050,13 +2059,13 @@ input[type='number']::-webkit-inner-spin-button {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 11.5px;
+  font-size: 13px;
   color: var(--muted);
   min-width: 0;
 }
 
 .slot-line code {
-  font-size: 11px;
+  font-size: 12px;
   padding: 1.5px 6px;
   border-radius: 6px;
   background: var(--panel-inset);
@@ -2089,7 +2098,7 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 .group-head h3 {
-  font-size: 13.5px;
+  font-size: 14px;
   font-weight: 620;
   letter-spacing: -0.012em;
   overflow: hidden;
@@ -2129,7 +2138,7 @@ input[type='number']::-webkit-inner-spin-button {
   margin-top: 2px;
   padding-top: 10px;
   border-top: 1px solid var(--line);
-  font-size: 11.5px;
+  font-size: 13px;
   color: var(--muted);
   min-width: 0;
 }
@@ -2173,7 +2182,7 @@ input[type='number']::-webkit-inner-spin-button {
 .events-more {
   width: 100%;
   margin-top: 6px;
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--muted);
 }
 
@@ -2263,7 +2272,7 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 .event-body strong {
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 600;
   letter-spacing: -0.008em;
   color: var(--ink);
@@ -2271,7 +2280,7 @@ input[type='number']::-webkit-inner-spin-button {
 
 .event-body p {
   margin-top: 1px;
-  font-size: 11.5px;
+  font-size: 13px;
   line-height: 1.55;
   color: var(--muted);
   word-break: break-word;
@@ -2285,7 +2294,7 @@ input[type='number']::-webkit-inner-spin-button {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 600;
   padding: 1px 6px;
   border-radius: 999px;
@@ -2308,7 +2317,7 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 .event-time {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted-soft);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -2344,7 +2353,7 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 .event-detail-summary {
-  font-size: 11.5px;
+  font-size: 13px;
   color: var(--muted);
   line-height: 1.6;
   margin: 0;
@@ -2364,7 +2373,7 @@ input[type='number']::-webkit-inner-spin-button {
   grid-template-columns: auto 9px minmax(0, 1fr);
   gap: 8px;
   align-items: start;
-  font-size: 11.5px;
+  font-size: 13px;
   line-height: 1.5;
   padding: 3px 0;
 }
@@ -2400,7 +2409,7 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 .event-finished {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   display: flex;
   align-items: center;
@@ -2540,7 +2549,7 @@ input[type='number']::-webkit-inner-spin-button {
 
 /* 底部左侧的说明文字，跟右侧按钮形成一左一右的平衡 */
 .modal-foot .foot-note {
-  font-size: 11.5px;
+  font-size: 13px;
   line-height: 1.55;
   color: var(--muted-soft);
 }
@@ -2590,7 +2599,7 @@ input[type='number']::-webkit-inner-spin-button {
   background: transparent;
   padding: 10px 11px 9px;
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 550;
   color: var(--muted);
   cursor: pointer;
@@ -2621,7 +2630,7 @@ input[type='number']::-webkit-inner-spin-button {
 
 .about-title {
   margin: 0;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 650;
   color: var(--ink);
 }
@@ -2675,7 +2684,7 @@ input[type='number']::-webkit-inner-spin-button {
   align-items: center;
   gap: 6px;
   font-family: ui-monospace, Consolas, monospace;
-  font-size: 12.5px;
+  font-size: 13px;
 }
 
 .about-latest .about-dot {
@@ -2739,7 +2748,7 @@ input[type='number']::-webkit-inner-spin-button {
   border: 1px solid var(--line-strong);
   background: var(--panel-solid);
   color: var(--ink);
-  font-size: 12.5px;
+  font-size: 13px;
   box-shadow: var(--shadow-3);
   overflow: hidden;
   animation: toast-in 260ms var(--ease-snap);
@@ -2853,7 +2862,7 @@ input[type='number']::-webkit-inner-spin-button {
 
 .auth-brand .brand-text strong {
   display: block;
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 700;
   letter-spacing: -0.02em;
   color: var(--ink);
@@ -2862,20 +2871,20 @@ input[type='number']::-webkit-inner-spin-button {
 .auth-brand .brand-text span {
   display: block;
   margin-top: 2px;
-  font-size: 11.5px;
+  font-size: 13px;
   color: var(--muted);
 }
 
 .auth-card h1 {
   margin: 0;
-  font-size: 20px;
+  font-size: 24px;
   font-weight: 700;
   letter-spacing: -0.03em;
 }
 
 .auth-card .lede {
   margin: 7px 0 0;
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--muted);
   line-height: 1.7;
 }
@@ -2892,7 +2901,7 @@ input[type='number']::-webkit-inner-spin-button {
 /* 登录页输入框加高一点，手感更从容 */
 .auth-form .input {
   height: 42px;
-  font-size: 13.5px;
+  font-size: 13px;
   padding: 0 13px;
   border-radius: var(--radius-md);
   background: var(--panel-solid);
@@ -2912,7 +2921,7 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 .auth-foot {
-  font-size: 11.5px;
+  font-size: 13px;
   color: var(--muted-soft);
   text-align: center;
   line-height: 1.7;
@@ -2930,7 +2939,7 @@ input[type='number']::-webkit-inner-spin-button {
   align-items: center;
   justify-content: center;
   gap: 14px;
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--muted);
 }
 
@@ -2988,7 +2997,7 @@ input[type='number']::-webkit-inner-spin-button {
   border-radius: 7px;
   display: grid;
   place-items: center;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 650;
   color: var(--accent);
   background: var(--accent-soft);
@@ -3131,7 +3140,7 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 .server-pick-name {
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--ink);
   overflow: hidden;
@@ -3141,7 +3150,7 @@ input[type='number']::-webkit-inner-spin-button {
 
 .server-pick-id {
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: 12px;
   color: var(--muted-soft);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3150,7 +3159,7 @@ input[type='number']::-webkit-inner-spin-button {
 
 .server-pick-note {
   flex: none;
-  font-size: 10.5px;
+  font-size: 12px;
   color: var(--muted-soft);
 }
 
@@ -3308,7 +3317,7 @@ input[type='number']::-webkit-inner-spin-button {
     gap: 10px;
   }
   .stat .value {
-    font-size: 22px;
+    font-size: 24px;
   }
   .stat .ring {
     display: none;
@@ -3353,7 +3362,7 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 .confirm-hint {
-  font-size: 11.5px;
+  font-size: 13px;
   line-height: 1.65;
   color: var(--muted-soft);
 }

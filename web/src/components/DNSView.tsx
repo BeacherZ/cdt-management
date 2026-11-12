@@ -95,7 +95,7 @@ export default function DNSView({
       return
     }
     const [moved] = next.splice(from, 1)
-    // 与服务器列表同一处偏移：向下拖要减一，否则会插到目标后面。
+    // 与实例列表同一处偏移：向下拖要减一，否则会插到目标后面。
     next.splice(from < to ? to - 1 : to, 0, moved)
     setDragRecord(null)
     setOverRecord(null)
@@ -103,7 +103,7 @@ export default function DNSView({
   }
 
   const keepaliveIds = new Set(keepalives.map((item) => item.server_id))
-  // 第一项是「所有服务器」全量清单，下面两个大项只是同一批机器的不同视角（快捷入口）：
+  // 第一项是「所有实例」全量清单，下面两个大项只是同一批机器的不同视角（快捷入口）：
   // 换班组会接管机器，所以这些机器不再重复出现在「单机保活」里。
   const groupedIds = new Set(
     groups.flatMap((group) => group.members.map((member) => member.server_id)),
@@ -284,10 +284,10 @@ export default function DNSView({
                     }}
                   >
                     <option value="">不绑定（这条记录不会被动）</option>
-                    {/* 第一项：所有服务器，全量铺开（顺序沿用「服务器」页里的手动排序）。
+                    {/* 第一项：所有实例，全量铺开（顺序沿用「实例管理」页里的手动排序）。
                         记录名不稀缺，随便哪台机器都能挂一条域名，不必先编进保活或换班组。 */}
                     {servers.length > 0 && (
-                      <optgroup label="所有服务器">
+                      <optgroup label="所有实例">
                         {servers.map((server) => (
                           <option key={`all-${server.id}`} value={`server:${server.id}`}>
                             {server.label}

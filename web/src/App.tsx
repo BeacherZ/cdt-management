@@ -65,7 +65,7 @@ const NAV_SECTIONS: NavSection[] = [
     title: '概览',
     key: 'dashboard',
     icon: Gauge,
-    children: [{ key: 'servers', label: '服务器', icon: ServerIcon }],
+    children: [{ key: 'servers', label: '实例管理', icon: ServerIcon }],
   },
   {
     title: '保活',
@@ -290,7 +290,7 @@ export default function App() {
     }
   }
 
-  /** 服务器手动排序：拖拽结束后把完整有序 id 列表持久化 */
+  /** 实例手动排序：拖拽结束后把完整有序 id 列表持久化 */
   async function reorderServers(orderedIds: number[]) {
     try {
       await post('/api/v1/servers/reorder', { ids: orderedIds })
@@ -337,15 +337,15 @@ export default function App() {
 
   function deleteServer(server: Server) {
     setConfirmBox({
-      title: '删除服务器',
+      title: '删除实例',
       message: `确定删除「${server.label}」？`,
       hint: '只删除本机保存的账号配置与密钥，阿里云上的实例本身不受影响，也不会被停机。',
-      confirmText: '删除服务器',
+      confirmText: '删除实例',
       failText: '删除失败',
       run: async () => {
         await del(`/api/v1/servers/${server.id}`)
         await loadAll()
-        toast('服务器已删除', 'success')
+        toast('实例已删除', 'success')
       },
     })
   }
@@ -368,7 +368,7 @@ export default function App() {
     setConfirmBox({
       title: '解散换班组',
       message: `确定解散「${group.name}」？`,
-      hint: `组内 ${group.members.length} 台服务器保持当前状态：跑着的继续跑，停着的继续停着。解散后它们回到闲散手动，不会被单机保活拉起；组绑定的域名会一并解除。`,
+      hint: `组内 ${group.members.length} 台实例保持当前状态：跑着的继续跑，停着的继续停着。解散后它们回到闲散手动，不会被单机保活拉起；组绑定的域名会一并解除。`,
       confirmText: '解散换班组',
       failText: '解散失败',
       run: async () => {
@@ -402,7 +402,7 @@ export default function App() {
     setConfirmBox({
       title: '移出单机保活',
       message: `确定把「${item.label}」移出单机保活？`,
-      hint: '移出后这台机器不再自动拉起，服务器记录本身保留，可以随时重新加入。',
+      hint: '移出后这台机器不再自动拉起，实例记录本身保留，可以随时重新加入。',
       confirmText: '移出保活',
       failText: '操作失败',
       run: async () => {
@@ -548,6 +548,8 @@ export default function App() {
   async function logout() {
     try {
       await post('/api/v1/auth/logout')
+    } catch {
+      // 后端吊销失败不阻断本地登出；票据仍由服务端 14 天 TTL 兜底
     } finally {
       setPhase('login')
       setOverview(null)
@@ -782,7 +784,7 @@ export default function App() {
             display: 'flex',
             alignItems: 'center',
             gap: 10,
-            fontSize: 11.5,
+            fontSize: 12,
             color: 'var(--muted-soft)',
           }}
         >
@@ -839,7 +841,7 @@ export default function App() {
           onClose={() => setKeepalivePicker(false)}
           footer={
             <>
-              <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>
+              <span style={{ fontSize: 12, color: 'var(--muted)' }}>
                 已加入单机保活或换班组的机器是灰的，一台机器只能进一个
               </span>
               <span className="spacer" />
@@ -850,7 +852,7 @@ export default function App() {
           }
         >
           {overview.servers.length === 0 ? (
-            <div className="hint">还没有服务器，先去「服务器」页添加</div>
+            <div className="hint">还没有实例，先去「实例管理」页添加</div>
           ) : (
             <div className="server-pick-list">
               {overview.servers.map((server) => {

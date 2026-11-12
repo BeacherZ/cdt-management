@@ -97,7 +97,7 @@
 
 .brand-text strong {
   display: block;
-  font-size: 13.5px;
+  font-size: 14px;
   font-weight: 660;
   letter-spacing: -0.024em;
   color: var(--ink);
@@ -108,7 +108,7 @@
 
 .brand-text span {
   display: block;
-  font-size: 10.5px;
+  font-size: 12px;
   color: var(--muted-soft);
   letter-spacing: 0.01em;
 }
@@ -205,7 +205,7 @@ button.nav-parent:hover svg,
 
 .nav-sub .nav-item {
   padding: 6px 10px;
-  font-size: 12.4px;
+  font-size: 12px;
 }
 
 /* 选中时导轨那一小段点亮，而不是在缩进里再飘一根 */
@@ -234,7 +234,7 @@ button.nav-parent:hover svg,
   background: transparent;
   color: var(--ink-soft);
   font-family: inherit;
-  font-size: 12.8px;
+  font-size: 13px;
   font-weight: 500;
   letter-spacing: -0.008em;
   text-align: left;
@@ -290,7 +290,7 @@ button.nav-parent:hover svg,
 }
 
 .nav-count {
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 600;
   padding: 0 6px;
   min-width: 18px;
@@ -322,7 +322,7 @@ button.nav-parent:hover svg,
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 10.5px;
+  font-size: 12px;
   color: var(--muted-soft);
   font-variant-numeric: tabular-nums;
 }
@@ -348,7 +348,7 @@ button.nav-parent:hover svg,
   display: flex;
   align-items: center;
   gap: 11px;
-  font-size: 25px;
+  font-size: 24px;
   font-weight: 660;
   letter-spacing: -0.032em;
   line-height: 1.2;
@@ -392,13 +392,13 @@ button.nav-parent:hover svg,
 }
 
 .section-head h2 {
-  font-size: 13.5px;
+  font-size: 16px;
   font-weight: 640;
   letter-spacing: -0.014em;
 }
 
 .section-head > span {
-  font-size: 11.5px;
+  font-size: 13px;
   color: var(--muted-soft);
 }
 
@@ -485,7 +485,7 @@ button.nav-parent:hover svg,
     width: auto;
     flex-shrink: 0;
     padding: 6px 9px;
-    font-size: 12.5px;
+    font-size: 13px;
     font-weight: 600;
     gap: 5px;
     border-radius: 9px;
@@ -504,7 +504,7 @@ button.nav-parent:hover svg,
   /* 窄屏把导航颗压紧，四颗勉强一行放下，放不下就横向滚动 */
   .sidebar .nav-list .nav-item {
     padding: 6px 9px;
-    font-size: 12.5px;
+    font-size: 13px;
     gap: 5px;
     border-radius: 9px;
   }
@@ -550,7 +550,7 @@ button.nav-parent:hover svg,
   }
 
   .page-head h1 {
-    font-size: 21px;
+    font-size: 24px;
   }
 
   .page-head .page-actions {

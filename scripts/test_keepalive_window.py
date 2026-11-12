@@ -9,7 +9,7 @@
    已自动恢复运行」会让人以为机器被阿里云回收了。
 3. **事件里能看到「单机保活窗口暂停 / 单机保活窗口恢复」**，概览一句结论，展开是过程。
 4. **停机模式按实例设置走**：选普通停机就发 Stop，不再写死节省停机。
-5. 配置写坏（半截时段、跨零点）时按「不限」处理，不能把机器钉死在停机状态。
+5. 配置写坏（半截时段）时按「不限」处理，不能把机器钉死在停机状态。
 
 跑法：python scripts/test_keepalive_window.py
 """
@@ -86,6 +86,21 @@ class WindowMath(unittest.TestCase):
         self.assertFalse(shift.keepalive_window(item, _at(3))[0], "凌晨不在窗口内")
         self.assertEqual(shift.keepalive_window(item, _at(12))[1], "每天 08:00–24:00")
 
+    def test_overnight_window(self):
+        """跨天窗口：结束早于开始 = 跨到次日。20:00–06:00 覆盖今天 20 点到次日 6 点。"""
+        item = self._item(start_time="20:00", end_time="06:00")
+        self.assertTrue(shift.keepalive_window(item, _at(21))[0], "当天晚上在窗口内")
+        self.assertTrue(shift.keepalive_window(item, _at(3))[0], "次日凌晨在窗口内")
+        self.assertFalse(shift.keepalive_window(item, _at(12))[0], "中午不在窗口内")
+        self.assertEqual(shift.keepalive_window(item, _at(21))[1], "每天 20:00–次日 06:00")
+
+    def test_equal_start_end_means_unlimited(self):
+        """起止相同 = 正好 24 小时整，等于不限：任何时刻都在窗口内，摘要不写时段。"""
+        item = self._item(start_time="08:00", end_time="08:00")
+        self.assertTrue(shift.keepalive_window(item, _at(3))[0])
+        self.assertTrue(shift.keepalive_window(item, _at(12))[0])
+        self.assertEqual(shift.keepalive_window(item, _at(12))[1], "")
+
     def test_day_window(self):
         item = self._item(start_day=1, end_day=15)
         self.assertTrue(shift.keepalive_window(item, _at(12, day=1))[0])
@@ -107,10 +122,9 @@ class WindowMath(unittest.TestCase):
         self.assertTrue(shift.keepalive_window(item, _at(12, day=31, month=5))[0])
 
     def test_broken_config_falls_back_to_unlimited(self):
-        """半截 / 跨零点配置按「不限」处理：宁可多跑，也别把机器钉死在停机。"""
+        """半截 / 格式错配置按「不限」处理：宁可多跑，也别把机器钉死在停机。"""
         for item in (
             self._item(start_time="08:00"),  # 只有开始
-            self._item(start_time="23:00", end_time="06:00"),  # 跨零点
             self._item(start_time="oops", end_time="23:00"),  # 格式错
             self._item(start_day=10),  # 只有开始日
             self._item(start_day=20, end_day=5),  # 跨月

@@ -8,7 +8,7 @@ import ServerPicker from './ServerPicker'
 type Cycle = 'day' | 'month'
 
 type Row = {
-  /** 0 = 还没选服务器 */
+  /** 0 = 还没选实例 */
   server_id: number
   hours: number
   /** 一月一轮用：本月连上多少天 */
@@ -178,7 +178,7 @@ export default function GroupDialog({
   }
 
   function labelOf(serverId: number): string {
-    return servers.find((server) => server.id === serverId)?.label ?? '（服务器已删除）'
+    return servers.find((server) => server.id === serverId)?.label ?? '（实例已删除）'
   }
 
   /** 底部预览：把当月怎么分的直接写成日期段，月末伸缩一眼可见 */
@@ -187,7 +187,7 @@ export default function GroupDialog({
       .map((row, index) => ({ row, span: spans[index] }))
       .filter((item) => item.span.span > 0 && item.row.server_id)
       .map((item) => `${item.span.startDay}–${item.span.endDay} 日 ${labelOf(item.row.server_id)}`)
-    if (parts.length === 0) return '选好服务器后，这里显示当月怎么分'
+    if (parts.length === 0) return '选好实例后，这里显示当月怎么分'
     return `本月 ${monthDays} 天：${parts.join(' ｜ ')}`
   }
 
@@ -212,7 +212,7 @@ export default function GroupDialog({
   function add() {
     const used = new Set(rows.map((row) => row.server_id))
     if (!servers.some((server) => !used.has(server.id))) {
-      setError('所有服务器都已经在这个组里了')
+      setError('所有实例都已经在这个组里了')
       return
     }
     setRows((current) => [...current, emptyRow()])
@@ -223,7 +223,7 @@ export default function GroupDialog({
   function splitEvenly() {
     if (rows.length === 0) return
     if (rows.some((row) => !row.server_id)) {
-      setError('先把每行的服务器选上，再平摊工时')
+      setError('先把每行的实例选上，再平摊工时')
       return
     }
     const count = rows.length
@@ -247,7 +247,7 @@ export default function GroupDialog({
   function splitDays() {
     if (rows.length === 0) return
     if (rows.some((row) => !row.server_id)) {
-      setError('先把每行的服务器选上，再平摊天数')
+      setError('先把每行的实例选上，再平摊天数')
       return
     }
     const live = rows.filter((row) => row.enabled)
@@ -351,11 +351,11 @@ export default function GroupDialog({
     setError('')
     const blank = rows.findIndex((row) => !row.server_id)
     if (blank >= 0) {
-      setError(`第 ${blank + 1} 行还没选服务器`)
+      setError(`第 ${blank + 1} 行还没选实例`)
       return
     }
     if (rows.length < 2) {
-      setError('至少需要两台服务器')
+      setError('至少需要两台实例')
       return
     }
     if (cycle === 'month') {
@@ -376,7 +376,7 @@ export default function GroupDialog({
     }
     const ids = rows.map((row) => row.server_id)
     if (new Set(ids).size !== ids.length) {
-      setError('同一台服务器不能重复添加')
+      setError('同一台实例不能重复添加')
       return
     }
     // 起止时刻要么全空（走老 hours 累加），要么成对填写；月模式根本不看时刻
@@ -444,12 +444,12 @@ export default function GroupDialog({
       wide
       footer={
         <>
-          <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>
+          <span style={{ fontSize: 12, color: 'var(--muted)' }}>
             {cycle === 'month'
               ? monthPreview()
               : total > 0
                 ? `一个周期 ${total} 小时，按顺序轮换`
-                : '选好服务器后，这里显示一个周期多长'}
+                : '选好实例后，这里显示一个周期多长'}
           </span>
           <span className="spacer" />
           <button className="btn" onClick={onClose}>
@@ -464,7 +464,7 @@ export default function GroupDialog({
       {servers.length < 2 && (
         <div className="auth-error">
           <TriangleAlert size={14} />
-          先去「服务器」页添加至少两台服务器
+          先去「实例管理」页添加至少两台实例
         </div>
       )}
 
@@ -510,11 +510,11 @@ export default function GroupDialog({
               <button
                 type="button"
                 className={`select member-pick${row.server_id ? '' : ' is-empty'}`}
-                title="点击选择服务器"
+                title="点击选择实例"
                 onClick={() => setPicking(index)}
               >
                 <span className="member-pick-text">
-                  {row.server_id ? labelOf(row.server_id) : '选择服务器'}
+                  {row.server_id ? labelOf(row.server_id) : '选择实例'}
                 </span>
               </button>
               <input

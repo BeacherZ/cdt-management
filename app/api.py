@@ -435,13 +435,13 @@ def _validate_group_timetable(payload: dict[str, Any]) -> None:
 def _keepalive_window(payload: dict[str, Any]) -> tuple[str, str, int, int]:
     """解析并校验单机保活的运行窗口，返回 (start_time, end_time, start_day, end_day)。
 
-    两个维度都只允许「全空（不限）」或「成对且同向」：
+    两个维度都只允许「全空（不限）」或「成对」：
 
-    - 时段必须在同一天内（end > start，不跨零点；结束填 00:00 表示到 24:00，
-      与联合换班同义）：跨零点会让「今天 22:00–06:00」到底算今天还是明天变得没法
-      在界面上说清，用户要跨天就拆成两个保活轮不到，不如直接不支持。
-    - 日期必须在同一个月内（1 ≤ start ≤ end ≤ 31，不跨月）：跨月同理，而且每个月
-      天数不同，跨月边界没法用两个固定数字表达。
+    - 时段在 24 小时循环上理解：结束晚于开始 = 当天内；结束早于开始 = 跨天到次日
+      （「20:00–06:00」即今天 20 点跑到次日 6 点）；结束填 00:00 且开始非零按老
+      习惯表示「到当天 24:00」；起止相同 = 正好 24 小时整，等于不限（前端会提示）。
+    - 日期必须在同一个月内（1 ≤ start ≤ end ≤ 31，不跨月）：每个月天数不同，
+      跨月边界没法用两个固定数字表达。
 
     只填一半（比如只填开始时刻）当错误处理，不做静默兜底 —— 静默兜底的结果是
     界面显示着时段、引擎却当没配，这种「表里不一」最难排查。
@@ -453,15 +453,6 @@ def _keepalive_window(payload: dict[str, Any]) -> tuple[str, str, int, int]:
     if start_raw:
         if not repo.is_hhmm(start_raw) or not repo.is_hhmm(end_raw):
             raise ValueError("运行时段要用 HH:MM 格式，例如 08:00")
-        start_min = int(start_raw[:2]) * 60 + int(start_raw[3:])
-        end_min = int(end_raw[:2]) * 60 + int(end_raw[3:])
-        # 结束 00:00 就是「到当天午夜」，与联合换班同一套写法；其余仍要求 end > start
-        if end_min == 0 and start_min > 0:
-            end_min = 24 * 60
-        if end_min <= start_min:
-            raise ValueError(
-                "运行时段的结束时刻必须晚于开始时刻（不支持跨零点；结束填 00:00 表示到 24:00）"
-            )
 
     try:
         start_day = int(payload.get("start_day") or 0)

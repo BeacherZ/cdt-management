@@ -1,12 +1,11 @@
 import { useState } from 'react'
 import { HeartPulse, TriangleAlert } from 'lucide-react'
 import { post } from '../api'
-import { minutesOf } from '../keepalive'
 import type { Keepalive, Server } from '../types'
 import { Modal, Segmented, Switch } from './ui'
 
 type Props = {
-  /** 新建时必传：从服务器卡片「加入保活」或选机器之后进来 */
+  /** 新建时必传：从实例卡片「加入保活」或选机器之后进来 */
   server?: Server | null
   /** 编辑时必传 */
   item?: Keepalive | null
@@ -55,13 +54,7 @@ export default function KeepaliveDialog({ server, item, onClose, onSaved }: Prop
         setError('运行时段要填完整的起止时刻，或者切回「不限」')
         return
       }
-      // 结束填 00:00 = 到当天午夜（与联合换班一致）；其余仍要求结束晚于开始
-      const endMinutes =
-        endTime === '00:00' && minutesOf(startTime) > 0 ? 24 * 60 : minutesOf(endTime)
-      if (endMinutes <= minutesOf(startTime)) {
-        setError('结束时刻要晚于开始时刻（不支持跨零点；结束填 00:00 表示到 24:00）')
-        return
-      }
+      // 允许跨天：结束早于开始 = 跨天到次日；起止相同 = 全天（等于不限，界面已提示）
       start_time = startTime
       end_time = endTime
     }
@@ -119,7 +112,7 @@ export default function KeepaliveDialog({ server, item, onClose, onSaved }: Prop
       onClose={onClose}
       footer={
         <>
-          <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>
+          <span style={{ fontSize: 12, color: 'var(--muted)' }}>
             窗口外自动停机、窗口内自动拉起，两端都不推通知，只在事件里留痕
           </span>
           <span className="spacer" />
@@ -133,9 +126,9 @@ export default function KeepaliveDialog({ server, item, onClose, onSaved }: Prop
       }
     >
       <div className="field">
-        <label>服务器</label>
+        <label>实例</label>
         <div className="meta-line" style={{ marginTop: 0 }}>
-          <strong style={{ fontSize: 13 }}>{target?.label || '未知服务器'}</strong>
+          <strong style={{ fontSize: 13 }}>{target?.label || '未知实例'}</strong>
           <code style={{ marginLeft: 8 }}>{target?.instance_id || '未填实例 ID'}</code>
         </div>
         <div className="hint">机器固定不可改；要换机器就移出保活后重新添加。</div>
@@ -172,9 +165,13 @@ export default function KeepaliveDialog({ server, item, onClose, onSaved }: Prop
             />
           </div>
         )}
-        <div className="hint">
-          每天在这个时间段内运行；不接受跨零点，结束填 00:00 表示到 24:00，要跑一整天就用「不限」。
-        </div>
+        {timeMode === 'custom' && startTime && endTime && startTime === endTime && (
+          <div className="auth-error">
+            <TriangleAlert size={14} />
+            起止时刻相同等于全天运行，与「不限」没有区别
+          </div>
+        )}
+        <div className="hint">结束早于开始表示跨天到次日；00:00 表示 24:00；起止相同等于全天。</div>
       </div>
 
       <div className="field">

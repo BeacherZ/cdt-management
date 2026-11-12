@@ -63,7 +63,7 @@ export default function ShiftView({
         <div>
           <h1>联合换班</h1>
           <p>
-            把多台服务器编成一组，按排班周期轮流当班，同一时刻只保留一台在线，其余节省停机。
+            把多台实例编成一组，按排班周期轮流当班，同一时刻只保留一台在线，其余节省停机。
             一天一轮按小时（也可以填固定时刻表）换，一月一轮按天换；
             当班流量达标会自动切到下一台没超的成员；找不到可接班的成员（全部达标或状态读不到）
             就全局熔断停机。DDNS 始终指向当班实例。
@@ -79,7 +79,7 @@ export default function ShiftView({
       {groups.length === 0 ? (
         <div className="card">
           <Empty icon={<Repeat size={20} />} title="还没有换班组">
-            至少添加两台服务器后，把它们编成一组并设定各自运行几小时，例如两台各 12 小时。
+            至少添加两台实例后，把它们编成一组并设定各自运行几小时，例如两台各 12 小时。
           </Empty>
         </div>
       ) : (
@@ -147,7 +147,7 @@ export default function ShiftView({
                     alignItems: 'center',
                     gap: 14,
                     marginTop: 10,
-                    fontSize: 11.5,
+                    fontSize: 12,
                     color: 'var(--muted)',
                     flexWrap: 'wrap',
                   }}
@@ -171,7 +171,7 @@ export default function ShiftView({
                 </div>
 
                 {group.note && (
-                  <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--amber)' }}>
+                  <div style={{ marginTop: 8, fontSize: 12, color: 'var(--amber)' }}>
                     {group.note}
                   </div>
                 )}
@@ -183,7 +183,7 @@ export default function ShiftView({
                     if (!server) {
                       return (
                         <div key={member.id} className="slot" style={{ opacity: 0.6 }}>
-                          <div className="slot-name">服务器已被删除</div>
+                          <div className="slot-name">实例已被删除</div>
                         </div>
                       )
                     }
@@ -231,7 +231,7 @@ export default function ShiftView({
                     className="rotate-order"
                     style={{
                       marginTop: 10,
-                      fontSize: 11,
+                      fontSize: 12,
                       color: 'var(--muted-soft)',
                       display: 'flex',
                       alignItems: 'center',

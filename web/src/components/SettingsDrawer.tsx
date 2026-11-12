@@ -304,7 +304,7 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
               </div>
 
               <div className="field">
-                <label htmlFor="pct">新建服务器默认阈值（% 配额）</label>
+                <label htmlFor="pct">新建实例默认阈值（% 配额）</label>
                 <input
                   id="pct"
                   className="input"
@@ -317,14 +317,14 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
                   }
                 />
                 <div className="hint">
-                  每台服务器的绝对阈值在「服务器」里单独配置；这里只是新增时的预填值。
+                  每台实例的绝对阈值在「实例管理」里单独配置；这里只是新增时的预填值。
                 </div>
               </div>
 
               <div>
                 <Switch
                   label="费用与余额"
-                  hint="按上方间隔查本月账单和账户余额，显示在服务器卡片上；需要 RAM 具备 BSS 只读权限"
+                  hint="按上方间隔查本月账单和账户余额，显示在实例卡片上；需要 RAM 具备 BSS 只读权限"
                   checked={form.billing_enabled}
                   onChange={(value) => patch((draft) => (draft.billing_enabled = value))}
                 />
@@ -333,7 +333,7 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
               <div>
                 <Switch
                   label="每日报告"
-                  hint="到点把所有服务器的费用、余额、流量与状态推送一次"
+                  hint="到点把所有实例的费用、余额、流量与状态推送一次"
                   checked={form.daily_report_enabled}
                   onChange={(value) => patch((draft) => (draft.daily_report_enabled = value))}
                 />
@@ -488,7 +488,7 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
                   测试连接
                 </button>
                 {form.ddns.last_status && (
-                  <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>
+                  <span style={{ fontSize: 12, color: 'var(--muted)' }}>
                     上次：{form.ddns.last_status} · {form.ddns.last_ip || '—'}
                   </span>
                 )}

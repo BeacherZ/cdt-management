@@ -9,16 +9,16 @@ type Props = {
   servers: Server[]
   /** 正在编辑的组 id：new 时为 undefined，用于区分「本组」和「别的组」 */
   currentGroupId?: number
-  /** 本组其它行已经占用的服务器 id，避免同一台被选两次 */
+  /** 本组其它行已经占用的实例 id，避免同一台被选两次 */
   taken: Set<number>
   onClose: () => void
   onPick: (server: Server) => void
-  /** 取消保活成功后通知父级刷新服务器归属 */
+  /** 取消保活成功后通知父级刷新实例归属 */
   onKeepaliveCleared?: () => void
 }
 
 /**
- * 选服务器：一次列出全部机器，右侧标出它现在的归属。
+ * 选实例：一次列出全部机器，右侧标出它现在的归属。
  *
  * - 闲散手动：直接选中
  * - 单机保活：先问一句「取消保活并加入」，因为保活记录不删的话两边会抢同一台机器
@@ -73,7 +73,7 @@ export default function ServerPicker({
         onClose={() => !busy && setConfirming(null)}
         footer={
           <>
-            <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>
+            <span style={{ fontSize: 12, color: 'var(--muted)' }}>
               {owner ? ownerLabel(owner) : ''}
             </span>
             <span className="spacer" />
@@ -109,12 +109,12 @@ export default function ServerPicker({
 
   return (
     <Modal
-      title="选择服务器"
+      title="选择实例"
       icon={<Check size={16} style={{ color: 'var(--green)' }} />}
       onClose={onClose}
       footer={
         <>
-          <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>
+          <span style={{ fontSize: 12, color: 'var(--muted)' }}>
             已加入换班组的机器是灰的，一台只能进一个组
           </span>
           <span className="spacer" />
@@ -125,7 +125,7 @@ export default function ServerPicker({
       }
     >
       {servers.length === 0 ? (
-        <div className="hint">还没有服务器，先去「服务器」页添加</div>
+        <div className="hint">还没有实例，先去「实例管理」页添加</div>
       ) : (
         <div className="server-pick-list">
           {servers.map((server) => {

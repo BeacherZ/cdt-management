@@ -72,7 +72,7 @@ export default function ServerDialog({
   async function save() {
     setError('')
     if (!editing && (!form.access_key_id.trim() || !form.access_key_secret.trim())) {
-      setError('新建服务器必须填写 AccessKey ID 与 Secret')
+      setError('新建实例必须填写 AccessKey ID 与 Secret')
       return
     }
     // 数值框 min 属性对「onClick 保存」不生效，清空会变成 Number('')=0 静默提交，
@@ -104,7 +104,7 @@ export default function ServerDialog({
     setBusy(true)
     try {
       await post('/api/v1/servers', { ...form, access_key_id: form.access_key_id.trim() })
-      onSaved(editing ? '服务器已更新' : '服务器已添加')
+      onSaved(editing ? '实例已更新' : '实例已添加')
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存失败')
     } finally {
@@ -114,7 +114,7 @@ export default function ServerDialog({
 
   return (
     <Modal
-      title={editing ? '编辑服务器' : '添加服务器'}
+      title={editing ? '编辑实例' : '添加实例'}
       icon={<Server size={16} style={{ color: 'var(--accent)' }} />}
       onClose={onClose}
       footer={

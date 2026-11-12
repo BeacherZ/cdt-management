@@ -64,8 +64,8 @@ CREATE TABLE IF NOT EXISTS keepalives (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     server_id  INTEGER NOT NULL UNIQUE,
     enabled    INTEGER NOT NULL DEFAULT 1,
-    -- 每天允许运行的时段：start_time ≤ now < end_time，必须同一天内（不跨零点）。
-    -- 两项都空 = 全天。
+    -- 每天允许运行的时段（24 小时循环）：end > start 当天内；end < start 跨天到次日；
+    -- end == start 等于全天；end 填 00:00 且 start 非零表示到 24:00。两项都空 = 全天。
     start_time TEXT    NOT NULL DEFAULT '',
     end_time   TEXT    NOT NULL DEFAULT '',
     -- 每月允许运行的日子：start_day ≤ day ≤ end_day，必须同一个月内（不跨月）。

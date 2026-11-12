@@ -65,6 +65,9 @@ export default function DashboardView({
   const [eventCount, setEventCount] = useState(RECENT_EVENT_PAGE)
   const running = overview.servers.filter((server) => server.instance_status === 'Running').length
   const totalTraffic = overview.servers.reduce((sum, server) => sum + (server.traffic_used || 0), 0)
+  // 月累计流量的上限 = 所有实例阈值之和（每台 threshold_gb）；没设阈值（0）的实例不计入分母
+  const totalThreshold = overview.servers.reduce((sum, server) => sum + (server.threshold_gb || 0), 0)
+  const trafficPercent = totalThreshold > 0 ? (totalTraffic / totalThreshold) * 100 : 0
   const alarms = overview.servers.filter(
     // 和后端 shift._over_threshold 同一口径：阈值没配（0）的机器不算超限。
     // 少了 threshold_gb > 0，0 >= 0 永远成立，概览会报「N 台超阈值」而引擎根本不动作。
@@ -111,12 +114,12 @@ export default function DashboardView({
         <button
           type="button"
           className="stat stat-link"
-          title="查看服务器列表"
+          title="查看实例列表"
           onClick={() => onNavigate('servers')}
         >
           <div className="stat-main">
             <span className="label">
-              <ServerIcon size={11} /> 服务器
+              <ServerIcon size={11} /> 实例
             </span>
             <span className="value">{overview.servers.length}</span>
             <span className="sub">{running} 台运行中</span>
@@ -188,12 +191,8 @@ export default function DashboardView({
             </span>
             <span className="sub">{alarms > 0 ? `${alarms} 台超阈值` : '全部低于阈值'}</span>
           </div>
-          <Ring
-            percent={alarms > 0 ? Math.min(100, (alarms / Math.max(1, overview.servers.length)) * 100) : 0}
-            tone={alarms > 0 ? 'red' : 'accent'}
-            size={46}
-          >
-            {alarms > 0 ? `${alarms}` : '稳'}
+          <Ring percent={trafficPercent} tone={alarms > 0 ? 'red' : 'accent'} size={46}>
+            {`${Math.round(trafficPercent)}%`}
           </Ring>
         </div>
       </div>

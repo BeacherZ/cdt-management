@@ -53,7 +53,7 @@ export default function KeepaliveView({
           <p>
             只做一件事：实例意外停机（或抢占被回收）就自动拉起来，不参与换班。
             可以限定每天几点到几点、每月几号到几号运行，窗口外自动停机、不推通知。
-            同一台服务器如果已经加入换班组，这里会自动让位，避免两边互相拉扯。
+            同一台实例如果已经加入换班组，这里会自动让位，避免两边互相拉扯。
           </p>
         </div>
         <div className="page-actions">
@@ -66,7 +66,7 @@ export default function KeepaliveView({
       {keepalives.length === 0 ? (
         <div className="card">
           <Empty icon={<HeartPulse size={20} />} title="还没有保活任务">
-            从「服务器」里挑一台加进来，它掉线后会被自动拉起。多台机器轮流跑请用「联合换班」。
+            从「实例管理」里挑一台加进来，它掉线后会被自动拉起。多台机器轮流跑请用「联合换班」。
           </Empty>
         </div>
       ) : (
@@ -156,21 +156,28 @@ export default function KeepaliveView({
                   threshold={item.threshold_gb}
                 />
 
-                {item.dns_record && (
+                {(item.dns_record || schedule) && (
                   <div className="meta-line">
-                    <span className="dns-chip" title="已绑定的 DNS 记录">
-                      <Globe2 size={10} />
-                      {item.dns_record}
-                    </span>
-                  </div>
-                )}
-
-                {schedule && (
-                  <div className="meta-line">
-                    <span className="dns-chip" title="运行窗口：窗口内自动拉起，窗口外自动停机">
-                      <Clock size={10} />
-                      {schedule}
-                    </span>
+                    {item.dns_record && (
+                      <span
+                        className="dns-chip"
+                        style={{ minWidth: 0 }}
+                        title="已绑定的 DNS 记录"
+                      >
+                        <Globe2 size={10} />
+                        <span className="dns-chip-text">{item.dns_record}</span>
+                      </span>
+                    )}
+                    {schedule && (
+                      <span
+                        className="dns-chip"
+                        style={{ marginLeft: 'auto', flex: 'none' }}
+                        title="运行窗口：窗口内自动拉起，窗口外自动停机"
+                      >
+                        <Clock size={10} />
+                        {schedule}
+                      </span>
+                    )}
                   </div>
                 )}
 
@@ -178,12 +185,12 @@ export default function KeepaliveView({
                   <div className="toggle-text">
                     {groupedIds.has(item.server_id) ? (
                       <>
-                        <strong style={{ fontSize: 12, color: 'var(--amber)' }}>已让位给换班组</strong>
+                        <strong style={{ fontSize: 13, color: 'var(--amber)' }}>已让位给换班组</strong>
                         <span>这台机器在换班组里，启停由班次决定，保活不会插手</span>
                       </>
                     ) : (
                       <>
-                        <strong style={{ fontSize: 12 }}>
+                        <strong style={{ fontSize: 13 }}>
                           {!item.enabled ? '已暂停' : resting ? '休止时段（窗口外）' : '保活运行中'}
                         </strong>
                         <span>

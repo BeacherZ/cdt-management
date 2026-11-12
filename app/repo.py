@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import json
 import math
+import threading
 import time
 from typing import Any
 
 from . import db, security
+
+# 事件进度是「读-改-写」三段：对账线程与事件确认线程会同时追加同一条事件的进度，
+# 无锁会丢更新。这把锁只保护进程内这两条后台线程的互斥（架构是单进程多线程）。
+_event_lock = threading.Lock()
 
 SENSITIVE_SETTINGS = {
     "admin_password",
@@ -383,32 +388,40 @@ def delete_server(server_id: int) -> None:
     used = db.query_one("SELECT 1 FROM shift_members WHERE server_id=?", (server_id,))
     if used is not None:
         raise ValueError("该服务器仍在某个换班组里，请先移出")
-    db.execute("DELETE FROM servers WHERE id=?", (server_id,))
-    db.execute("DELETE FROM keepalives WHERE server_id=?", (server_id,))
-    db.execute("DELETE FROM traffic_samples WHERE server_id=?", (server_id,))
-    # 这台机器专属的一次性标记一并清掉。SQLite 的 AUTOINCREMENT 不复用 id，
-    # 留着不会被新机器撞上，但也没人再去清 —— 只能等 90 天的兜底清理，白占表。
-    db.execute(
-        "DELETE FROM flags WHERE key IN (?,?,?,?,?,?,?)",
-        (
-            f"read_err:{server_id}",
-            f"keepalive_err:{server_id}",
-            f"keepalive_fail:{server_id}",
-            f"keepalive_tries:{server_id}",
-            # 休止时段标记：机器删了还留着，重新加一台同 id 永远进不了运行窗口
-            f"keepalive_rest:{server_id}",
-            f"keepalive_rest_fail:{server_id}",
-            # 1.2.36 及以前用过的等待标记，已不再写入，顺手把残留扫掉
-            f"keepalive_wait:{server_id}",
-        ),
-    )
-    # 目标没了，DNS 绑定必须一并松掉，否则记录还挂在已经不存在的机器上
-    db.execute(
-        "UPDATE dns_records SET target_kind='', target_id=0, last_ip='', "
-        "last_status='', last_at=0, updated_at=? "
-        "WHERE target_kind='server' AND target_id=?",
-        (int(time.time()), server_id),
-    )
+    # 多步删除包进一个事务：中途任何一条失败都整体回滚，别留半截状态。
+    conn = db.connect()
+    conn.execute("BEGIN")
+    try:
+        conn.execute("DELETE FROM servers WHERE id=?", (server_id,))
+        conn.execute("DELETE FROM keepalives WHERE server_id=?", (server_id,))
+        conn.execute("DELETE FROM traffic_samples WHERE server_id=?", (server_id,))
+        # 这台机器专属的一次性标记一并清掉。SQLite 的 AUTOINCREMENT 不复用 id，
+        # 留着不会被新机器撞上，但也没人再去清 —— 只能等 90 天的兜底清理，白占表。
+        conn.execute(
+            "DELETE FROM flags WHERE key IN (?,?,?,?,?,?,?)",
+            (
+                f"read_err:{server_id}",
+                f"keepalive_err:{server_id}",
+                f"keepalive_fail:{server_id}",
+                f"keepalive_tries:{server_id}",
+                # 休止时段标记：机器删了还留着，重新加一台同 id 永远进不了运行窗口
+                f"keepalive_rest:{server_id}",
+                f"keepalive_rest_fail:{server_id}",
+                # 1.2.36 及以前用过的等待标记，已不再写入，顺手把残留扫掉
+                f"keepalive_wait:{server_id}",
+            ),
+        )
+        # 目标没了，DNS 绑定必须一并松掉，否则记录还挂在已经不存在的机器上
+        conn.execute(
+            "UPDATE dns_records SET target_kind='', target_id=0, last_ip='', "
+            "last_status='', last_at=0, updated_at=? "
+            "WHERE target_kind='server' AND target_id=?",
+            (int(time.time()), server_id),
+        )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
 
 
 def update_server_site(server_id: int, site: str) -> None:
@@ -1202,25 +1215,28 @@ def add_event_progress(event_id: int, text: str, *, once: bool = False) -> None:
     """
     if not event_id:
         return
-    now = int(time.time())
-    row = db.query_one("SELECT progress FROM events WHERE id=?", (event_id,))
-    if row is None:
-        return
-    try:
-        progress = json.loads(row["progress"] or "[]")
-    except Exception:
-        progress = []
-    if progress and progress[-1].get("text") == text:
-        return
-    if once and any(step.get("text") == text for step in progress):
-        return
-    progress.append({"ts": now, "text": text})
-    if len(progress) > PROGRESS_MAX_STEPS:
-        progress = progress[-PROGRESS_MAX_STEPS:]
-    db.execute(
-        "UPDATE events SET progress=? WHERE id=?",
-        (json.dumps(progress, ensure_ascii=False), event_id),
-    )
+    # 读-改-写放进锁内：确认线程与对账线程会同时追加同一条事件的进度，无锁时
+    # 两个线程都读到旧进度、各自 append 后覆盖写，后写者把先写者的进度挤掉。
+    with _event_lock:
+        now = int(time.time())
+        row = db.query_one("SELECT progress FROM events WHERE id=?", (event_id,))
+        if row is None:
+            return
+        try:
+            progress = json.loads(row["progress"] or "[]")
+        except Exception:
+            progress = []
+        if progress and progress[-1].get("text") == text:
+            return
+        if once and any(step.get("text") == text for step in progress):
+            return
+        progress.append({"ts": now, "text": text})
+        if len(progress) > PROGRESS_MAX_STEPS:
+            progress = progress[-PROGRESS_MAX_STEPS:]
+        db.execute(
+            "UPDATE events SET progress=? WHERE id=?",
+            (json.dumps(progress, ensure_ascii=False), event_id),
+        )
 
 
 def get_event(event_id: int) -> dict[str, Any] | None:
@@ -1245,7 +1261,12 @@ def finish_event(event_id: int, status: str = "done", detail: str = "") -> None:
         sets.append("detail=?")
         params.append(detail)
     params.append(event_id)
-    db.execute(f"UPDATE events SET {', '.join(sets)} WHERE id=?", params)
+    # 只收尾「进行中」的事件：确认线程与对账线程可能同时 finish 同一条事件，
+    # 加条件避免后到者把已收尾事件的状态/详情再覆盖一次（如 done 被改回 error）。
+    db.execute(
+        f"UPDATE events SET {', '.join(sets)} WHERE id=? AND status='running'",
+        params,
+    )
 
 
 def update_event(
