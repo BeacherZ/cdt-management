@@ -223,25 +223,25 @@ export default function ServersView({
                   </div>
                 </div>
 
-                {/* 身份行①：实例 ID 靠左，地域靠右 */}
+                {/* 身份行①：实例 ID 靠左，站点类型靠右 */}
                 <div className="meta-line">
                   <code style={{ fontSize: 12 }} title={server.instance_id}>
                     {server.instance_id || '未填实例 ID'}
                   </code>
-                  <span className="card-region meta-right" title={server.region_id}>
-                    <MapPin size={11} />
-                    {regionLabel(server.region_id)}
-                  </span>
-                </div>
-                {/* 身份行②：公网 IP 靠左，站点类型靠右 */}
-                <div className="meta-line">
-                  <span className="addr-chip" title="公网 IP">
-                    {server.public_ip || '无公网 IP'}
-                  </span>
                   <span
                     className={`site-tag meta-right ${server.site === 'international' ? 'intl' : ''}`}
                   >
                     {server.site === 'international' ? '国际站' : '中国站'}
+                  </span>
+                </div>
+                {/* 身份行②：公网 IP 靠左，地域靠右 */}
+                <div className="meta-line">
+                  <span className="addr-chip" title="公网 IP">
+                    {server.public_ip || '无公网 IP'}
+                  </span>
+                  <span className="card-region meta-right" title={server.region_id}>
+                    <MapPin size={11} />
+                    {regionLabel(server.region_id)}
                   </span>
                 </div>
 

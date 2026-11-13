@@ -137,25 +137,25 @@ export default function KeepaliveView({
                   </div>
                 </div>
 
-                {/* 身份行①：实例 ID 靠左，地域靠右 */}
+                {/* 身份行①：实例 ID 靠左，站点类型靠右 */}
                 <div className="meta-line">
                   <code style={{ fontSize: 12 }} title={item.instance_id}>
                     {item.instance_id || '未填实例 ID'}
                   </code>
-                  <span className="card-region meta-right" title={item.region_id}>
-                    <MapPin size={11} />
-                    {regionLabel(item.region_id)}
-                  </span>
-                </div>
-                {/* 身份行②：公网 IP 靠左，站点类型靠右 */}
-                <div className="meta-line">
-                  <span className="addr-chip" title="公网 IP">
-                    {item.public_ip || '无公网 IP'}
-                  </span>
                   <span
                     className={`site-tag meta-right ${item.site === 'international' ? 'intl' : ''}`}
                   >
                     {item.site === 'international' ? '国际站' : '中国站'}
+                  </span>
+                </div>
+                {/* 身份行②：公网 IP 靠左，地域靠右 */}
+                <div className="meta-line">
+                  <span className="addr-chip" title="公网 IP">
+                    {item.public_ip || '无公网 IP'}
+                  </span>
+                  <span className="card-region meta-right" title={item.region_id}>
+                    <MapPin size={11} />
+                    {regionLabel(item.region_id)}
                   </span>
                 </div>
 
