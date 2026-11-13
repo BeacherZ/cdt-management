@@ -12,8 +12,11 @@
    图标配绿色完成徽章），而不是留一条永远「已完成」的失败。
 3. **连续失败到阈值才升格**。默认 3 次（≈3 分钟）后事件级别变 error，避免
    网络抖一下就红一片吓人；升格那一次必须在时间线里留痕。
-4. **已结算班次被打回 switching 时重置超时锚点**。否则沿用建行时（可能是
-   几天前）的 started_at，一算几千分钟，必报「换班超时」，而机器其实都正常。
+4. **已结算班次不被一次读失败打回换班中**。待机读不到只是这一次拿不到状态，
+   结算是按「当班在跑 + 非当班都停着」确认过的，不该因此把班次推回 switching；
+   推回去还会在恢复后凭空多出一条零开关机的「换班完成」（现场就是这个现象）。
+5. **同一班次只结算一次**。万一真被打回 switching（比如待机确实被拉起来了），
+   重新就绪时也只认原来那条已收尾的换班事件，不再新开一条、不再重复发通知。
 
 跑法：python scripts/test_read_error_timeline.py
 """
@@ -325,41 +328,78 @@ class _ShiftBase(unittest.TestCase):
         return [e["title"] for e in repo.list_events(limit=100, group_id=group_id)]
 
 
-class SettledShiftNoFalseTimeout(_ShiftBase):
-    """已结算班次因待机读失败被打回 switching：不许沿用几天前的锚点报超时。"""
+class SettledShiftReadBlip(_ShiftBase):
+    """已结算班次里待机读不到：不是换班，也不能凭空造出一条换班事件。
 
-    def test_settled_shift_does_not_report_false_timeout(self) -> None:
-        a = _make_server("当班A", "Running")
-        b = _make_server("待机B", "Running")
-        self.status = {a: "Running", b: "Running"}
+    用户实测（v1.3.18）：非换班时段网络不可达 29 秒，恢复后事件列表里冒出一条
+    「换班完成」，点开一个开关机步骤都没有 —— 机器本来就都在位，是那次读失败
+    把已结算的班次打回了 switching，恢复后又被当成一次新换班重新结算了一遍。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.a = _make_server("当班A", "Running")
+        self.b = _make_server("待机B", "Stopped")
+        self.status = {self.a: "Running", self.b: "Stopped"}
         self._wire()
-        group_id = self._group([{"server_id": a, "hours": 12}, {"server_id": b, "hours": 12}])
+        self.group_id = self._group(
+            [{"server_id": self.a, "hours": 12}, {"server_id": self.b, "hours": 12}]
+        )
+        self._settle(self.group_id)
+        self.assertEqual(self._phase(), "settled")
 
-        self._settle(group_id)
-        runs = [r for r in repo.recent_runs(limit=10) if int(r["group_id"]) == group_id]
+    def _phase(self) -> str:
+        runs = [r for r in repo.recent_runs(limit=10) if int(r["group_id"]) == self.group_id]
         self.assertTrue(runs)
-        self.assertIn(runs[0]["phase"], ("settled", "failover"), runs[0]["phase"])
+        return str(runs[0]["phase"])
 
-        # 模拟 11/1 建的班次：锚点手动拨到 4 天前
+    def _shift_events(self) -> list[str]:
+        # 读取异常/恢复那两条是应该有的，不算换班事件
+        return [t for t in self._titles(self.group_id) if "状态读取" not in t]
+
+    def test_blip_keeps_shift_settled_and_silent(self) -> None:
+        # 锚点拨到 4 天前：万一真被打回 switching，超时逻辑会立刻报出来
         old = int(time.time()) - 4 * 24 * 3600
         db.execute(
             "UPDATE shift_runs SET started_at=? WHERE group_id=?",
-            (old, group_id),
+            (old, self.group_id),
         )
+        self.unreadable = {self.b}
+        self._reconcile(self.group_id)
 
-        # 11/4 待机读不到 → 被打回 switching
-        self.unreadable = {b}
-        self._reconcile(group_id)
-
-        titles = self._titles(group_id)
+        self.assertEqual(self._phase(), "settled", "一次网络抖动不该把已结算的班次打回换班中")
         self.assertFalse(
-            any("换班超时" in title for title in titles),
-            f"不该因单次读失败报换班超时：{titles}",
+            any("换班超时" in title for title in self._titles(self.group_id)),
+            "不该因单次读失败报换班超时",
         )
-        self.assertEqual(self.sent, [], "不该发换班超时通知")
-        # 锚点已重置到「这次掉回切换中」的时刻
-        runs = [r for r in repo.recent_runs(limit=5) if int(r["group_id"]) == group_id]
-        self.assertGreater(int(runs[0]["started_at"]), old + 3600)
+        self.assertEqual(self.sent, [], "不该发任何通知")
+
+    def test_no_bogus_shift_event_after_blip(self) -> None:
+        before = self._shift_events()
+        self.assertTrue(before, "结算后至少有一条换班事件")
+
+        self.unreadable = {self.b}
+        self._reconcile(self.group_id)
+        self.unreadable = set()
+        for _ in range(3):
+            self._reconcile(self.group_id)
+
+        after = self._shift_events()
+        self.assertEqual(after, before, f"恢复后不该多出换班事件：{after}")
+        self.assertEqual(self._phase(), "settled")
+
+    def test_forced_rollback_settles_without_new_event(self) -> None:
+        """phase 被打回 switching 时，重新就绪只认原来那条已收尾的事件。"""
+        before = self._shift_events()
+        db.execute(
+            "UPDATE shift_runs SET phase='switching' WHERE group_id=?", (self.group_id,)
+        )
+        self._reconcile(self.group_id)
+        self._reconcile(self.group_id)
+
+        self.assertEqual(self._phase(), "settled")
+        self.assertEqual(self._shift_events(), before, "不该再开一条换班事件")
+        self.assertEqual(self.sent, [], "也不该重发结算通知")
 
 
 class UnsettledTimeoutStillWorks(_ShiftBase):
@@ -373,10 +413,12 @@ class UnsettledTimeoutStillWorks(_ShiftBase):
         group_id = self._group([{"server_id": a, "hours": 12}, {"server_id": b, "hours": 12}])
 
         self._settle(group_id)
-        # 人为把它退回「未结算」，并把锚点拨旧
+        # 人为把它退回「未结算」：阶段改回 switching、清掉已收尾的事件，锚点拨旧。
+        # 事件也要清 —— 留着一条 done 的换班事件等于告诉引擎「这班早结算过了」，
+        # 那种状态下本来就不该再报超时。
         old = int(time.time()) - 4 * 24 * 3600
         db.execute(
-            "UPDATE shift_runs SET phase='switching', started_at=? WHERE group_id=?",
+            "UPDATE shift_runs SET phase='switching', started_at=?, event_id=0 WHERE group_id=?",
             (old, group_id),
         )
 

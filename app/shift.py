@@ -33,6 +33,11 @@ PHASE_ERROR = "error"
 # 一次新换班，更不该拿建行时那个可能已过去几小时的 started_at 去误报「换班超时」。
 _SETTLED_LIKE_PHASES = (PHASE_SETTLED, PHASE_FAILOVER, PHASE_MANUAL, PHASE_BREAKER)
 
+# 结算那一条事件的 kind。班次被打回 switching 又重新就绪时，靠它判断
+# 「这一班其实早就结算过」，避免再开一条「换班进行中 → 换班完成」。
+# recovery 不在内：那条是当班掉线后被拉起，本身不是换班结论。
+_SETTLE_EVENT_KINDS = ("shift_done", "manual", "shift_failover", "group_new")
+
 # shift_runs.origin：本班次是怎么来的。
 # 新建换班组后的第一次对齐单独标出来 —— 那次事件要一直叫「组名：新建换班组」，
 # 不能被结算逻辑改名成「换班完成」，否则用户点保存后看到的事件对不上自己刚做的事。
@@ -1411,16 +1416,31 @@ class Engine:
         #    整个换班过程（启动当班 → 停非当班 → DDNS）都记在同一条事件里：
         #    以前每一步都单开一条事件，界面上一轮换班会冒出三条互不相干的记录。
         previously_settled = run.get("phase") in _SETTLED_LIKE_PHASES
-        # 已结算的班次被打回 switching（典型是待机成员状态读不到），换班超时不能
-        # 再用建行时写死的 started_at —— 那可能是几天前，一算几千分钟、必报超时。
-        # 打回时把锚点重置为当前时刻，之后仍按阈值正常计；真持续异常照样会报。
+        # 已经结算过的班次被打回 switching、又重新就绪时，本班次的换班事件早就
+        # 收尾了。此时若按「没结算过」处理，就会新建一条「换班进行中」并在两秒后
+        # 改成「换班完成」—— 事件里一条开关机步骤都没有，因为机器本来就都在位。
+        # 实测触发场景：非换班时段网络抖了一下（成员状态读取失败），恢复后凭空
+        # 多出一条「换班完成」。所以这里除了看 phase，还看本班次事件是不是已收尾。
+        settled_before = previously_settled
+        if not settled_before and run.get("event_id"):
+            previous_event = repo.get_event(int(run["event_id"]))
+            settled_before = bool(
+                previous_event
+                and str(previous_event.get("status") or "") == "done"
+                and str(previous_event.get("kind") or "") in _SETTLE_EVENT_KINDS
+            )
+        # 已结算的班次被打回 switching（比如待机确实被拉起来了、要重新停一遍），
+        # 换班超时不能用建行时写死的 started_at —— 那可能是几天前，一算几千分钟、
+        # 必报超时。打回时把锚点重置为当前时刻，之后仍按阈值正常计。
         restart_clock = {"started_at": int(now_ts)} if previously_settled else {}
         duty_status = str(duty.get("instance_status") or "")
         duty_not_running = duty_status not in ("Running",) and duty_status not in TRANSIENT_STATUS
 
         if duty_not_running:
-            if previously_settled:
+            if settled_before:
                 # 已结算的班次里当班又不跑了（被抢占 / 被手动停掉）→ 单独记一条恢复事件。
+                # 用 settled_before 而不是 phase：班次被网络抖动打回 switching 后，
+                # 这一班依然算「结算过」，不该按新换班再开一条事件。
                 # 这不是「换班」，不计换班超时：started_at 从这次拉起重新计时。
                 repo.set_flag(recovery_flag)
                 event_id = repo.add_event(
@@ -1499,7 +1519,7 @@ class Engine:
                     group, config, now_ts, slot_key, shift_start, duty, others, notify_enabled
                 )
                 return {"group_id": group_id, "error": str(exc)}
-        elif not previously_settled:
+        elif not settled_before:
             # 当班本来就在跑：先把本班次的换班事件建好，后续进度往里追加
             event_id = self._shift_event(
                     group_id, slot_key, name, duty.get("label") or "", int(duty["id"])
@@ -1546,7 +1566,7 @@ class Engine:
             )
             return {"group_id": group_id, "slot": slot_key, "ready": False, "stage": "waiting_ip"}
 
-        if not previously_settled:
+        if not settled_before:
             repo.add_event_progress(event_id, f"当班 {duty.get('label')} 已开机", once=True)
 
         # 5) 停非当班（此时才停）。物理停机（StopCharging / KeepCharging / Stop /
@@ -1556,7 +1576,13 @@ class Engine:
             if int(server["id"]) in unreadable:
                 # 状态读不到的成员：不下发停机（不知道它现在是什么状态，重发也没用），
                 # 但也不能算「已到位」—— 否则这一班会带着一台可能还在跑的机器结算。
-                all_stopped = False
+                #
+                # 例外：已经结算过的班次不因为「读不到」被打回换班中。结算是按
+                # 「当班在跑 + 非当班都停着」确认过的，一次网络抖动推翻不了这个结论；
+                # 打回反而会让恢复后凭空冒出一条零开关机的「换班完成」。真要是这台
+                # 机器后来被拉起来了，下一轮读到 Running 时照样会停它。
+                if not settled_before:
+                    all_stopped = False
                 continue
             if _is_stopped_any_mode(server):
                 continue
@@ -1593,7 +1619,7 @@ class Engine:
                     )
             all_stopped = False
 
-        if all_stopped and not previously_settled:
+        if all_stopped and not settled_before:
             repo.add_event_progress(event_id, f"非当班{messages.stop_tail(others)}", once=True)
 
         # 6) 全部实例状态确认到位之后才动 DDNS。
@@ -1613,7 +1639,7 @@ class Engine:
                 config,
                 dns.TARGET_GROUP,
                 group_id,
-                verify=not previously_settled,
+                verify=not settled_before,
             )
             ddns_text = ddns_report.status
             ddns_brief = ddns_report.brief
@@ -1627,7 +1653,7 @@ class Engine:
             # 一台机器可能挂着好几条域名，汇总文案「✅ 已同步 / ❌ 更新失败」开头也是 ✅，
             # 单看前缀会把「有一条没指过去」当成全部成功，于是事件打完成、通知照发。
             ddns_ok = (not ddns_enabled) or (not ddns_bound) or dns.is_success(ddns_text)
-            if previously_settled and not ddns_ok:
+            if settled_before and not ddns_ok:
                 # 已经结算过的班次不再因为 DDNS 失败被打回「换班中」：开机、停机
                 # 都早就到位了，解析只是收尾动作。凭证过期这类问题会一直失败，
                 # 打回 switching 会让徽章在「已就绪 / 换班中」之间来回跳，事件
@@ -1660,9 +1686,9 @@ class Engine:
             # 每班首次结算都写这一行：绑没绑域名、DDNS 开没开，详情里都要有
             # 「DDNS：…」。以前只在「开了 DDNS 且绑了域名」时才写，概览里明明写着
             # 「⏸ DDNS未绑定」，点开却找不到对应步骤，两处对不上。
-            # 只会出现在首次结算（下面 previously_settled 之后不再写），
+            # 只会出现在首次结算（下面 settled_before 之后不再写），
             # 定时换班每分钟一轮也不会刷屏。
-            if not previously_settled:
+            if not settled_before:
                 # 这一步要连「指到哪个 IP」一起写：域名从旧当班机换到新当班机，
                 # 光一句「已同步」看不出变化，而且巡检有可能抢先同步过，当时的
                 # 旧 IP 只能靠换班开始时存的快照还原。
@@ -1693,7 +1719,7 @@ class Engine:
             and not failover_flag
             and not manual_switch
         )
-        first_settle = ready and not previously_settled and not recovered
+        first_settle = ready and not settled_before and not recovered
         if not ready:
             phase = PHASE_SWITCHING
         elif failover_flag:
