@@ -412,9 +412,12 @@ button.nav-parent:hover svg,
 /* -------------------------------------------------------------- 小屏：侧栏收成顶栏 */
 
 @media (max-width: 860px) {
-  /* minmax(0, 1fr) 而不是 1fr：1fr 的下限是内容最小宽度，顶栏一长就会把整页顶宽 */
+  /* 单列改成竖向 flex，不再用单列 grid：grid 的自动行会被 min-height:100dvh 撑高，
+     而侧栏是 align-self:start，正文上方就会多出一大截空白；flex 下顶栏还能真正
+     sticky 到整页（grid 行只有自身高度时，粘住的范围也只有那一行）。 */
   .app-shell {
-    grid-template-columns: minmax(0, 1fr);
+    display: flex;
+    flex-direction: column;
   }
 
   .sidebar {
@@ -431,6 +434,7 @@ button.nav-parent:hover svg,
     border-bottom: 1px solid var(--line);
     min-width: 0;
     max-width: 100vw;
+    flex-shrink: 0;
   }
 
   .sidebar::after {
