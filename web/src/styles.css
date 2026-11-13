@@ -3418,28 +3418,33 @@ input[type='number']::-webkit-inner-spin-button {
 
 /* ------------------------------------------------------------ 设置子界面 */
 
-/* 设置从右侧抽屉改成独立页面：顶部一排标签页，下面是内容卡片与吸底操作条 */
-.settings-tabs {
+/* 设置从右侧抽屉改成独立页面：左侧竖向子菜单 + 右侧内容卡片 + 吸底保存条 */
+.settings-layout {
+  display: grid;
+  grid-template-columns: 196px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+/* 子菜单跟着页面滚动固定在左上角，长表单翻到哪都点得到 */
+.settings-nav {
+  position: sticky;
+  top: 18px;
   display: flex;
-  gap: 4px;
-  padding: 4px;
-  margin-bottom: 16px;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--panel-soft);
-  overflow-x: auto;
-  scrollbar-width: none;
 }
 
-.settings-tabs::-webkit-scrollbar {
-  display: none;
-}
-
-.settings-tabs button {
-  display: inline-flex;
+.settings-nav button {
+  display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 8px 14px;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 11px;
   border: 0;
   border-radius: 9px;
   background: transparent;
@@ -3447,6 +3452,7 @@ input[type='number']::-webkit-inner-spin-button {
   font-family: inherit;
   font-size: 13px;
   font-weight: 600;
+  text-align: left;
   white-space: nowrap;
   cursor: pointer;
   transition:
@@ -3454,19 +3460,23 @@ input[type='number']::-webkit-inner-spin-button {
     color var(--t-fast) var(--ease);
 }
 
-.settings-tabs button:hover {
+.settings-nav button:hover {
   color: var(--ink);
   background: var(--panel-inset);
 }
 
-.settings-tabs button.on {
+.settings-nav button.on {
   background: var(--panel-solid);
   color: var(--ink);
   box-shadow: var(--shadow-1);
 }
 
-.settings-tabs button.on svg {
+.settings-nav button.on svg {
   color: var(--accent);
+}
+
+.settings-main {
+  min-width: 0;
 }
 
 .settings-body {
@@ -3496,6 +3506,30 @@ input[type='number']::-webkit-inner-spin-button {
 .settings-actions .foot-note {
   font-size: 13px;
   color: var(--muted-soft);
+}
+
+/* 窄屏放不下侧栏：子菜单退回内容上方一条可横滑的标签，内容占满整行 */
+@media (max-width: 860px) {
+  .settings-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .settings-nav {
+    position: static;
+    flex-direction: row;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .settings-nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .settings-nav button {
+    width: auto;
+    flex: 0 0 auto;
+  }
 }
 
 @media (max-width: 700px) {
