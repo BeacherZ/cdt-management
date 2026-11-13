@@ -1468,6 +1468,11 @@ class Engine:
             try:
                 aliyun.start_instance(duty)
                 repo.clear_flag(f"start_err:{group_id}:{slot_key}")
+                # 下发成功也得记一次尝试：StartInstance 返回 200 不等于机器起来了。
+                # 库存不足回滚、欠费冻结、刚起来又被人抢占关机，这几种都是「接口成功、
+                # 状态仍是 Stopped」，只在下发失败时计数的话 tries 永远停在 0，
+                # 这一班就一直反复下发、永远判不死、也永远不会故障转移。
+                repo.bump_flag(tries_flag)
                 repo.add_event_progress(
                     event_id, f"已下发开机指令（当班 {duty.get('label')}）"
                 )

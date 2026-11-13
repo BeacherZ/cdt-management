@@ -3212,30 +3212,41 @@ input[type='number']::-webkit-inner-spin-button {
 
 /* -------------------------------------------------------------- 手机（≤700px） */
 
-/* 手机上一律不横向滚动：能堆就堆，能换行就换行 */
+/* 手机上一律不横向滚动：能堆就堆，能换行就换行。
+   但「一行本来放得下」的不要换行 —— 换行会让卡片看起来错位，
+   所以同一行的元素宁可缩图标 / 缩内边距，超长文本用省略号。 */
 @media (max-width: 700px) {
-  /* 换班组标题：组名和状态留第一行，操作按钮整行挪到下面右对齐，
-     这样组名不用被压成省略号 */
+  /* 换班组标题：组名 + 状态 + 操作挤一行。不动字号（手机上看不清），
+     靠收窄按钮内边距与图标腾空间；组名过长才省略，按钮永不下行 */
   .group-head {
-    flex-wrap: wrap;
-    row-gap: 8px;
+    flex-wrap: nowrap;
+    gap: 6px;
   }
 
   .group-head h3 {
-    white-space: normal;
-    overflow: visible;
-    text-overflow: clip;
-    overflow-wrap: anywhere;
+    flex: 0 1 auto;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .group-head .group-actions {
-    margin-left: 0;
-    flex-basis: 100%;
-    justify-content: flex-end;
+    margin-left: auto;
+    gap: 0;
+    flex: none;
   }
 
   .group-head .switch-btn {
-    margin-right: 0;
+    margin-right: 4px;
+    padding: 0 8px;
+    font-size: 12px;
+    gap: 4px;
+  }
+
+  .group-head .group-actions .btn.icon.sm {
+    width: 24px;
+    height: 24px;
   }
 
   /* 槽位：左信息 / 右 IP+流量 改成上下两段 */
@@ -3262,13 +3273,19 @@ input[type='number']::-webkit-inner-spin-button {
     min-width: 0;
   }
 
-  /* 槽位里那行「状态 + 实例 ID」在窄屏允许换行，别硬撑 */
+  /* 槽位里那行「状态 + 实例 ID」保持一行：徽章不缩，实例 ID 过长走省略号 */
   .slot-line {
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: 5px;
   }
 
+  .slot-line .badge {
+    flex: none;
+  }
+
   .slot-line code {
+    flex: 1 1 auto;
+    min-width: 0;
     max-width: 100%;
   }
 
@@ -3333,25 +3350,104 @@ input[type='number']::-webkit-inner-spin-button {
     min-width: 0;
   }
 
+  /* 卡片头：状态徽章 + 名称 + 操作图标挤一行。图标按钮收窄一档，
+     名称过长省略，操作区永远留在右侧同一行（原来 wrap 会把图标甩到第二行） */
   .server-card .head {
-    flex-wrap: wrap;
-    row-gap: 6px;
+    flex-wrap: nowrap;
+    gap: 4px;
+  }
+
+  /* 「已停机 · 节省停机」这种长状态占 130px 以上，会把实例名挤成两个字母。
+     徽章收一档字号与内边距（不删字，普通/节省停机的区别得看得见），
+     省下的宽度留给名称 */
+  .server-card .head .badge,
+  .slot-line .badge {
+    font-size: 11.5px;
+    padding: 2px 7px 2px 6px;
+    gap: 4px;
   }
 
   .server-card .head strong {
+    flex: 1 1 auto;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .card-foot,
-  .card-foot > * {
+  .server-card .head .actions {
+    flex: none;
+    gap: 0;
+  }
+
+  .server-card .head .actions .btn.icon.sm {
+    width: 24px;
+    height: 24px;
+  }
+
+  /* 卡片脚：归属标签 + 域名胶囊 + 开关按钮挤一行。
+     两个标签可收缩、超长省略，按钮固定宽度不缩 —— 按钮掉行最显眼 */
+  .card-foot {
+    flex-wrap: nowrap;
+    gap: 6px;
+  }
+
+  .card-foot .owner-tag {
+    flex: 0 1 auto;
     min-width: 0;
+  }
+
+  .card-foot .owner-tag-text,
+  .card-foot .dns-chip-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .card-foot .dns-chip {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+
+  .card-foot .foot-actions {
+    flex: none;
+    gap: 4px;
+  }
+
+  .card-foot .btn.sm {
+    padding: 5px 8px;
+    font-size: 12px;
+    gap: 4px;
   }
 }
 
 /* -------------------------------------------------------------- 小屏微调 */
+
+/* 360 一档（安卓常见宽度）：再挤一档，让实例名不被截成半截。
+   手机上拖拽排序本来就难用，手柄只是视觉提示，藏掉省 17px。 */
+@media (max-width: 380px) {
+  .server-card .head .drag-handle {
+    display: none;
+  }
+
+  .server-card .head .actions .btn.icon.sm {
+    width: 22px;
+    height: 22px;
+  }
+
+  .server-card .head .badge,
+  .slot-line .badge {
+    font-size: 11px;
+    padding: 2px 6px 2px 5px;
+  }
+
+  /* 域名留给完整宽度（截成 cd.365888.... 等于没显示），
+     归属标签短一点还能看懂，让它先让位 */
+  .card-foot .dns-chip {
+    flex: 0 0 auto;
+  }
+}
 
 @media (max-width: 560px) {
   .grid-2 {
