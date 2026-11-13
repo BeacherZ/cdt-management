@@ -3386,14 +3386,15 @@ input[type='number']::-webkit-inner-spin-button {
   }
 
   /* 卡片脚：归属标签 + 域名胶囊 + 开关按钮挤一行。
-     两个标签可收缩、超长省略，按钮固定宽度不缩 —— 按钮掉行最显眼 */
+     谁让位：归属标签（「换班组「HK」托管」）不缩 —— 截成「换班组「...」」
+     等于没说归谁；域名截掉尾缀还认得出是哪条记录，让它和按钮以外先让位 */
   .card-foot {
     flex-wrap: nowrap;
     gap: 6px;
   }
 
   .card-foot .owner-tag {
-    flex: 0 1 auto;
+    flex: 0 0 auto;
     min-width: 0;
   }
 
@@ -3420,6 +3421,18 @@ input[type='number']::-webkit-inner-spin-button {
     font-size: 12px;
     gap: 4px;
   }
+
+  /* 保活卡「域名 + 运行窗口」挤一行：窗口时间固定不缩（缩了就看不懂几点到几点），
+     域名截掉尾缀（cd.365888.xyz → cd.3658…）仍能认出是哪条记录 */
+  .meta-line.dns-line {
+    flex-wrap: nowrap;
+    row-gap: 0;
+  }
+
+  .meta-line.dns-line .dns-chip {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
 }
 
 /* -------------------------------------------------------------- 小屏微调 */
@@ -3442,10 +3455,12 @@ input[type='number']::-webkit-inner-spin-button {
     padding: 2px 6px 2px 5px;
   }
 
-  /* 域名留给完整宽度（截成 cd.365888.... 等于没显示），
-     归属标签短一点还能看懂，让它先让位 */
-  .card-foot .dns-chip {
-    flex: 0 0 auto;
+  /* 再窄一档：归属标签的内边距和字号各收一点，省下的给域名，
+     但组名本身仍然整句显示（只剩它能说明这台机器归谁） */
+  .card-foot .owner-tag {
+    font-size: 11.5px;
+    padding: 4px 6px;
+    gap: 3px;
   }
 }
 
