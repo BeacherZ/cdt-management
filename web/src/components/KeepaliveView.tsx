@@ -16,6 +16,14 @@ import { windowSummary } from '../keepalive'
 import type { Keepalive, Server } from '../types'
 import { Badge, Empty, Meter, statusLabel, statusTone } from './ui'
 
+/** 后端把多台记录用顿号连成一串（一台可以绑多条），这里拆回一个个小框 */
+function dnsRecords(value?: string): string[] {
+  return (value || '')
+    .split('、')
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
 type Props = {
   keepalives: Keepalive[]
   servers: Server[]
@@ -129,24 +137,25 @@ export default function KeepaliveView({
                   </div>
                 </div>
 
+                {/* 身份行①：实例 ID 靠左，地域靠右 */}
                 <div className="meta-line">
-                  <code>{item.instance_id || '未填实例 ID'}</code>
-                  <span className="card-region" title={item.region_id}>
+                  <code style={{ fontSize: 12 }} title={item.instance_id}>
+                    {item.instance_id || '未填实例 ID'}
+                  </code>
+                  <span className="card-region meta-right" title={item.region_id}>
                     <MapPin size={11} />
                     {regionLabel(item.region_id)}
                   </span>
-                  <span className={`site-tag ${item.site === 'international' ? 'intl' : ''}`}>
-                    {item.site === 'international' ? '国际站' : '中国站'}
-                  </span>
-                  {item.stop_mode === 'Stop' && (
-                    <span className="site-tag" title="实例设置里的停机模式：普通停机仍按规格收费">
-                      普通停机
-                    </span>
-                  )}
                 </div>
+                {/* 身份行②：公网 IP 靠左，站点类型靠右 */}
                 <div className="meta-line">
-                  <span style={{ fontFamily: 'ui-monospace, Consolas, monospace' }}>
+                  <span className="addr-chip" title="公网 IP">
                     {item.public_ip || '无公网 IP'}
+                  </span>
+                  <span
+                    className={`site-tag meta-right ${item.site === 'international' ? 'intl' : ''}`}
+                  >
+                    {item.site === 'international' ? '国际站' : '中国站'}
                   </span>
                 </div>
 
@@ -157,17 +166,13 @@ export default function KeepaliveView({
                 />
 
                 {(item.dns_record || schedule) && (
-                  <div className="meta-line">
-                    {item.dns_record && (
-                      <span
-                        className="dns-chip"
-                        style={{ minWidth: 0 }}
-                        title="已绑定的 DNS 记录"
-                      >
+                  <div className="meta-line dns-line">
+                    {dnsRecords(item.dns_record).map((record) => (
+                      <span className="dns-chip" key={record} title="已绑定的 DNS 记录">
                         <Globe2 size={10} />
-                        <span className="dns-chip-text">{item.dns_record}</span>
+                        <span className="dns-chip-text">{record}</span>
                       </span>
-                    )}
+                    ))}
                     {schedule && (
                       <span
                         className="dns-chip"
@@ -181,7 +186,11 @@ export default function KeepaliveView({
                   </div>
                 )}
 
-                <div className="toggle-row" style={{ paddingTop: 4, paddingBottom: 0, borderBottom: 0 }}>
+                {/* 底部开关沉底：同组卡片等高时，开关始终贴齐卡片下沿 */}
+                <div
+                  className="toggle-row"
+                  style={{ marginTop: 'auto', paddingTop: 4, paddingBottom: 0, borderBottom: 0 }}
+                >
                   <div className="toggle-text">
                     {groupedIds.has(item.server_id) ? (
                       <>

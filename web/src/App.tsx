@@ -658,7 +658,12 @@ export default function App() {
                     )}
                   </button>
                 ) : (
-                  <div className="nav-parent label">{section.title}</div>
+                  // 纯分组标签（保活）：图标照渲染，和概览 / DNS 的图标落在同一列，
+                  // 否则这行文字会比其余总菜单更靠左，看着像缩进错位
+                  <div className="nav-parent label">
+                    {ParentIcon && <ParentIcon size={15} />}
+                    <span className="nav-text">{section.title}</span>
+                  </div>
                 )}
 
                 {section.children.length > 0 && (

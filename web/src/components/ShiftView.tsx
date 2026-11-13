@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ArrowRight, Clock3, LoaderCircle, Pencil, Plus, Repeat, Trash2, Zap } from 'lucide-react'
+import { ArrowRight, Clock3, Globe2, LoaderCircle, Pencil, Plus, Repeat, Trash2, Zap } from 'lucide-react'
 import type { ShiftGroup } from '../types'
 import { currentTs } from '../time'
 import { Badge, Empty, Meter, groupStatePulse, groupStateTone, statusLabel, statusTone } from './ui'
@@ -159,7 +159,15 @@ export default function ShiftView({
                   <span>
                     共 {group.members.filter((member) => member.enabled).length} 台参与
                   </span>
-                  {group.ddns_record && <span>DDNS：{group.ddns_record}</span>}
+                  {group.ddns_record && (
+                    <span className="ddns-item" title="DDNS 记录始终指向当班实例">
+                      DDNS
+                      <span className="dns-chip">
+                        <Globe2 size={10} />
+                        <span className="dns-chip-text">{group.ddns_record}</span>
+                      </span>
+                    </span>
+                  )}
                   {group.next_switch_at > 0 && (
                     <span style={{ color: 'var(--ink-soft)' }}>
                       距下次切换 <b>{countdown(group.next_switch_at, nowTs)}</b>
@@ -214,7 +222,11 @@ export default function ShiftView({
                         </div>
                         <div className="slot-side">
                           {member.is_duty && <span className="duty-tag">当班</span>}
-                          <div className="slot-ip">{server.public_ip || '无公网 IP'}</div>
+                          <div className="slot-ip">
+                            <span className="addr-chip" title="公网 IP">
+                              {server.public_ip || '无公网 IP'}
+                            </span>
+                          </div>
                           <Meter
                             used={server.traffic_used}
                             quota={server.quota_gb}

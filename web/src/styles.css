@@ -624,6 +624,12 @@ label {
   font-size: 13px;
   font-weight: 600;
   color: var(--ink);
+  min-width: 0;
+  max-width: 100%;
+  padding: 1px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel-inset);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -709,11 +715,12 @@ label {
 
 .dns-ip code {
   font-size: 12px;
-  padding: 1px 5px;
-  border-radius: 5px;
+  padding: 1px 7px;
+  border-radius: 999px;
   background: var(--panel-inset);
   border: 1px solid var(--line);
   color: var(--ink-soft);
+  font-family: ui-monospace, Consolas, monospace;
 }
 
 /* 该指向 vs 现在指向：还没同步时用琥珀色提醒 */
@@ -1330,6 +1337,9 @@ input[type='number']::-webkit-inner-spin-button {
   display: grid;
   gap: 13px;
   grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+  /* 同一行卡片等高：内容少的卡也被拉到行高，底部操作区靠
+     .card-foot 的 margin-top:auto 沉底，整排看起来齐平 */
+  grid-auto-rows: 1fr;
 }
 
 .server-card {
@@ -1375,6 +1385,17 @@ input[type='number']::-webkit-inner-spin-button {
   min-width: 0;
 }
 
+/* 域名胶囊行：一行放不下就换行，别把域名压成几个字母 */
+.meta-line.dns-line {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+.meta-line.dns-line .dns-chip {
+  flex: none;
+  max-width: 100%;
+}
+
 .meta-line code {
   font-size: 12px;
   padding: 1.5px 6px;
@@ -1393,7 +1414,7 @@ input[type='number']::-webkit-inner-spin-button {
   white-space: nowrap;
 }
 
-/* 地域给中文名 + 定位图标，IP 靠右等宽 */
+/* 地域给中文名 + 定位图标 */
 .card-region {
   display: inline-flex;
   align-items: center;
@@ -1409,16 +1430,23 @@ input[type='number']::-webkit-inner-spin-button {
   opacity: 0.75;
 }
 
-.card-ip {
+/* 身份行里靠右的那一项（地域 / 站点类型） */
+.meta-right {
   margin-left: auto;
-  font-family: ui-monospace, Consolas, monospace;
-  font-size: 12px;
-  color: var(--ink-soft);
-  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
 }
 
-/* 卡片上的域名小标签 */
-.dns-chip {
+/* 地域跟 ID 同行靠右时，仍要能在窄卡里收缩出省略号 */
+.card-region.meta-right {
+  flex: 0 1 auto;
+}
+
+/* 卡片上的域名 / IP 小标签：域名带图标，IP 用同一套框 */
+.dns-chip,
+.addr-chip {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -1440,8 +1468,16 @@ input[type='number']::-webkit-inner-spin-button {
   opacity: 0.7;
 }
 
-/* 域名太长时省略号要落在文字上（flex 容器直接写 text-overflow 不生效） */
-.dns-chip-text {
+/* 换班组头部的「DDNS + 域名胶囊」 */
+.ddns-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* 域名 / IP 太长时省略号要落在文字上（flex 容器直接写 text-overflow 不生效） */
+.dns-chip-text,
+.addr-chip-text {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1757,6 +1793,13 @@ input[type='number']::-webkit-inner-spin-button {
 .server-table-dns .dns-chip {
   gap: 3px;
   padding: 1px 5px;
+  font-size: 11px;
+}
+
+/* 公网 IP 列更窄，胶囊再收一号，完整 IP 才放得下 */
+.server-table .addr-chip {
+  padding: 0 6px;
+  font-size: 11px;
 }
 
 .server-table-actions {
@@ -3277,6 +3320,12 @@ input[type='number']::-webkit-inner-spin-button {
   .group-grid,
   .dns-list {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* 单列时 grid-auto-rows:1fr 会把每张卡拉成最高那张的高度，
+     卡片之间留一大截空白，这里改回自然高度 */
+  .server-grid {
+    grid-auto-rows: auto;
   }
 
   .server-card,

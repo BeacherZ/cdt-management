@@ -233,7 +233,7 @@ export default function DashboardView({
                         <Badge tone={statusTone(duty.server.instance_status)}>
                           {statusLabel(duty.server.instance_status, duty.server.stopped_mode)}
                         </Badge>
-                        <code>{duty.server.public_ip || '—'}</code>
+                        <span className="addr-chip">{duty.server.public_ip || '—'}</span>
                       </div>
                       <Meter
                         used={duty.server.traffic_used}

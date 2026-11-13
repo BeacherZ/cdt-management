@@ -223,24 +223,25 @@ export default function ServersView({
                   </div>
                 </div>
 
+                {/* 身份行①：实例 ID 靠左，地域靠右 */}
                 <div className="meta-line">
-                  <code style={{ fontSize: 12 }}>{server.instance_id || '未填实例 ID'}</code>
-                </div>
-                <div className="meta-line">
-                  <span className="card-region" title={server.region_id}>
+                  <code style={{ fontSize: 12 }} title={server.instance_id}>
+                    {server.instance_id || '未填实例 ID'}
+                  </code>
+                  <span className="card-region meta-right" title={server.region_id}>
                     <MapPin size={11} />
                     {regionLabel(server.region_id)}
                   </span>
-                  <span className={`site-tag ${server.site === 'international' ? 'intl' : ''}`}>
-                    {server.site === 'international' ? '国际站' : '中国站'}
-                  </span>
-                  {server.stop_mode === 'Stop' && (
-                    <span className="site-tag" title="实例设置里的停机模式：普通停机仍按规格收费">
-                      普通停机
-                    </span>
-                  )}
-                  <span className="card-ip" title="公网 IP">
+                </div>
+                {/* 身份行②：公网 IP 靠左，站点类型靠右 */}
+                <div className="meta-line">
+                  <span className="addr-chip" title="公网 IP">
                     {server.public_ip || '无公网 IP'}
+                  </span>
+                  <span
+                    className={`site-tag meta-right ${server.site === 'international' ? 'intl' : ''}`}
+                  >
+                    {server.site === 'international' ? '国际站' : '中国站'}
                   </span>
                 </div>
 
@@ -345,12 +346,12 @@ function ServerTable({
           <col style={{ width: '11%' }} />
           <col style={{ width: '10%' }} />
           <col style={{ width: '8%' }} />
-          <col style={{ width: '9%' }} />
+          <col style={{ width: '11%' }} />
           <col style={{ width: '8%' }} />
           <col style={{ width: '10%' }} />
           {/* 归属列要比别的列宽一点：卡片的文案是「换班组「组名」托管」，窄了会被省略号截掉 */}
-          <col style={{ width: '18%' }} />
-          <col style={{ width: '15%' }} />
+          <col style={{ width: '17%' }} />
+          <col style={{ width: '14%' }} />
           <col style={{ width: '11%' }} />
         </colgroup>
         <thead>
@@ -400,7 +401,7 @@ function ServerTable({
                   </div>
                 </td>
                 <td data-label="公网 IP">
-                  <span className="server-table-mono">{server.public_ip || '—'}</span>
+                  <span className="addr-chip">{server.public_ip || '—'}</span>
                 </td>
                 <td data-label="流量 / 配额">
                   <div className="server-table-meter">
