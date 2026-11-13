@@ -23,7 +23,7 @@ import ServersView from './components/ServersView'
 import ShiftView from './components/ShiftView'
 import ServerDialog from './components/ServerDialog'
 import GroupDialog from './components/GroupDialog'
-import SettingsDrawer from './components/SettingsDrawer'
+import SettingsView from './components/SettingsView'
 import ConfirmDialog from './components/ConfirmDialog'
 import DNSView from './components/DNSView'
 import { Badge, Modal } from './components/ui'
@@ -31,7 +31,7 @@ import { ownerLabel } from './owners'
 import { syncClock } from './time'
 
 type Phase = 'loading' | 'setup' | 'login' | 'ready' | 'fatal'
-type View = 'dashboard' | 'keepalive' | 'shift' | 'servers' | 'dns'
+type View = 'dashboard' | 'keepalive' | 'shift' | 'servers' | 'dns' | 'settings'
 type Toast = { id: number; tone: 'success' | 'error' | 'info'; message: string }
 
 /** 删除这类不可撤销的操作，统一走应用内二次确认（window.confirm 在桌面壳里可能被吞掉） */
@@ -120,7 +120,6 @@ export default function App() {
     open: false,
     group: null,
   })
-  const [settingsOpen, setSettingsOpen] = useState(false)
   const [keepalivePicker, setKeepalivePicker] = useState(false)
   // 单机保活设置页：新建时带 server，编辑时带 item
   const [keepaliveDialog, setKeepaliveDialog] = useState<{
@@ -692,7 +691,10 @@ export default function App() {
         </nav>
 
         <div className="sidebar-foot">
-          <button className="nav-item" onClick={() => setSettingsOpen(true)}>
+          <button
+            className={`nav-item${view === 'settings' ? ' on' : ''}`}
+            onClick={() => setView('settings')}
+          >
             <SettingsIcon size={15} />
             <span className="nav-text">设置</span>
           </button>
@@ -779,8 +781,12 @@ export default function App() {
             onAddRecord={addDnsRecord}
             onRemoveRecord={removeDnsRecord}
             onReorder={reorderDns}
-            onOpenSettings={() => setSettingsOpen(true)}
+            onOpenSettings={() => setView('settings')}
           />
+        )}
+
+        {view === 'settings' && settings && (
+          <SettingsView settings={settings} onSaved={refreshAfterSave} />
         )}
 
         <div
@@ -909,17 +915,6 @@ export default function App() {
             setKeepaliveDialog(null)
             void loadAll()
             toast(message, 'success')
-          }}
-        />
-      )}
-
-      {settingsOpen && (
-        <SettingsDrawer
-          settings={settings}
-          onClose={() => setSettingsOpen(false)}
-          onSaved={(message) => {
-            setSettingsOpen(false)
-            void refreshAfterSave(message)
           }}
         />
       )}

@@ -3415,3 +3415,100 @@ input[type='number']::-webkit-inner-spin-button {
   line-height: 1.65;
   color: var(--muted-soft);
 }
+
+/* ------------------------------------------------------------ 设置子界面 */
+
+/* 设置从右侧抽屉改成独立页面：顶部一排标签页，下面是内容卡片与吸底操作条 */
+.settings-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  margin-bottom: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-soft);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.settings-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.settings-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+
+.settings-tabs button:hover {
+  color: var(--ink);
+  background: var(--panel-inset);
+}
+
+.settings-tabs button.on {
+  background: var(--panel-solid);
+  color: var(--ink);
+  box-shadow: var(--shadow-1);
+}
+
+.settings-tabs button.on svg {
+  color: var(--accent);
+}
+
+.settings-body {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--panel-solid);
+  box-shadow: var(--shadow-1);
+}
+
+/* 吸底操作条：表单很长时不用滚回顶部找保存 */
+.settings-actions {
+  position: sticky;
+  bottom: 12px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-solid);
+  box-shadow: var(--shadow-2);
+}
+
+.settings-actions .foot-note {
+  font-size: 13px;
+  color: var(--muted-soft);
+}
+
+@media (max-width: 700px) {
+  .settings-body {
+    padding: 14px;
+  }
+
+  .settings-actions {
+    bottom: 8px;
+    padding: 10px 12px;
+  }
+
+  .settings-actions .foot-note {
+    display: none;
+  }
+}

@@ -5,14 +5,15 @@ import {
   Download,
   Github,
   Globe2,
+  Info,
   KeyRound,
   LoaderCircle,
   Save,
   Send,
   SlidersHorizontal,
   TriangleAlert,
+  Undo2,
   UserRound,
-  X,
 } from 'lucide-react'
 import { SLOW_TIMEOUT_MS, fetchLatestRelease, post } from '../api'
 import type { Settings } from '../types'
@@ -20,7 +21,6 @@ import { Segmented, Switch } from './ui'
 
 type Props = {
   settings: Settings
-  onClose: () => void
   onSaved: (message: string) => void
 }
 
@@ -36,26 +36,50 @@ const TIMEZONES = [
   'UTC',
 ]
 
-export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
+const TABS: { key: Tab; label: string; icon: typeof SlidersHorizontal }[] = [
+  { key: 'general', label: '常规设置', icon: SlidersHorizontal },
+  { key: 'ddns', label: 'DDNS', icon: Cloud },
+  { key: 'notify', label: '通知', icon: BellRing },
+  { key: 'about', label: '关于', icon: Info },
+]
+
+/** 把接口拿到的设置整理成可编辑草稿：兼容老版本字段与空值 */
+function makeDraft(settings: Settings): Settings {
+  const draft = structuredClone(settings)
+  // 老版本的响应里只有单条 record，补成数组，后面全按数组处理
+  if (!Array.isArray(draft.ddns.records)) draft.ddns.records = []
+  if (draft.ddns.records.length === 0 && draft.ddns.record) {
+    draft.ddns.records = [draft.ddns.record]
+  }
+  // 1.2.6 及以前没有这个字段，补 0 让输入框保持受控
+  if (!draft.reconcile_offset) draft.reconcile_offset = '0'
+  return draft
+}
+
+export default function SettingsView({ settings, onSaved }: Props) {
   const [tab, setTab] = useState<Tab>('general')
   const [notifyTab, setNotifyTab] = useState<NotifyTab>('channel')
-  const [form, setForm] = useState(() => {
-    const draft = structuredClone(settings)
-    // 老版本的响应里只有单条 record，补成数组，后面全按数组处理
-    if (!Array.isArray(draft.ddns.records)) draft.ddns.records = []
-    if (draft.ddns.records.length === 0 && draft.ddns.record) {
-      draft.ddns.records = [draft.ddns.record]
-    }
-    // 1.2.6 及以前没有这个字段，补 0 让输入框保持受控
-    if (!draft.reconcile_offset) draft.reconcile_offset = '0'
-    return draft
-  })
+  const [form, setForm] = useState(() => makeDraft(settings))
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [testing, setTesting] = useState('')
   const [testResult, setTestResult] = useState('')
   const [newUsername, setNewUsername] = useState(settings.admin_username ?? '')
   const [newPassword, setNewPassword] = useState('')
+
+  // 设置被后台刷新（如保存后重新拉取）时，草稿跟着走，避免显示过期值
+  useEffect(() => {
+    setForm(makeDraft(settings))
+    setNewUsername(settings.admin_username ?? '')
+  }, [settings])
+
+  function reset() {
+    setForm(makeDraft(settings))
+    setNewUsername(settings.admin_username ?? '')
+    setNewPassword('')
+    setError('')
+    setTestResult('')
+  }
 
   function patch(updater: (draft: Settings) => void) {
     setForm((current) => {
@@ -163,32 +187,35 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
 
   return (
     <>
-      <div className="overlay" style={{ zIndex: 90 }} onMouseDown={onClose} />
-      <aside className="drawer" role="dialog" aria-modal="true">
-        <div className="modal-head">
-          <SlidersHorizontal size={16} style={{ color: 'var(--green)' }} />
-          <h3>设置</h3>
-          <button className="btn ghost icon sm close" onClick={onClose} aria-label="关闭">
-            <X size={16} />
-          </button>
+      <div className="page-head">
+        <div>
+          <h1>设置</h1>
+          <p>
+            账号、巡检节奏、DDNS 解析与通知推送都在这里配置。切换上方标签页即可，改完点底部「保存」生效。
+          </p>
         </div>
+      </div>
 
-        <div className="tabs">
-          <button className={tab === 'general' ? 'on' : ''} onClick={() => setTab('general')}>
-            常规
-          </button>
-          <button className={tab === 'ddns' ? 'on' : ''} onClick={() => setTab('ddns')}>
-            DDNS
-          </button>
-          <button className={tab === 'notify' ? 'on' : ''} onClick={() => setTab('notify')}>
-            通知
-          </button>
-          <button className={tab === 'about' ? 'on' : ''} onClick={() => setTab('about')}>
-            关于
-          </button>
-        </div>
+      <div className="settings-tabs" role="tablist" aria-label="设置分类">
+        {TABS.map((item) => {
+          const Icon = item.icon
+          return (
+            <button
+              key={item.key}
+              type="button"
+              role="tab"
+              aria-selected={tab === item.key}
+              className={tab === item.key ? 'on' : ''}
+              onClick={() => setTab(item.key)}
+            >
+              <Icon size={14} />
+              {item.label}
+            </button>
+          )
+        })}
+      </div>
 
-        <div className="modal-body" style={{ flex: 1 }}>
+      <div className="settings-body">
           {tab === 'general' && (
             <>
               <div className="section-head">
@@ -832,24 +859,24 @@ export default function SettingsDrawer({ settings, onClose, onSaved }: Props) {
           )}
         </div>
 
-        {tab !== 'about' && (
-          <div className="modal-foot">
-            <span className="foot-note">
-              {newUsername !== (settings.admin_username ?? '') || newPassword
-                ? '账号有改动，保存后生效'
-                : '修改会即时生效'}
-            </span>
-            <span className="spacer" />
-            <button className="btn" onClick={onClose}>
-              取消
-            </button>
-            <button className="btn primary" onClick={save} disabled={busy}>
-              {busy ? <LoaderCircle size={14} className="spin" /> : <Save size={14} />}
-              保存
-            </button>
-          </div>
-        )}
-      </aside>
+      {tab !== 'about' && (
+        <div className="settings-actions">
+          <span className="foot-note">
+            {newUsername !== (settings.admin_username ?? '') || newPassword
+              ? '账号有改动，保存后生效'
+              : '修改会即时生效'}
+          </span>
+          <span className="spacer" />
+          <button className="btn" onClick={reset} disabled={busy}>
+            <Undo2 size={14} />
+            撤销修改
+          </button>
+          <button className="btn primary" onClick={save} disabled={busy}>
+            {busy ? <LoaderCircle size={14} className="spin" /> : <Save size={14} />}
+            保存
+          </button>
+        </div>
+      )}
     </>
   )
 }
