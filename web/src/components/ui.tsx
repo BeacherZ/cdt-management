@@ -92,18 +92,20 @@ export function Ring({
   stroke = 4,
   tone = 'accent',
   children,
+  title,
 }: {
   percent: number
   size?: number
   stroke?: number
   tone?: 'accent' | 'amber' | 'red' | 'blue'
   children?: ReactNode
+  title?: string
 }) {
   const safe = Math.max(0, Math.min(100, Number.isFinite(percent) ? percent : 0))
   const radius = (size - stroke) / 2
   const circumference = 2 * Math.PI * radius
   return (
-    <div className={`ring ${tone}`} style={{ width: size, height: size }}>
+    <div className={`ring ${tone}`} style={{ width: size, height: size }} title={title}>
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden="true">
         <circle
           className="ring-track"
@@ -133,10 +135,26 @@ export function Ring({
 
 /* -------------------------------------------------------------- 流量条 */
 
-export function Meter({ used, quota, threshold }: { used: number | null; quota: number; threshold: number }) {
-  const percent = used === null ? 0 : Math.min(100, (used / (quota || 1)) * 100)
-  const thresholdPercent = Math.min(100, (threshold / (quota || 1)) * 100)
-  const tone = percent >= thresholdPercent ? 'danger' : percent >= thresholdPercent * 0.9 ? 'warn' : ''
+export function Meter({
+  used,
+  quota,
+  threshold,
+  compact = false,
+}: {
+  used: number | null
+  quota: number
+  threshold: number
+  /** 紧凑模式：只报「已用 + 百分比」，阈值只留刻度线，给列表行那种窄列用 */
+  compact?: boolean
+}) {
+  // 分母只认配额（后端默认每台 200GB），和通知、概览流量圈一个口径；
+  // 阈值只用来定颜色和那条刻度线，不参与百分比。
+  const base = quota > 0 ? quota : 200
+  const rawPercent = used === null ? 0 : (used / base) * 100
+  // 进度条画到 100% 就顶格，但标签照报真实值（超配额时能读到 103.4%，别糊成 100.0%）
+  const percent = Math.min(100, rawPercent)
+  const thresholdPercent = Math.min(100, (threshold / base) * 100)
+  const tone = rawPercent >= thresholdPercent ? 'danger' : rawPercent >= thresholdPercent * 0.9 ? 'warn' : ''
   const trackRef = useRef<HTMLDivElement>(null)
   const markRef = useRef<HTMLElement>(null)
 
@@ -164,7 +182,14 @@ export function Meter({ used, quota, threshold }: { used: number | null; quota: 
   }, [thresholdPercent])
 
   return (
-    <div className="meter">
+    <div
+      className={`meter${compact ? ' is-compact' : ''}`}
+      title={
+        compact
+          ? `已用 ${used === null ? '未读取' : `${used.toFixed(2)} GB`} / 配额 ${base} GB · 阈值 ${threshold} GB`
+          : undefined
+      }
+    >
       <div className="meter-track" ref={trackRef} title={`阈值线 ${thresholdPercent.toFixed(0)}%`}>
         <div className={`meter-fill ${tone}`} style={{ width: `${percent}%` }} />
         {/* 内联百分比只是首帧兜底，挂载后由上面那段 effect 改成整像素 */}
@@ -172,9 +197,7 @@ export function Meter({ used, quota, threshold }: { used: number | null; quota: 
       </div>
       <div className="meter-labels">
         <span>{used === null ? '未读取' : `${used.toFixed(2)} GB`}</span>
-        <span>
-          {percent.toFixed(1)}% / 阈值 {threshold} GB
-        </span>
+        <span>{compact ? `${rawPercent.toFixed(1)}%` : `${rawPercent.toFixed(1)}% / 阈值 ${threshold} GB`}</span>
       </div>
     </div>
   )
@@ -292,6 +315,25 @@ export function Modal({
       </div>
     </div>
   )
+}
+
+/* -------------------------------------------------------------- 金额 */
+
+const CURRENCY_SIGN: Record<string, string> = {
+  CNY: '¥',
+  USD: '$',
+  HKD: 'HK$',
+  JPY: 'JP¥',
+  EUR: '€',
+  GBP: '£',
+}
+
+/** 金额展示统一走这里：实例卡片与概览的实例状态卡读的是同一份 BSS 快照，
+ *  各写一份格式化会出现「¥1.42」和「1.42 元」两种写法 */
+export function money(value: number | null, currency: string): string {
+  if (value === null || Number.isNaN(value)) return '—'
+  const sign = CURRENCY_SIGN[currency] ?? `${currency} `
+  return `${sign}${value.toFixed(2)}`
 }
 
 /* -------------------------------------------------------------- 空状态 */

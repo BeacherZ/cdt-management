@@ -52,11 +52,15 @@ export default function ServerDialog({
     remark: server?.remark ?? '',
   }))
   const [error, setError] = useState('')
+  // 出错的那一格（input 的 id），用来描红 + 聚焦；一开始填就清掉
+  const [badField, setBadField] = useState('')
   const [busy, setBusy] = useState(false)
   const [confirmStop, setConfirmStop] = useState(false)
 
   function update<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
     setForm((current) => ({ ...current, [key]: value }))
+    if (badField) setBadField('')
+    if (error) setError('')
   }
 
   function changeSite(site: SiteType) {
@@ -69,10 +73,45 @@ export default function ServerDialog({
   // 存量数据里地域可能与站点不匹配（比如早期都是中国站），这里补一个选项免得下拉框显示空白
   const regionKnown = regionsFor(form.site).some((region) => region.value === form.region_id)
 
+  // 提示条永远贴在正文底部，这里再把出事的那一格滚进视野并聚焦，
+  // 让「点了保存没反应」变成「红框 + 光标停在该填的格子里」
+  function fail(id: string, message: string) {
+    setError(message)
+    setBadField(id)
+    window.requestAnimationFrame(() => {
+      const el = document.getElementById(id)
+      if (!el) return
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      el.focus({ preventScroll: true })
+    })
+  }
+
+  // 必填校验按表单自上而下的顺序走，报出来的第一条就是最靠上那处没填的。
+  // 编辑态的 AccessKey / Secret 留空表示沿用已存的密钥（后端也是这么处理的），
+  // 只有新建时必须填 —— 星号两处都打，弹不弹提示按这个区分。
+  function firstMissing(): { id: string; message: string } | null {
+    if (!form.label.trim()) return { id: 'label', message: '请填写别名' }
+    if (!editing && !form.access_key_id.trim()) {
+      return { id: 'ak', message: '请填写 AccessKey ID' }
+    }
+    if (!editing && !form.access_key_secret.trim()) {
+      return { id: 'sk', message: '请填写 AccessKey Secret' }
+    }
+    // 存量数据可能本来就没有实例 ID（列表里显示「未填实例 ID」）：
+    // 编辑这种老记录时不拦，否则连配额都改不了；但把已填的 ID 删空要拦住。
+    const legacyWithoutId = editing && !(server?.instance_id ?? '').trim()
+    if (!form.instance_id.trim() && !legacyWithoutId) {
+      return { id: 'instance', message: '请填写实例 ID' }
+    }
+    return null
+  }
+
   async function save() {
     setError('')
-    if (!editing && (!form.access_key_id.trim() || !form.access_key_secret.trim())) {
-      setError('新建实例必须填写 AccessKey ID 与 Secret')
+    setBadField('')
+    const missing = firstMissing()
+    if (missing) {
+      fail(missing.id, missing.message)
       return
     }
     // 数值框 min 属性对「onClick 保存」不生效，清空会变成 Number('')=0 静默提交，
@@ -80,15 +119,15 @@ export default function ServerDialog({
     const quota = Number(form.quota_gb)
     const threshold = Number(form.threshold_gb)
     if (!Number.isFinite(quota) || quota <= 0) {
-      setError('总配额必须是大于 0 的数字')
+      fail('quota', '总配额必须是大于 0 的数字')
       return
     }
     if (!Number.isFinite(threshold) || threshold <= 0) {
-      setError('限流阈值必须是大于 0 的数字')
+      fail('threshold', '限流阈值必须是大于 0 的数字')
       return
     }
     if (threshold > quota) {
-      setError('限流阈值不能超过总配额')
+      fail('threshold', '限流阈值不能超过总配额')
       return
     }
     // 从节省停机改成普通停机要二次确认：这一改动会让每次关机都开始计规格费，
@@ -132,7 +171,7 @@ export default function ServerDialog({
     >
       <div className="field">
         <label>
-          <Globe2 size={12} /> 站点类型
+          <Globe2 size={12} /> 站点类型<span className="req" aria-hidden="true">*</span>
         </label>
         <Segmented value={form.site} options={SITE_OPTIONS} onChange={changeSite} />
         <div className="hint">
@@ -143,9 +182,12 @@ export default function ServerDialog({
 
       <div className="grid-2">
         <div className="field">
-          <label htmlFor="label">别名</label>
+          <label htmlFor="label">
+            别名<span className="req" aria-hidden="true">*</span>
+          </label>
           <input
             id="label"
+            aria-invalid={badField === 'label'}
             className="input"
             value={form.label}
             onChange={(event) => update('label', event.target.value)}
@@ -154,7 +196,7 @@ export default function ServerDialog({
         </div>
         <div className="field">
           <label htmlFor="region">
-            <MapPin size={12} /> 地域
+            <MapPin size={12} /> 地域<span className="req" aria-hidden="true">*</span>
           </label>
           <select
             id="region"
@@ -178,10 +220,11 @@ export default function ServerDialog({
 
       <div className="field">
         <label htmlFor="ak">
-          <KeyRound size={12} /> AccessKey ID {!editing && <span className="req">*</span>}
+          <KeyRound size={12} /> AccessKey ID<span className="req" aria-hidden="true">*</span>
         </label>
         <input
           id="ak"
+          aria-invalid={badField === 'ak'}
           className="input mono"
           value={form.access_key_id}
           onChange={(event) => update('access_key_id', event.target.value)}
@@ -192,10 +235,11 @@ export default function ServerDialog({
 
       <div className="field">
         <label htmlFor="sk">
-          <KeyRound size={12} /> AccessKey Secret {!editing && <span className="req">*</span>}
+          <KeyRound size={12} /> AccessKey Secret<span className="req" aria-hidden="true">*</span>
         </label>
         <input
           id="sk"
+          aria-invalid={badField === 'sk'}
           className="input mono"
           type="password"
           value={form.access_key_secret}
@@ -203,13 +247,15 @@ export default function ServerDialog({
           placeholder={editing ? '留空不修改' : '填写 AccessKey Secret'}
           autoComplete="new-password"
         />
-        <div className="hint">建议用 RAM 子账号，只授予 ECS 启停/查询与 CDT 只读权限。</div>
       </div>
 
       <div className="field">
-        <label htmlFor="instance">实例 ID</label>
+        <label htmlFor="instance">
+          实例 ID<span className="req" aria-hidden="true">*</span>
+        </label>
         <input
           id="instance"
+          aria-invalid={badField === 'instance'}
           className="input mono"
           value={form.instance_id}
           onChange={(event) => update('instance_id', event.target.value)}
@@ -219,9 +265,12 @@ export default function ServerDialog({
 
       <div className="grid-2">
         <div className="field">
-          <label htmlFor="quota">总配额（GB）</label>
+          <label htmlFor="quota">
+            总配额（GB）<span className="req" aria-hidden="true">*</span>
+          </label>
           <input
             id="quota"
+            aria-invalid={badField === 'quota'}
             className="input"
             type="number"
             min={1}
@@ -230,21 +279,25 @@ export default function ServerDialog({
           />
         </div>
         <div className="field">
-          <label htmlFor="threshold">限流阈值（GB）</label>
+          <label htmlFor="threshold">
+            限流阈值（GB）<span className="req" aria-hidden="true">*</span>
+          </label>
           <input
             id="threshold"
+            aria-invalid={badField === 'threshold'}
             className="input"
             type="number"
             min={1}
             value={form.threshold_gb}
             onChange={(event) => update('threshold_gb', Number(event.target.value))}
           />
-          <div className="hint">达到该值即触发换班；找不到没超的成员（含状态读不到）则全局熔断停机。</div>
         </div>
       </div>
 
       <div className="field">
-        <label>停机模式</label>
+        <label>
+          停机模式<span className="req" aria-hidden="true">*</span>
+        </label>
         <Segmented value={form.stop_mode} options={STOP_MODE_OPTIONS} onChange={(value) => update('stop_mode', value)} />
         <div className="hint">
           保活、换班休班、超限与手动关机的所有停机动作都按这里执行。普通停机仍按规格收费；

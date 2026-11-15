@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   BellRing,
   Cloud,
@@ -12,7 +12,6 @@ import {
   Send,
   SlidersHorizontal,
   TriangleAlert,
-  Undo2,
   UserRound,
 } from 'lucide-react'
 import { SLOW_TIMEOUT_MS, fetchLatestRelease, post } from '../api'
@@ -22,6 +21,8 @@ import { Segmented, Switch } from './ui'
 type Props = {
   settings: Settings
   onSaved: (message: string) => void
+  /** 有没有未保存的改动：父层据此在切页 / 退出登录前拦一下，别让草稿静默丢掉 */
+  onDirtyChange?: (dirty: boolean) => void
 }
 
 type Tab = 'general' | 'ddns' | 'notify' | 'about'
@@ -56,7 +57,25 @@ function makeDraft(settings: Settings): Settings {
   return draft
 }
 
-export default function SettingsView({ settings, onSaved }: Props) {
+/** 递归按 key 排序：只比内容不比顺序，避免「键序不同」被当成有改动 */
+function sortKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortKeys)
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([key, item]) => [key, sortKeys(item)]),
+    )
+  }
+  return value
+}
+
+/** 表单快照：用来判断「改过没有」，和保存用的 payload 无关 */
+function fingerprint(value: unknown): string {
+  return JSON.stringify(sortKeys(value))
+}
+
+export default function SettingsView({ settings, onSaved, onDirtyChange }: Props) {
   const [tab, setTab] = useState<Tab>('general')
   const [notifyTab, setNotifyTab] = useState<NotifyTab>('channel')
   const [form, setForm] = useState(() => makeDraft(settings))
@@ -67,19 +86,35 @@ export default function SettingsView({ settings, onSaved }: Props) {
   const [newUsername, setNewUsername] = useState(settings.admin_username ?? '')
   const [newPassword, setNewPassword] = useState('')
 
+  // 判断「改过没有」的基线：后端最近一次返回的设置 / 用户名
+  const baseline = useRef<string | null>(null)
+  const baselineUser = useRef(settings.admin_username ?? '')
+  // 回调每轮渲染都是新的内联函数，放进依赖会让 effect 反复触发，用 ref 兜住
+  const dirtyNotify = useRef(onDirtyChange)
+  dirtyNotify.current = onDirtyChange
+
   // 设置被后台刷新（如保存后重新拉取）时，草稿跟着走，避免显示过期值
   useEffect(() => {
-    setForm(makeDraft(settings))
+    const draft = makeDraft(settings)
+    // 基线 = 后端当前的样子；保存成功后会 loadAll，settings 引用一变这里就重设，
+    // 于是 dirty 自动回落到 false
+    baseline.current = fingerprint(draft)
+    baselineUser.current = settings.admin_username ?? ''
+    setForm(draft)
     setNewUsername(settings.admin_username ?? '')
+    dirtyNotify.current?.(false)
   }, [settings])
 
-  function reset() {
-    setForm(makeDraft(settings))
-    setNewUsername(settings.admin_username ?? '')
-    setNewPassword('')
-    setError('')
-    setTestResult('')
-  }
+  // 只依赖草稿本身：settings 变更那一轮 form 还是旧值，把 settings 放进依赖会
+  // 先报一次「有改动」再改回 false，切页拦一下的窗口期里可能误弹
+  useEffect(() => {
+    if (baseline.current === null) return
+    dirtyNotify.current?.(
+      fingerprint(form) !== baseline.current ||
+        newUsername !== baselineUser.current ||
+        newPassword !== '',
+    )
+  }, [form, newUsername, newPassword])
 
   function patch(updater: (draft: Settings) => void) {
     setForm((current) => {
@@ -145,6 +180,9 @@ export default function SettingsView({ settings, onSaved }: Props) {
         new_username: newUsername || undefined,
         new_password: newPassword || undefined,
       })
+      // 密码不回显：保存成功后清空，否则密码框一直是「有输入」状态，
+      // 明明已经保存完了，切页还会被判成有未保存的改动
+      setNewPassword('')
       onSaved('设置已保存')
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存失败')
@@ -863,16 +901,8 @@ export default function SettingsView({ settings, onSaved }: Props) {
 
           {tab !== 'about' && (
             <div className="settings-actions">
-              <span className="foot-note">
-                {newUsername !== (settings.admin_username ?? '') || newPassword
-                  ? '账号有改动，保存后生效'
-                  : '修改会即时生效'}
-              </span>
+              <span className="foot-note">所有改动都在点「保存」后生效</span>
               <span className="spacer" />
-              <button className="btn" onClick={reset} disabled={busy}>
-                <Undo2 size={14} />
-                撤销修改
-              </button>
               <button className="btn primary" onClick={save} disabled={busy}>
                 {busy ? <LoaderCircle size={14} className="spin" /> : <Save size={14} />}
                 保存

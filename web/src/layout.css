@@ -566,3 +566,24 @@ button.nav-parent:hover svg,
     flex-wrap: wrap;
   }
 }
+
+/* 手机：区块标题别和说明文字抢同一行 ——
+   「实例状态」被挤成两行、后面的说明也跟着断成三行，看着很碎。
+   标题 + 右侧计数钉在第一行，说明整行落到第二行。 */
+@media (max-width: 700px) {
+  .section-head {
+    flex-wrap: wrap;
+    align-items: center;
+    row-gap: 3px;
+  }
+
+  .section-head h2 {
+    white-space: nowrap;
+  }
+
+  .section-head > span {
+    order: 3;
+    flex: 1 0 100%;
+    font-size: 12.5px;
+  }
+}

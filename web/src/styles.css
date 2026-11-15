@@ -585,9 +585,11 @@ label {
 }
 
 .dns-list {
-  display: flex;
-  flex-direction: column;
+  /* 一行两卡：记录少时并排；窄屏（≤700px，见下方媒体查询）回落成一列 */
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
   gap: 10px;
+  align-items: start;
 }
 
 .dns-row {
@@ -795,6 +797,19 @@ label {
     inset 0 1px 2px var(--panel-inset);
 }
 
+/* 必填校验没过的那一格：描红 + 红环。聚焦态一并写进来，
+   否则光标落进去以后 .input:focus 的强调色会把红框盖掉，
+   就看不出到底哪一格还欠着东西 */
+.field .input[aria-invalid='true'],
+.field .select[aria-invalid='true'],
+.field .input[aria-invalid='true']:focus,
+.field .select[aria-invalid='true']:focus {
+  border-color: var(--red);
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--red) 14%, transparent),
+    inset 0 1px 2px var(--panel-inset);
+}
+
 .input:disabled,
 .select:disabled,
 .textarea:disabled {
@@ -997,6 +1012,19 @@ input[type='number']::-webkit-inner-spin-button {
   display: flex;
   flex-direction: column;
   gap: 7px;
+}
+
+/* 紧凑流量条（列表那种窄列用）：标签只报「已用 + 百分比」，字号和轨道都收一档 */
+.meter.is-compact {
+  gap: 5px;
+}
+
+.meter.is-compact .meter-track {
+  height: 6px;
+}
+
+.meter.is-compact .meter-labels {
+  font-size: 11px;
 }
 
 .meter-track {
@@ -1670,16 +1698,18 @@ input[type='number']::-webkit-inner-spin-button {
 
 .server-table {
   width: 100%;
-  /* 定宽布局：列宽由 colgroup 的百分比决定，内容再长也只会换行/省略，
-     不会把表格撑出容器 —— 之前 min-width:880px + 不换行，宽屏下也会被拉出横向滚动条 */
-  table-layout: fixed;
+  /* 按内容自然分配列宽：定宽布局（table-layout: fixed）配合百分比时，
+     只要容器比内容窄一点，每列都会被削一刀 —— 实例名、实例 ID 首当其冲。
+     自动布局下 nowrap 的单元格最小宽度就是它自己的宽度，
+     容器装不下时整表在卡片里横向滚动，而不是把某一列切成省略号 */
+  table-layout: auto;
   border-collapse: collapse;
   font-size: 13px;
 }
 
 .server-table th {
   text-align: left;
-  padding: 10px 12px;
+  padding: 10px;
   font-size: 12px;
   font-weight: 650;
   color: var(--muted);
@@ -1690,7 +1720,9 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 .server-table td {
-  padding: 10px 12px;
+  /* 8 列挤在一行，横向内边距从 12 收到 10：8 列共省 32px，
+     正好够 1366 这类常见笔记本宽度不用横向滚动 */
+  padding: 10px;
   border-bottom: 1px solid var(--line);
   vertical-align: middle;
 }
@@ -1728,7 +1760,26 @@ input[type='number']::-webkit-inner-spin-button {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
+  gap: 4px;
+  /* 站点在上、地域在下后整体右移一点点，别与左列/表头贴边看着像重叠 */
+  padding-left: 6px;
+}
+
+/* 状态两行：徽章（运行中/已停机）+ 停机模式小字。
+   并排写成「已停机 · 节省停机」时宽度比整列还大，会压到右边的站点/地域列 */
+.server-table-status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
   gap: 3px;
+  min-width: 0;
+}
+
+.server-table-status-sub {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted-soft);
+  white-space: nowrap;
 }
 
 .server-table-cell {
@@ -1736,6 +1787,20 @@ input[type='number']::-webkit-inner-spin-button {
   align-items: center;
   gap: 4px;
   color: var(--ink-soft);
+  white-space: nowrap;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.server-table-cell svg {
+  flex: none;
+}
+
+/* 地域名比列宽时收成省略号，绝不压到下一列（padding-left 已经把内容推开一点） */
+.server-table-cell-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -1771,6 +1836,10 @@ input[type='number']::-webkit-inner-spin-button {
   background: none;
   border: none;
   padding: 0;
+  /* 自动布局给这一列算宽度时，如果让 flex 容器自己算收缩宽度，会漏掉 item 之间的 gap
+     （「本月」+「¥1.42」中间那 5px），表头列宽就永远差一点点，金额末尾被吃掉。
+     显式声明 max-content，列宽按真实内容算，一分不差 */
+  width: max-content;
 }
 
 .server-table-cost .cost-refresh {
@@ -1781,12 +1850,24 @@ input[type='number']::-webkit-inner-spin-button {
   margin-left: 0;
 }
 
+/* 公网 IP / 域名合成一列：上行 IP（重点），下行域名（没绑显示「—」）。
+   竖向堆叠的宽度只取两行里较宽的那一个，并排则要两段相加 */
+.server-table-net {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  min-width: 0;
+  max-width: 100%;
+}
+
 /* 域名框：一行放得下就并排，放不下换行，绝不撑宽表格 */
 .server-table-dns {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
   min-width: 0;
+  max-width: 100%;
 }
 
 /* 表格里省一点内边距，20 字符的域名才装得进这一列 */
@@ -1794,6 +1875,10 @@ input[type='number']::-webkit-inner-spin-button {
   gap: 3px;
   padding: 1px 5px;
   font-size: 11px;
+  /* 自动布局下列宽跟着内容走：一个超长域名（CDN 那种三四十个字符）会把整张表顶宽，
+     逼得旁边所有列让位。这里封顶 168px（约 26 个字符），再长收成省略号、
+     完整值在 title 里，列宽就不会被单个域名绑架 */
+  max-width: 168px;
 }
 
 /* 公网 IP 列更窄，胶囊再收一号，完整 IP 才放得下 */
@@ -1839,19 +1924,8 @@ input[type='number']::-webkit-inner-spin-button {
   gap: 8px;
 }
 
-/* 半屏 / 平板：定宽布局会把 9 列压得没法看，退回自动列宽并允许横滑 */
-@media (max-width: 900px) {
-  .server-table {
-    table-layout: auto;
-    min-width: 820px;
-  }
-
-  .server-table-cost .cost-row.compact {
-    flex-direction: row;
-    align-items: center;
-    gap: 8px;
-  }
-}
+/* 半屏 / 平板：列宽交给内容自己算，装不下就在卡片里横滑，绝不切文本。
+   （这段以前是「1100 以下退回 auto」，现在全宽度都是 auto，只剩费用格需要保持两行） */
 
 /* 手机：表格整体改成「一行一张卡」，每格前面带字段名，彻底不用左右拖 */
 @media (max-width: 700px) {
@@ -2026,7 +2100,8 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 .slot-top .duty-tag,
-.slot-side .duty-tag {
+.slot-side .duty-tag,
+.inst-main .duty-tag {
   display: inline-flex;
   align-items: center;
   padding: 1px 8px;
@@ -2118,22 +2193,6 @@ input[type='number']::-webkit-inner-spin-button {
   white-space: nowrap;
 }
 
-/* -------------------------------------------------------------- 换班卡片 */
-
-.group-grid {
-  display: grid;
-  gap: 13px;
-  /* auto-fit：只有一两个换班组时自动撑满整行，不会右侧空一大片 */
-  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
-}
-
-.group-card {
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 11px;
-}
-
 .group-head {
   display: flex;
   align-items: center;
@@ -2174,23 +2233,384 @@ input[type='number']::-webkit-inner-spin-button {
   background: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
-.group-foot {
-  display: flex;
+/* 距下次切换：挂在状态胶囊后面。秒数每秒跳一次，数字走等宽 + 表格数字，
+   否则整行会跟着字宽来回抖 */
+.group-countdown {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 2px;
-  padding-top: 10px;
-  border-top: 1px solid var(--line);
-  font-size: 13px;
+  gap: 4px;
+  flex: none;
+  font-size: 12px;
   color: var(--muted);
+  white-space: nowrap;
+}
+
+.group-countdown b {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 620;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-soft);
+}
+
+/* 桌面只看标题行那份，元信息行那份是给手机准备的（≤700 反过来） */
+.group-countdown.in-meta {
+  display: none;
+}
+
+/* ------------------------------------------- 概览：实例状态（替换原换班卡片） */
+
+/* 列表形态：一台实例一行。整张卡片仍是概览的圆角玻璃面板，
+   表格只借用「列对齐」这件事——去掉表头底色和粗边框，只留细线和行悬停，
+   免得在概览里突然出现一块「后台表格」的硬边 */
+.inst-list {
+  padding: 0;
+  /* 运行中行的底色 / 左缘强调条要贴着圆角裁掉，否则会在边角露直角 */
+  overflow: hidden;
+}
+
+/* 窄屏（≤1100）列宽装不下时让表格在卡片内横滑，不把整页撑宽 */
+@media (max-width: 1100px) {
+  .inst-list {
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+}
+
+.inst-table {
+  width: 100%;
+  /* 定宽：列宽由 colgroup 定，长实例名只会省略，不会把别的列挤歪 */
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.inst-table th {
+  padding: 9px 12px;
+  text-align: left;
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  white-space: nowrap;
+  border-bottom: 1px solid var(--line);
+}
+
+.inst-table td {
+  padding: 9px 12px;
+  vertical-align: middle;
+  border-top: 1px solid var(--line);
+}
+
+/* 首尾列多留 4px，和卡片的内边距对齐，别让徽章/流量条贴着圆角 */
+.inst-table th:first-child,
+.inst-table td:first-child {
+  padding-left: 16px;
+}
+
+.inst-table th:last-child,
+.inst-table td:last-child {
+  padding-right: 16px;
+}
+
+/* 第一行紧贴表头，不再重复一条线 */
+.inst-table tbody tr:first-child td {
+  border-top: 0;
+}
+
+/* 运行中的行：整行铺一层极淡的同色底 + 左缘 2px 强调条。
+   原来是「左边一片浅绿渐层往右消失」，右半边又白得发空，
+   一眼看过去左边压着一块绿、右边散着，头重脚轻 */
+.inst-table tbody tr.is-running {
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+
+/* 左缘强调条落不了在 <tr> 上（border-collapse 的表格里 tr 不吃盒子阴影），
+   只能画在首格里，2px 刚好压在卡片圆角内侧 */
+.inst-table tbody tr.is-running > td:first-child {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.inst-table tbody tr:hover {
+  background: color-mix(in srgb, var(--ink) 3.5%, transparent);
+}
+
+/* 悬停不能把运行中的底色盖掉：两条规则都写 background，
+   用更高的选择器把强调色加深一点，而不是退回中性灰 */
+.inst-table tbody tr.is-running:hover {
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+
+/* 实例格两行：第一行别名 +「当班」，第二行实例 ID 胶囊 */
+.inst-main {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
   min-width: 0;
 }
 
-.group-foot span {
+.inst-name-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.inst-name {
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 620;
+  letter-spacing: -0.012em;
+  color: var(--ink);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.inst-main .duty-tag {
+  flex: none;
+}
+
+/* 实例 ID：等宽、灰色胶囊。ID 很长（i-j6c… / 23 位），窄列交给省略号，完整值在 title */
+.inst-id {
+  max-width: 100%;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel-inset);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.7;
+  letter-spacing: -0.01em;
+  /* 用 --muted 而不是 --muted-soft：11px 小字落在运行中行的浅绿渐层上，
+     muted-soft 只有 4.42，刚好差一点点过不了 4.5 */
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 表格里的 IP 胶囊收一档：15% 列宽在 1200 档只剩 104px 内容宽度，
+   标准胶囊（12px 字号 + 14px 内边距）量出来要 110px，差这一点就切掉尾号 */
+.inst-table .addr-chip {
+  padding: 1px 6px;
+  font-size: 11.5px;
+}
+
+.inst-region {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.inst-region svg {
+  flex: none;
+}
+
+.inst-region-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inst-owner {
+  display: block;
+  font-size: 12px;
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inst-owner.is-idle {
+  color: var(--muted);
+}
+
+/* 「· 已暂停」：托管暂停是异常状态，别和正常归属混成一个颜色 */
+.inst-owner i {
+  font-style: normal;
+  color: var(--amber);
+}
+
+/* 费用拆成上下两行（本月 / 余额）：并排写成一句时最窄要 128px，
+   1200 上下那一档的列宽根本给不起，拆开后每行只要 75px，
+   顺便自带字段名，手机上不用靠表头也能读懂 */
+.inst-cost {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.inst-cost em {
+  margin-right: 4px;
+  font-style: normal;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+/* 平板（≤1100）：定宽 7 列在这个宽度会把实例名压成省略号，
+   退回自动列宽 + 卡片内横滑，和「实例管理 · 列表模式」同一套行为 */
+@media (max-width: 1100px) {
+  .inst-table {
+    table-layout: auto;
+    min-width: 780px;
+  }
+}
+
+/* 手机 / 竖屏平板（≤820）：表格拆成「一台实例一张小卡」。
+   820 这条线是量出来的：7 列内容在 auto 布局下最小要 858px，
+   iPad 竖屏 768 也放不下（卡片内横滑 135px），干脆一起走小卡。
+
+   卡里是两列网格，左列贴左、右列贴右，固定五行：
+     状态徽章 ⋯⋯⋯⋯⋯⋯ 地域
+     实例名（太长就省略）
+     实例 ID ⋯⋯⋯⋯⋯ IP
+     归属 ⋯⋯⋯⋯⋯⋯⋯ 费用
+     流量条（整行）
+   每一行左右两端都咬住同一条边界，8 张卡叠起来是齐的；
+   多占一点高度没关系，整齐比省地方重要。 */
+@media (max-width: 820px) {
+  .inst-list {
+    overflow: visible;
+    padding: 6px;
+  }
+
+  /* ≤1100 那条 min-width:780px 是给横滑用的，手机上必须清掉，
+     否则整张「卡」会被撑到 780 宽、字段全部挤在一行 */
+  .inst-table,
+  .inst-table tbody {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .inst-table colgroup,
+  .inst-table thead {
+    display: none;
+  }
+
+  .inst-table tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'status region'
+      'name   name'
+      'ident  ip'
+      'owner  cost'
+      'meter  meter';
+    align-items: center;
+    column-gap: 12px;
+    row-gap: 6px;
+    margin-bottom: 6px;
+    padding: 11px 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+    background: var(--panel-solid);
+  }
+
+  .inst-table tbody tr:last-child {
+    margin-bottom: 0;
+  }
+
+  .inst-table tbody tr.is-running {
+    border-color: color-mix(in srgb, var(--accent) 42%, transparent);
+    background-image: linear-gradient(180deg, var(--accent-soft), transparent 72%);
+    /* 小卡里没有「表格首格」了，运行中的左缘强调条直接落在 tr 上 */
+    box-shadow: inset 2px 0 0 var(--accent);
+  }
+
+  /* 拆掉单元格盒子：里面的元素直接落进上面那五个格位。
+     表格在手机上已经是列表，td 的 padding / 分隔线在这里全是噪音 */
+  .inst-table td {
+    display: contents;
+  }
+
+  .inst-table td[data-label='状态'] > .badge {
+    grid-area: status;
+    justify-self: start;
+  }
+
+  .inst-table .inst-main {
+    display: contents;
+  }
+
+  .inst-table .inst-name-line {
+    grid-area: name;
+    min-width: 0;
+  }
+
+  .inst-table .inst-region {
+    grid-area: region;
+    justify-self: end;
+    min-width: 0;
+  }
+
+  .inst-table .inst-id {
+    grid-area: ident;
+    justify-self: start;
+    max-width: 100%;
+    font-size: 10.5px;
+  }
+
+  .inst-table td[data-label='IP'] .addr-chip {
+    grid-area: ip;
+    justify-self: end;
+  }
+
+  .inst-table .inst-owner {
+    grid-area: owner;
+    min-width: 0;
+    font-size: 11.5px;
+  }
+
+  /* 「本月 ¥1.42  余额 ¥97.48」排一行，右边对齐 */
+  .inst-table .inst-cost {
+    grid-area: cost;
+    flex-direction: row;
+    gap: 10px;
+    justify-self: end;
+  }
+
+  .inst-table .inst-flow {
+    grid-area: meter;
+  }
+}
+
+/* 换班卡片内的组员块：一行两个并排；卡片太窄（≤1120px）时回落一列，
+   免得右列 190px 的 IP/流量把左边的实例名挤没 */
+.slot-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+/* 成员数是奇数（3 台、5 台）时，最后一个独占整行：
+   否则右下会空出半个格子，看着像卡片没排满。
+   ≤1120px 只有一列，这条规则不产生任何影响 */
+.slot-grid > .slot:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 1120px) {
+  .slot-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+
 
 /* 排班比列条 */
 .timeline {
@@ -2963,6 +3383,17 @@ input[type='number']::-webkit-inner-spin-button {
   font-weight: 500;
 }
 
+/* 弹窗里的校验提示条贴在正文底部：保存按钮在 footer，正文往下滚的时候
+   提示条要是跟着滚走，点了保存看起来就像没反应。
+   --red-soft 是半透明的，得垫一层实底，否则下面的表单会透出来 */
+.modal-body > .auth-error {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  margin-top: 14px;
+  background: linear-gradient(var(--red-soft), var(--red-soft)), var(--panel-solid);
+}
+
 .auth-foot {
   font-size: 13px;
   color: var(--muted-soft);
@@ -3244,6 +3675,16 @@ input[type='number']::-webkit-inner-spin-button {
     gap: 4px;
   }
 
+  /* 一行里要同时装下组名 + 状态 + 倒计时 + 三个操作时组名会被挤成 1px，
+     所以手机上把倒计时挪回下面的元信息行（那边本来就换行堆叠） */
+  .group-countdown.in-head {
+    display: none;
+  }
+
+  .group-countdown.in-meta {
+    display: inline-flex;
+  }
+
   .group-head .group-actions .btn.icon.sm {
     width: 24px;
     height: 24px;
@@ -3334,7 +3775,6 @@ input[type='number']::-webkit-inner-spin-button {
    不改成 minmax(0,1fr) 的话一张卡内部挤一点就能把整页顶宽） */
 @media (max-width: 700px) {
   .server-grid,
-  .group-grid,
   .dns-list {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -3345,8 +3785,7 @@ input[type='number']::-webkit-inner-spin-button {
     grid-auto-rows: auto;
   }
 
-  .server-card,
-  .group-card {
+  .server-card {
     min-width: 0;
   }
 
@@ -3482,8 +3921,7 @@ input[type='number']::-webkit-inner-spin-button {
   .stat .ring {
     display: none;
   }
-  .server-grid,
-  .group-grid {
+  .server-grid {
     grid-template-columns: 1fr;
   }
   .modal-foot {

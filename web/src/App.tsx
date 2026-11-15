@@ -99,6 +99,8 @@ function sectionCount(section: NavSection, overview: Overview): number {
 export default function App() {
   const [phase, setPhase] = useState<Phase>('loading')
   const [view, setView] = useState<View>('dashboard')
+  // 设置页有没有未保存的草稿：切页 / 退出登录前先问一句，别让改动静默丢失
+  const [settingsDirty, setSettingsDirty] = useState(false)
   const [meta, setMeta] = useState<InitStatus>({
     initialized: false,
     brand: 'CDT-Management',
@@ -190,6 +192,11 @@ export default function App() {
   useEffect(() => {
     if (overview) syncClock(overview)
   }, [overview])
+
+  // 离开设置页就清掉草稿标记：拦截只管「离开时」，出去之后不该残留到下次进来
+  useEffect(() => {
+    if (view !== 'settings') setSettingsDirty(false)
+  }, [view])
 
   useEffect(() => {
     void (async () => {
@@ -544,7 +551,35 @@ export default function App() {
     }
   }
 
-  async function logout() {
+  /** 设置页有没保存的改动时先拦一下；真正要做的动作放在 run 里 */
+  function guardSettingsDirty(actionLabel: string, run: () => void) {
+    if (view !== 'settings' || !settingsDirty) {
+      run()
+      return
+    }
+    setConfirmBox({
+      title: '有未保存的修改',
+      message: `${actionLabel}会丢掉还没保存的改动。`,
+      hint: '想保留的话，先点「保存」再离开。',
+      confirmText: '放弃修改并离开',
+      run: async () => {
+        setSettingsDirty(false)
+        run()
+      },
+    })
+  }
+
+  /** 站内跳转统一入口：离开设置页时才有拦截，进设置页不拦 */
+  function goTo(next: View) {
+    if (next === view) return
+    if (next === 'settings') {
+      setView(next)
+      return
+    }
+    guardSettingsDirty('离开设置页', () => setView(next))
+  }
+
+  async function doLogout() {
     try {
       await post('/api/v1/auth/logout')
     } catch {
@@ -553,6 +588,10 @@ export default function App() {
       setPhase('login')
       setOverview(null)
     }
+  }
+
+  function logout() {
+    guardSettingsDirty('退出登录', () => void doLogout())
   }
 
   if (phase === 'loading') {
@@ -623,7 +662,7 @@ export default function App() {
           className="brand"
           title="回到概览"
           aria-label="回到概览"
-          onClick={() => setView('dashboard')}
+          onClick={() => goTo('dashboard')}
         >
           <div className="brand-mark">
             <Repeat size={18} />
@@ -648,7 +687,7 @@ export default function App() {
                   <button
                     className={`nav-parent${view === parentKey ? ' on' : ''}`}
                     aria-current={view === parentKey ? 'page' : undefined}
-                    onClick={() => setView(parentKey)}
+                    onClick={() => goTo(parentKey)}
                   >
                     <ParentIcon size={15} />
                     <span className="nav-text">{section.title}</span>
@@ -675,7 +714,7 @@ export default function App() {
                           key={item.key}
                           className={`nav-item${view === item.key ? ' on' : ''}`}
                           aria-current={view === item.key ? 'page' : undefined}
-                          onClick={() => setView(item.key)}
+                          onClick={() => goTo(item.key)}
                         >
                           <Icon size={14} />
                           <span className="nav-text">{item.label}</span>
@@ -693,7 +732,7 @@ export default function App() {
         <div className="sidebar-foot">
           <button
             className={`nav-item${view === 'settings' ? ' on' : ''}`}
-            onClick={() => setView('settings')}
+            onClick={() => goTo('settings')}
           >
             <SettingsIcon size={15} />
             <span className="nav-text">设置</span>
@@ -712,7 +751,7 @@ export default function App() {
         {view === 'dashboard' && (
           <DashboardView
             overview={overview}
-            onNavigate={(target) => setView(target)}
+            onNavigate={goTo}
           />
         )}
 
@@ -786,7 +825,11 @@ export default function App() {
         )}
 
         {view === 'settings' && settings && (
-          <SettingsView settings={settings} onSaved={refreshAfterSave} />
+          <SettingsView
+            settings={settings}
+            onSaved={refreshAfterSave}
+            onDirtyChange={setSettingsDirty}
+          />
         )}
 
         <div

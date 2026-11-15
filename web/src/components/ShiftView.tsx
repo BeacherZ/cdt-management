@@ -87,6 +87,19 @@ export default function ShiftView({
           {groups.map((group) => {
             const duty = group.members.find((member) => member.is_duty)
             const monthCycle = group.cycle === 'month'
+            // 倒计时渲染两份（标题行 / 元信息行），由 CSS 按宽度二选一：
+            // 手机标题行要同时装下组名 + 状态 + 三个操作，再塞 134px 进去组名就没了
+            const countdownOf = (place: 'head' | 'meta') =>
+              group.next_switch_at > 0 ? (
+                <span
+                  className={`group-countdown in-${place}`}
+                  title={`距下次自动换班还有 ${countdown(group.next_switch_at, nowTs)}`}
+                >
+                  <Clock3 size={11} />
+                  <span className="group-countdown-label">距下次切换</span>
+                  <b>{countdown(group.next_switch_at, nowTs)}</b>
+                </span>
+              ) : null
             return (
               <div className="card card-pad" key={group.id}>
                 <div className="group-head">
@@ -95,6 +108,11 @@ export default function ShiftView({
                   <Badge tone={groupStateTone(group.state)} pulse={groupStatePulse(group.state)}>
                     {group.state_label}
                   </Badge>
+                  {/* 倒计时跟在状态胶囊后面：它和「正常排班中」是同一件事的两面，
+                      放在下面那行元信息末尾离得太远，扫一眼看不到还剩多久。
+                      手机上标题行塞不下（组名会被挤没），同一个组件在元信息行再放一份，
+                      由 CSS 二选一显示 */}
+                  {countdownOf('head')}
                   {!group.failover_enabled && <Badge tone="gray">故障转移关闭</Badge>}
                   <div className="group-actions">
                     <button
@@ -168,11 +186,7 @@ export default function ShiftView({
                       </span>
                     </span>
                   )}
-                  {group.next_switch_at > 0 && (
-                    <span style={{ color: 'var(--ink-soft)' }}>
-                      距下次切换 <b>{countdown(group.next_switch_at, nowTs)}</b>
-                    </span>
-                  )}
+                  {countdownOf('meta')}
                   <span style={{ marginLeft: 'auto' }}>
                     当班 <b style={{ color: 'var(--green)' }}>{duty?.server?.label ?? '—'}</b>
                   </span>
@@ -184,8 +198,8 @@ export default function ShiftView({
                   </div>
                 )}
 
-                {/* 成员列表 */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 14 }}>
+                {/* 成员列表：两两并排（窄屏回落一列） */}
+                <div className="slot-grid">
                   {group.members.map((member) => {
                     const server = member.server
                     if (!server) {
