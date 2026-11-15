@@ -223,11 +223,14 @@ export default function DashboardView({
           <div className="card inst-list">
             <table className="inst-table">
               <colgroup>
+                {/* 归属列要同时放「换班组「HK」」和「当班」胶囊（内容最宽约 121px），
+                    13% 会把文字压成省略号；实例列实际只用 103px、留了 50px 空档，
+                    从这里借 2% 给归属、1% 给地域 */}
                 <col style={{ width: '12%' }} />
-                <col style={{ width: '21%' }} />
+                <col style={{ width: '18%' }} />
                 <col style={{ width: '13%' }} />
                 <col style={{ width: '15%' }} />
-                <col style={{ width: '13%' }} />
+                <col style={{ width: '16%' }} />
                 <col style={{ width: '12%' }} />
                 <col style={{ width: '14%' }} />
               </colgroup>
@@ -265,7 +268,6 @@ export default function DashboardView({
                             <span className="inst-name" title={server.label}>
                               {server.label}
                             </span>
-                            {dutyOf && <span className="duty-tag">当班</span>}
                           </div>
                           <span className="inst-id" title={`实例 ID：${server.instance_id}`}>
                             {server.instance_id}
@@ -283,14 +285,19 @@ export default function DashboardView({
                       <td data-label="IP">
                         <span className="addr-chip">{server.public_ip || '无公网 IP'}</span>
                       </td>
+                      {/* 「当班」跟在归属后面：它描述的是这台机器在换班组里的角色，
+                          挂在别名后面反而像实例名的一部分 */}
                       <td data-label="归属">
-                        <span
-                          className={`inst-owner${owner ? '' : ' is-idle'}`}
-                          title={ownerLabel(owner)}
-                        >
-                          {owner ? ownerBase(owner) : ownerLabel(null)}
-                          {owner && !owner.active && <i> · 已暂停</i>}
-                        </span>
+                        <div className="inst-owner-line">
+                          <span
+                            className={`inst-owner${owner ? '' : ' is-idle'}`}
+                            title={ownerLabel(owner)}
+                          >
+                            {owner ? ownerBase(owner) : ownerLabel(null)}
+                            {owner && !owner.active && <i> · 已暂停</i>}
+                          </span>
+                          {dutyOf && <span className="duty-tag">当班</span>}
+                        </div>
                       </td>
                       <td data-label="费用">
                         <div className="inst-cost">

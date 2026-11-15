@@ -2101,7 +2101,7 @@ input[type='number']::-webkit-inner-spin-button {
 
 .slot-top .duty-tag,
 .slot-side .duty-tag,
-.inst-main .duty-tag {
+.inst-owner-line .duty-tag {
   display: inline-flex;
   align-items: center;
   padding: 1px 8px;
@@ -2265,10 +2265,11 @@ input[type='number']::-webkit-inner-spin-button {
    表格只借用「列对齐」这件事——去掉表头底色和粗边框，只留细线和行悬停，
    免得在概览里突然出现一块「后台表格」的硬边 */
 .inst-list {
-  /* 底部留 8px：表格最后一行常是运行中的浅绿行，直接顶到卡片圆角上
-     看着像被切了一刀，这点留白把色块和圆角分开 */
-  padding: 0 0 8px;
-  /* 运行中行的底色 / 左缘强调条要贴着圆角裁掉，否则会在边角露直角 */
+  /* 左右不缩进：浅绿行整行铺到边框，状态靠底色就能看出来。
+     底部留 16px（正好等于圆角半径）—— 最后一行常是运行中的浅绿行，
+     贴到圆角上会被切一刀，留白给足，别让它挤着卡片下沿。 */
+  padding: 0 0 16px;
+  /* 运行中行的底色要贴着圆角裁掉，否则会在边角露直角 */
   overflow: hidden;
 }
 
@@ -2328,12 +2329,6 @@ input[type='number']::-webkit-inner-spin-button {
   background: color-mix(in srgb, var(--accent) 5%, transparent);
 }
 
-/* 左缘强调条落不了在 <tr> 上（border-collapse 的表格里 tr 不吃盒子阴影），
-   只能画在首格里，2px 刚好压在卡片圆角内侧 */
-.inst-table tbody tr.is-running > td:first-child {
-  box-shadow: inset 2px 0 0 var(--accent);
-}
-
 .inst-table tbody tr:hover {
   background: color-mix(in srgb, var(--ink) 3.5%, transparent);
 }
@@ -2370,10 +2365,6 @@ input[type='number']::-webkit-inner-spin-button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.inst-main .duty-tag {
-  flex: none;
 }
 
 /* 实例 ID：等宽、灰色胶囊。ID 很长（i-j6c… / 23 位），窄列交给省略号，完整值在 title */
@@ -2422,8 +2413,22 @@ input[type='number']::-webkit-inner-spin-button {
   white-space: nowrap;
 }
 
+/* 归属 + 「当班」排一行：文字过长只省略文字，胶囊永远完整 */
+.inst-owner-line {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.inst-owner-line .duty-tag {
+  flex: none;
+  padding: 1px 7px;
+}
+
 .inst-owner {
   display: block;
+  min-width: 0;
   font-size: 12px;
   color: var(--ink-soft);
   overflow: hidden;
@@ -2462,12 +2467,20 @@ input[type='number']::-webkit-inner-spin-button {
   color: var(--muted);
 }
 
-/* 平板（≤1100）：定宽 7 列在这个宽度会把实例名压成省略号，
-   退回自动列宽 + 卡片内横滑，和「实例管理 · 列表模式」同一套行为 */
-@media (max-width: 1100px) {
+/* 平板（≤1199）：定宽百分比在这段会把「归属」和「地域」压成省略号
+   （16% 的归属列要 118px 内容，1200 以下给不到），
+   退回自动列宽 + 卡片内横滑，和「实例管理 · 列表模式」同一套行为。
+   1200 是实测出来的：再窄 20px 就开始截「换班组「HK」」。 */
+@media (max-width: 1199px) {
   .inst-table {
     table-layout: auto;
     min-width: 780px;
+  }
+
+  /* 自动列宽会把归属格压到 63px 把「换班组「HK」」截成省略号（flex 默认 min-width:0），
+     这里让它的最小宽度等于内容宽度，宁可多滚一点也别截字 */
+  .inst-table .inst-owner-line {
+    min-width: max-content;
   }
 }
 
@@ -2489,7 +2502,7 @@ input[type='number']::-webkit-inner-spin-button {
     padding: 6px;
   }
 
-  /* ≤1100 那条 min-width:780px 是给横滑用的，手机上必须清掉，
+  /* ≤1199 那条 min-width:780px 是给横滑用的，手机上必须清掉，
      否则整张「卡」会被撑到 780 宽、字段全部挤在一行 */
   .inst-table,
   .inst-table tbody {
@@ -2526,11 +2539,10 @@ input[type='number']::-webkit-inner-spin-button {
     margin-bottom: 0;
   }
 
+  /* 运行中：浅绿底 + 淡绿描边就够，不再画左缘强调条（和桌面端一致） */
   .inst-table tbody tr.is-running {
     border-color: color-mix(in srgb, var(--accent) 42%, transparent);
     background-image: linear-gradient(180deg, var(--accent-soft), transparent 72%);
-    /* 小卡里没有「表格首格」了，运行中的左缘强调条直接落在 tr 上 */
-    box-shadow: inset 2px 0 0 var(--accent);
   }
 
   /* 拆掉单元格盒子：里面的元素直接落进上面那五个格位。
@@ -2571,10 +2583,33 @@ input[type='number']::-webkit-inner-spin-button {
     justify-self: end;
   }
 
-  .inst-table .inst-owner {
+  /* 手机小卡上「当班」不跟归属挤一行 —— 归属这行本来就只剩半行宽。
+     把 flex 壳拆成 contents，胶囊就成了格子里的独立项，直接落回
+     别名那行、贴着卡片右边；归属文字独占 owner 行 */
+  .inst-table .inst-owner-line {
+    display: contents;
+  }
+
+  .inst-table .inst-owner-line .inst-owner {
     grid-area: owner;
-    min-width: 0;
+  }
+
+  .inst-table .inst-owner {
     font-size: 11.5px;
+  }
+
+  /* 小卡里纵向紧张，胶囊缩一点 */
+  .inst-table .inst-owner-line .duty-tag {
+    grid-area: name;
+    align-self: center;
+    justify-self: end;
+    padding: 0 6px;
+    font-size: 10.5px;
+  }
+
+  /* 有「当班」的行才给别名右侧让位；没有的行别名照旧顶到卡片右边 */
+  .inst-table tbody tr:has(.duty-tag) .inst-name-line {
+    padding-right: 44px;
   }
 
   /* 「本月 ¥1.42  余额 ¥97.48」排一行，右边对齐 */
