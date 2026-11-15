@@ -8,6 +8,7 @@ import {
   Info,
   KeyRound,
   LoaderCircle,
+  Palette,
   Save,
   Send,
   SlidersHorizontal,
@@ -54,6 +55,8 @@ function makeDraft(settings: Settings): Settings {
   }
   // 1.2.6 及以前没有这个字段，补 0 让输入框保持受控
   if (!draft.reconcile_offset) draft.reconcile_offset = '0'
+  // 老后端 / 老配置没有 theme：默认浅色，别让分段控件空着
+  if (draft.theme !== 'dark' && draft.theme !== 'system') draft.theme = 'light'
   return draft
 }
 
@@ -129,6 +132,7 @@ export default function SettingsView({ settings, onSaved, onDirtyChange }: Props
     setBusy(true)
     try {
       await post('/api/v1/settings', {
+        theme: form.theme,
         timezone: form.timezone,
         traffic_threshold_pct: Number(form.traffic_threshold_pct),
         reconcile_interval: Number(form.reconcile_interval),
@@ -418,6 +422,28 @@ export default function SettingsView({ settings, onSaved, onDirtyChange }: Props
                       />
                     </div>
                   )}
+                </div>
+
+                <div className="section-head">
+                  <h2>
+                    <Palette size={14} /> 外观
+                  </h2>
+                  <span className="section-sub">存在后端，与浏览器 / 系统设置无关</span>
+                </div>
+                <div className="field">
+                  <Segmented
+                    value={form.theme}
+                    options={[
+                      { value: 'light', label: '浅色' },
+                      { value: 'dark', label: '深色' },
+                      { value: 'system', label: '跟随系统' },
+                    ]}
+                    onChange={(value) => patch((draft) => (draft.theme = value))}
+                  />
+                  <div className="hint">
+                    默认浅色。选「浅色 / 深色」就固定下来，换浏览器、换电脑都不变；只有
+                    「跟随系统」才会随客户端系统的深浅色切换。改完点保存生效。
+                  </div>
                 </div>
               </>
             )}

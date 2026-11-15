@@ -29,6 +29,7 @@ import DNSView from './components/DNSView'
 import { Badge, Modal } from './components/ui'
 import { ownerLabel } from './owners'
 import { syncClock } from './time'
+import { applyTheme, watchSystemTheme } from './theme'
 
 type Phase = 'loading' | 'setup' | 'login' | 'ready' | 'fatal'
 type View = 'dashboard' | 'keepalive' | 'shift' | 'servers' | 'dns' | 'settings'
@@ -192,6 +193,16 @@ export default function App() {
   useEffect(() => {
     if (overview) syncClock(overview)
   }, [overview])
+
+  // 外观：主题是后端存的设置，不是浏览器偏好。登录页 / 引导页固定浅色，
+  // 登录进来拿到 settings 之后才切到用户选的那一档。
+  useEffect(() => {
+    const mode = phase === 'ready' ? settings?.theme : 'light'
+    applyTheme(mode)
+    // 只有「跟随系统」才订阅系统深浅变化；选死浅色 / 深色时系统怎么变都不动
+    if (mode !== 'system') return
+    return watchSystemTheme((resolved) => applyTheme(resolved))
+  }, [phase, settings?.theme])
 
   // 离开设置页就清掉草稿标记：拦截只管「离开时」，出去之后不该残留到下次进来
   useEffect(() => {

@@ -201,8 +201,12 @@ export type Overview = {
   events: EventItem[]
 }
 
+/** 外观：存在后端，light / dark 固定，system 才跟随客户端系统主题 */
+export type ThemeMode = 'light' | 'dark' | 'system'
+
 export type Settings = {
   admin_username: string
+  theme: ThemeMode
   timezone: string
   traffic_threshold_pct: string
   reconcile_interval: string

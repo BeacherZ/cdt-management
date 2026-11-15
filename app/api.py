@@ -1023,6 +1023,8 @@ def register(app: FastAPI) -> None:
         config = repo.get_settings()
         return {
             "admin_username": config.get("admin_username") or "",
+            # 外观：light / dark / system，实测值存在 settings 表里，默认浅色
+            "theme": config.get("theme") or "light",
             "timezone": config.get("timezone"),
             "traffic_threshold_pct": config.get("traffic_threshold_pct"),
             "reconcile_interval": config.get("reconcile_interval"),
@@ -1096,6 +1098,14 @@ def register(app: FastAPI) -> None:
                 updates[key] = "1" if value else "0"
 
         put_str("timezone", payload.get("timezone"))
+        # 外观：只有这三档。存进别的值会让前端 resolveTheme 落到默认浅色，
+        # 设置页却显示成空 —— 在入口挡掉更诚实
+        theme = payload.get("theme")
+        if theme is not None:
+            text = str(theme).strip()
+            if text not in ("light", "dark", "system"):
+                raise ValueError("外观只能是 light / dark / system")
+            updates["theme"] = text
         if payload.get("traffic_threshold_pct") is not None:
             percent = _as_int(payload["traffic_threshold_pct"], "流量阈值百分比")
             if not 50 <= percent <= 100:

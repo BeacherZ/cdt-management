@@ -21,4 +21,5 @@ test-smoke/
 # 截图回归跑出来的图不进货：仓库里只留 README 用的首页和通知示例
 docs/screenshots/*
 !docs/screenshots/02-dashboard.png
+!docs/screenshots/03-dashboard-dark.png
 !docs/screenshots/*-notify-*.png

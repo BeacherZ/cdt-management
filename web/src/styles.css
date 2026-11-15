@@ -79,79 +79,80 @@
   --mono: ui-monospace, 'SF Mono', 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    color-scheme: dark;
-    --bg: #080b0f;
-    --bg-sheen-1: rgba(20, 190, 130, 0.14);
-    --bg-sheen-2: rgba(56, 132, 255, 0.12);
-    --panel: rgba(21, 26, 33, 0.66);
-    --panel-solid: #14181e;
-    --panel-soft: rgba(29, 35, 44, 0.72);
-    --panel-inset: rgba(255, 255, 255, 0.035);
+/* 深色：由 <html data-theme="dark"> 开启 —— 主题存在后端设置里，
+   不跟随系统；「跟随系统」是前端把 prefers-color-scheme 解析成
+   light / dark 之后再写这个属性，所以这里不再用 media query */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #080b0f;
+  --bg-sheen-1: rgba(20, 190, 130, 0.14);
+  --bg-sheen-2: rgba(56, 132, 255, 0.12);
+  --panel: rgba(21, 26, 33, 0.66);
+  --panel-solid: #14181e;
+  --panel-soft: rgba(29, 35, 44, 0.72);
+  --panel-inset: rgba(255, 255, 255, 0.035);
 
-    --ink: #e9eef5;
-    --ink-soft: #c2cbd6;
-    --muted: #aab4c1;
-    --muted-soft: #828c9a;
+  --ink: #e9eef5;
+  --ink-soft: #c2cbd6;
+  --muted: #aab4c1;
+  --muted-soft: #828c9a;
 
-    --line: rgba(255, 255, 255, 0.09);
-    --line-strong: rgba(255, 255, 255, 0.16);
-    --hairline: rgba(255, 255, 255, 0.07);
+  --line: rgba(255, 255, 255, 0.09);
+  --line-strong: rgba(255, 255, 255, 0.16);
+  --hairline: rgba(255, 255, 255, 0.07);
 
-    --accent: #2fbe8c;
-    --accent-2: #38bdf8;
-    --accent-grad: linear-gradient(135deg, #34d399 0%, #22b184 45%, #1f9d8f 100%);
-    --accent-soft: rgba(47, 190, 140, 0.14);
-    --accent-ring: rgba(47, 190, 140, 0.3);
-    --green: #2fbe8c;
-    --green-soft: rgba(47, 190, 140, 0.14);
+  --accent: #2fbe8c;
+  --accent-2: #38bdf8;
+  --accent-grad: linear-gradient(135deg, #34d399 0%, #22b184 45%, #1f9d8f 100%);
+  --accent-soft: rgba(47, 190, 140, 0.14);
+  --accent-ring: rgba(47, 190, 140, 0.3);
+  --green: #2fbe8c;
+  --green-soft: rgba(47, 190, 140, 0.14);
 
-    --blue: #5c9bff;
-    --blue-soft: rgba(92, 155, 255, 0.14);
-    --red: #f0707e;
-    --red-soft: rgba(240, 112, 126, 0.14);
-    --amber: #e0a13a;
-    --amber-soft: rgba(224, 161, 58, 0.16);
+  --blue: #5c9bff;
+  --blue-soft: rgba(92, 155, 255, 0.14);
+  --red: #f0707e;
+  --red-soft: rgba(240, 112, 126, 0.14);
+  --amber: #e0a13a;
+  --amber-soft: rgba(224, 161, 58, 0.16);
 
-    --shadow-1: 0 1px 1px rgba(0, 0, 0, 0.4), 0 2px 6px -2px rgba(0, 0, 0, 0.5);
-    --shadow-2: 0 1px 2px rgba(0, 0, 0, 0.45), 0 10px 24px -14px rgba(0, 0, 0, 0.8);
-    --shadow-3: 0 2px 6px rgba(0, 0, 0, 0.5), 0 28px 56px -30px rgba(0, 0, 0, 0.9);
-    --shadow-pop: 0 10px 20px -10px rgba(0, 0, 0, 0.6), 0 48px 96px -36px rgba(0, 0, 0, 0.95);
-  }
+  --shadow-1: 0 1px 1px rgba(0, 0, 0, 0.4), 0 2px 6px -2px rgba(0, 0, 0, 0.5);
+  --shadow-2: 0 1px 2px rgba(0, 0, 0, 0.45), 0 10px 24px -14px rgba(0, 0, 0, 0.8);
+  --shadow-3: 0 2px 6px rgba(0, 0, 0, 0.5), 0 28px 56px -30px rgba(0, 0, 0, 0.9);
+  --shadow-pop: 0 10px 20px -10px rgba(0, 0, 0, 0.6), 0 48px 96px -36px rgba(0, 0, 0, 0.95);
+}
 
-  /* 登录 / 注册页固定亮色：作为品牌门面不跟随系统深色模式，始终是同一套浅色外观 */
-  .auth {
-    color-scheme: light;
-    --bg: #eceff3;
-    --panel: rgba(255, 255, 255, 0.72);
-    --panel-solid: #ffffff;
-    --panel-soft: rgba(244, 246, 248, 0.9);
-    --panel-inset: rgba(16, 24, 40, 0.028);
-    --ink: #101318;
-    --ink-soft: #343b45;
-    --muted: #666e7a;
-    --muted-soft: #8b929c;
-    --line: rgba(19, 28, 41, 0.1);
-    --line-strong: rgba(19, 28, 41, 0.17);
-    --hairline: rgba(255, 255, 255, 0.7);
-    --accent: #0b7a58;
-    --accent-2: #0e7490;
-    --accent-grad: linear-gradient(135deg, #0f8b63 0%, #0b7a58 46%, #0a6d6b 100%);
-    --accent-soft: rgba(11, 122, 88, 0.1);
-    --accent-ring: rgba(11, 122, 88, 0.22);
-    --green: #0b7a58;
-    --green-soft: rgba(11, 122, 88, 0.1);
-    --red: #bd3645;
-    --red-soft: rgba(189, 54, 69, 0.1);
-    --amber: #a06408;
-    --amber-soft: rgba(168, 102, 8, 0.12);
-    --shadow-1: 0 1px 1px rgba(16, 24, 40, 0.04), 0 2px 6px -2px rgba(16, 24, 40, 0.07);
-    --shadow-2: 0 1px 2px rgba(16, 24, 40, 0.05), 0 8px 20px -12px rgba(16, 24, 40, 0.16);
-    --shadow-3: 0 2px 4px rgba(16, 24, 40, 0.06), 0 24px 48px -28px rgba(16, 24, 40, 0.28);
-    --shadow-pop: 0 8px 16px -8px rgba(16, 24, 40, 0.14), 0 40px 80px -32px rgba(16, 24, 40, 0.32);
-    background: var(--bg);
-  }
+/* 登录 / 注册页固定亮色：作为品牌门面不跟随系统深色模式，始终是同一套浅色外观 */
+:root[data-theme='dark'] .auth {
+  color-scheme: light;
+  --bg: #eceff3;
+  --panel: rgba(255, 255, 255, 0.72);
+  --panel-solid: #ffffff;
+  --panel-soft: rgba(244, 246, 248, 0.9);
+  --panel-inset: rgba(16, 24, 40, 0.028);
+  --ink: #101318;
+  --ink-soft: #343b45;
+  --muted: #666e7a;
+  --muted-soft: #8b929c;
+  --line: rgba(19, 28, 41, 0.1);
+  --line-strong: rgba(19, 28, 41, 0.17);
+  --hairline: rgba(255, 255, 255, 0.7);
+  --accent: #0b7a58;
+  --accent-2: #0e7490;
+  --accent-grad: linear-gradient(135deg, #0f8b63 0%, #0b7a58 46%, #0a6d6b 100%);
+  --accent-soft: rgba(11, 122, 88, 0.1);
+  --accent-ring: rgba(11, 122, 88, 0.22);
+  --green: #0b7a58;
+  --green-soft: rgba(11, 122, 88, 0.1);
+  --red: #bd3645;
+  --red-soft: rgba(189, 54, 69, 0.1);
+  --amber: #a06408;
+  --amber-soft: rgba(168, 102, 8, 0.12);
+  --shadow-1: 0 1px 1px rgba(16, 24, 40, 0.04), 0 2px 6px -2px rgba(16, 24, 40, 0.07);
+  --shadow-2: 0 1px 2px rgba(16, 24, 40, 0.05), 0 8px 20px -12px rgba(16, 24, 40, 0.16);
+  --shadow-3: 0 2px 4px rgba(16, 24, 40, 0.06), 0 24px 48px -28px rgba(16, 24, 40, 0.28);
+  --shadow-pop: 0 8px 16px -8px rgba(16, 24, 40, 0.14), 0 40px 80px -32px rgba(16, 24, 40, 0.32);
+  background: var(--bg);
 }
 
 /* -------------------------------------------------------------- 基础 */
@@ -849,10 +850,8 @@ input[type='number']::-webkit-inner-spin-button {
   background-size: 12px;
 }
 
-@media (prefers-color-scheme: dark) {
-  .select {
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238d97a5' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
-  }
+:root[data-theme='dark'] .select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238d97a5' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
 }
 
 .select optgroup {
