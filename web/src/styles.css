@@ -2265,11 +2265,10 @@ input[type='number']::-webkit-inner-spin-button {
    表格只借用「列对齐」这件事——去掉表头底色和粗边框，只留细线和行悬停，
    免得在概览里突然出现一块「后台表格」的硬边 */
 .inst-list {
-  /* 左右不缩进：浅绿行整行铺到边框，状态靠底色就能看出来。
-     底部留 16px（正好等于圆角半径）—— 最后一行常是运行中的浅绿行，
-     贴到圆角上会被切一刀，留白给足，别让它挤着卡片下沿。 */
+  /* 左右不缩进，表格满幅到卡片边框；底部留 16px（正好等于圆角半径），
+     别让最后一行挤着卡片下沿，看着像被切了一刀 */
   padding: 0 0 16px;
-  /* 运行中行的底色要贴着圆角裁掉，否则会在边角露直角 */
+  /* 内容贴着圆角裁掉，否则末行会在边角露出直角 */
   overflow: hidden;
 }
 
@@ -2322,21 +2321,11 @@ input[type='number']::-webkit-inner-spin-button {
   border-top: 0;
 }
 
-/* 运行中的行：整行铺一层极淡的同色底 + 左缘 2px 强调条。
-   原来是「左边一片浅绿渐层往右消失」，右半边又白得发空，
-   一眼看过去左边压着一块绿、右边散着，头重脚轻 */
-.inst-table tbody tr.is-running {
-  background: color-mix(in srgb, var(--accent) 5%, transparent);
-}
-
+/* 运行中不再整行铺底色：一条浅绿横过来，三行里两绿一白，
+   看着像两块色带压在表格上。状态由首列的「运行中」胶囊表达，
+   行底和其余行一样保持白色，只留 hover 反馈 */
 .inst-table tbody tr:hover {
   background: color-mix(in srgb, var(--ink) 3.5%, transparent);
-}
-
-/* 悬停不能把运行中的底色盖掉：两条规则都写 background，
-   用更高的选择器把强调色加深一点，而不是退回中性灰 */
-.inst-table tbody tr.is-running:hover {
-  background: color-mix(in srgb, var(--accent) 9%, transparent);
 }
 
 /* 实例格两行：第一行别名 +「当班」，第二行实例 ID 胶囊 */
@@ -2497,9 +2486,21 @@ input[type='number']::-webkit-inner-spin-button {
    每一行左右两端都咬住同一条边界，8 张卡叠起来是齐的；
    多占一点高度没关系，整齐比省地方重要。 */
 @media (max-width: 820px) {
+  /* 手机上不再套一层大卡片：外框彻底透明化，每台实例的小卡直接落在页面上。
+     否则就是「卡片里再放三张卡」，白的套白的，两层边框加一圈内边距全是浪费 */
   .inst-list {
     overflow: visible;
-    padding: 6px;
+    padding: 0;
+    border: 0;
+    background: none;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  /* .card 顶部那道高光条是给大面板用的，外框没了它就成了悬空的细线 */
+  .inst-list::before {
+    display: none;
   }
 
   /* ≤1199 那条 min-width:780px 是给横滑用的，手机上必须清掉，
@@ -2528,7 +2529,8 @@ input[type='number']::-webkit-inner-spin-button {
     align-items: center;
     column-gap: 12px;
     row-gap: 6px;
-    margin-bottom: 6px;
+    /* 拆掉外框后卡与卡之间直接面对页面背景，间距比原来（挤在大卡里）放松一点 */
+    margin-bottom: 10px;
     padding: 11px 12px;
     border: 1px solid var(--line);
     border-radius: var(--radius-md);
@@ -2539,10 +2541,9 @@ input[type='number']::-webkit-inner-spin-button {
     margin-bottom: 0;
   }
 
-  /* 运行中：浅绿底 + 淡绿描边就够，不再画左缘强调条（和桌面端一致） */
+  /* 运行中：小卡只描一圈淡绿边，不铺渐变底色（和桌面端一致） */
   .inst-table tbody tr.is-running {
     border-color: color-mix(in srgb, var(--accent) 42%, transparent);
-    background-image: linear-gradient(180deg, var(--accent-soft), transparent 72%);
   }
 
   /* 拆掉单元格盒子：里面的元素直接落进上面那五个格位。

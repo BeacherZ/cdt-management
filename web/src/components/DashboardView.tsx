@@ -206,7 +206,7 @@ export default function DashboardView({
       <div className="section">
         <div className="section-head">
           <h2>实例状态</h2>
-          <span>全部实例的在线状态、流量与归属</span>
+          <span className="section-desc">全部实例的在线状态、流量与归属</span>
           <div className="section-actions">
             <Badge tone={alarms > 0 ? 'amber' : 'gray'}>
               {overview.servers.length} 台 · {running} 台运行中
@@ -333,7 +333,7 @@ export default function DashboardView({
       <div className="section">
         <div className="section-head">
           <h2>最近事件</h2>
-          <span>换班、故障转移、熔断、保活与手动操作</span>
+          <span className="section-desc">换班、故障转移、熔断、保活与手动操作</span>
           <div className="section-actions">
             <Badge tone="gray">
               <BellRing size={11} style={{ marginRight: 2 }} />

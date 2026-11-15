@@ -587,3 +587,13 @@ button.nav-parent:hover svg,
     font-size: 12.5px;
   }
 }
+
+/* 手机上把「实例状态」「最近事件」两块的说明收起来：
+   这两句在小屏要独占一整行，字又小、信息量为零，
+   留着只是把标题和下面的卡片往下推。
+   用 section-desc 点名，别把其他区块的说明一起干掉 */
+@media (max-width: 820px) {
+  .section-head > span.section-desc {
+    display: none;
+  }
+}
