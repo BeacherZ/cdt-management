@@ -1,5 +1,5 @@
 /**
- * 外观主题：存在后端设置里（light / dark / system），跟浏览器或系统无关。
+ * 外观主题：存在后端设置里（light / dark / system），默认跟随系统。
  *
  * 这里只负责「把某个模式的最终结果写到 <html> 上」：
  * 样式表那边靠 `:root[data-theme='dark']` 整套换变量，不再用 media query，
@@ -25,9 +25,9 @@ function systemTheme(): ResolvedTheme {
 
 export function resolveTheme(mode: ThemeMode | undefined): ResolvedTheme {
   if (mode === 'dark') return 'dark'
-  if (mode === 'system') return systemTheme()
-  // 默认浅色：没配过、字段缺失、老版本后端都落到这里
-  return 'light'
+  if (mode === 'light') return 'light'
+  // 默认跟随系统：没配过、字段缺失、老版本后端都落到这里
+  return systemTheme()
 }
 
 /** 把主题落到 DOM。会同步 <meta> 的 color-scheme / theme-color，滚动条才不会打架 */

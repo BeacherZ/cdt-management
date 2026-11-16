@@ -1023,8 +1023,9 @@ def register(app: FastAPI) -> None:
         config = repo.get_settings()
         return {
             "admin_username": config.get("admin_username") or "",
-            # 外观：light / dark / system，实测值存在 settings 表里，默认浅色
-            "theme": config.get("theme") or "light",
+            # 外观：light / dark / system，实测值存在 settings 表里。
+            # 未配置（老版本升级上来的库）默认「跟随系统」，不再写死浅色
+            "theme": config.get("theme") or "system",
             "timezone": config.get("timezone"),
             "traffic_threshold_pct": config.get("traffic_threshold_pct"),
             "reconcile_interval": config.get("reconcile_interval"),
