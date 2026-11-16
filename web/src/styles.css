@@ -2320,11 +2320,17 @@ input[type='number']::-webkit-inner-spin-button {
   border-top: 0;
 }
 
-/* 运行中不再整行铺底色：一条浅绿横过来，三行里两绿一白，
-   看着像两块色带压在表格上。状态由首列的「运行中」胶囊表达，
-   行底和其余行一样保持白色，只留 hover 反馈 */
-.inst-table tbody tr:hover {
-  background: color-mix(in srgb, var(--ink) 3.5%, transparent);
+/* 行悬停：和左侧菜单「鼠标放上去」完全同一套 —— 只铺一层极淡的 --panel-inset，
+   130ms 淡入；不加竖条（那是菜单「当前页」才有的），也不改文字颜色，
+   行本身不是可点条目。包在 hover:hover 里：手机、平板手指划过去不留残影。 */
+@media (hover: hover) and (pointer: fine) {
+  .inst-table tbody tr {
+    transition: background var(--t-fast) var(--ease);
+  }
+
+  .inst-table tbody tr:hover {
+    background: var(--panel-inset);
+  }
 }
 
 /* 实例格两行：第一行别名 +「当班」，第二行实例 ID 胶囊 */
@@ -2540,11 +2546,6 @@ input[type='number']::-webkit-inner-spin-button {
     margin-bottom: 0;
   }
 
-  /* 运行中：小卡只描一圈淡绿边，不铺渐变底色（和桌面端一致） */
-  .inst-table tbody tr.is-running {
-    border-color: color-mix(in srgb, var(--accent) 42%, transparent);
-  }
-
   /* 拆掉单元格盒子：里面的元素直接落进上面那五个格位。
      表格在手机上已经是列表，td 的 padding / 分隔线在这里全是噪音 */
   .inst-table td {
@@ -2712,10 +2713,15 @@ input[type='number']::-webkit-inner-spin-button {
   border: 0;
   cursor: pointer;
   border-radius: 8px;
+  transition: background var(--t-fast) var(--ease);
 }
 
-.event-main:hover {
-  background: var(--panel-soft);
+/* 悬停和左侧菜单「鼠标放上去」一个口径：只有 --panel-inset 这一层淡底，
+   不加竖条、不改文字。只在真有指针的设备上生效，手机手指划过、点开都不留高亮。 */
+@media (hover: hover) and (pointer: fine) {
+  .event-main:hover {
+    background: var(--panel-inset);
+  }
 }
 
 .event:first-child .event-main {
