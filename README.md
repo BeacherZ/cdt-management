@@ -23,7 +23,7 @@
 
 ![概览](docs/screenshots/02-dashboard.png)
 
-深色模式（`设置 → 常规设置 → 外观` 三选一：浅色 / 深色 / 跟随系统）
+深色模式（`设置 → 常规设置 → 外观` 三选一：浅色 / 深色 / 跟随系统）:
 
 ![概览（深色）](docs/screenshots/03-dashboard-dark.png)
 
