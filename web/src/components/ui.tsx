@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react'
 import { X } from 'lucide-react'
 
 /* -------------------------------------------------------------- 徽章 */
@@ -163,7 +163,12 @@ export function Meter({
   // 轨道宽度差零点几像素就会触发（415px 与 416px 的 90% 落在不同相位），所以
   // 这里量出轨道的绝对位置，把刻度线的**页面坐标**取整，再减去轨道自身的小数偏移
   // ——只按轨道内部取整还不够，轨道本身起点在小数像素上时照样会糊。
-  useEffect(() => {
+  //
+  // 用 useLayoutEffect 而不是 useEffect：内联的百分比只是首帧兜底，整像素修正在
+  // 这里同步完成，浏览器还没绘制就已经落位。换成 useEffect 会先画一帧百分比位置
+  // （实测 315.828px）再改成 317px，配上线体残留的 left 过渡，切页面时能看到
+  // 竖条明显滑一下。
+  useLayoutEffect(() => {
     const track = trackRef.current
     const mark = markRef.current
     if (!track || !mark) return
