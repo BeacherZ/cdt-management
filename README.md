@@ -102,7 +102,7 @@
 **说明**：支持 Telegram、邮件、Webhook 三类渠道，可同时开启。
 
 <details>
-<summary>9 种通知的实际推送效果（点击展开，图可点看原图）</summary>
+<summary>9 种通知的实际推送效果（点击展开）</summary>
 
 <p align="center">
   <a href="docs/screenshots/16-notify-shift.png"><img src="docs/screenshots/16-notify-shift.png" width="31%" align="top" alt="CDT 换班完成报告（换班组）"></a>
