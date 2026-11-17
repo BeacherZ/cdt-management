@@ -21,19 +21,20 @@
 
 ## 🖥️界面
 
-![概览](docs/screenshots/02-dashboard.png)
+浅色 / 深色（`设置 → 常规设置 → 外观` 三选一，点图看大图）
 
-深色模式（`设置 → 常规设置 → 外观` 三选一：浅色 / 深色 / 跟随系统）
-
-![概览（深色）](docs/screenshots/03-dashboard-dark.png)
+<p align="center">
+  <a href="docs/screenshots/02-dashboard.png"><img src="docs/screenshots/02-dashboard.png" width="48%" alt="概览（浅色）"></a>
+  <a href="docs/screenshots/03-dashboard-dark.png"><img src="docs/screenshots/03-dashboard-dark.png" width="48%" align="top" alt="概览（深色）"></a>
+</p>
 
 手机端（自适应布局，部分界面截图）
 
 <p align="center">
-  <img src="docs/screenshots/04-mobile-dashboard.png" width="22%" align="top" alt="手机端概览（浅色）">
-  <img src="docs/screenshots/05-mobile-dashboard-dark.png" width="22%" align="top" alt="手机端概览（深色）">
-  <img src="docs/screenshots/06-mobile-instances.png" width="22%" align="top" alt="手机端实例管理">
-  <img src="docs/screenshots/07-mobile-instances-dark.png" width="22%" align="top" alt="手机端实例管理（深色）">
+  <a href="docs/screenshots/04-mobile-dashboard.png"><img src="docs/screenshots/04-mobile-dashboard.png" width="22%" align="top" alt="手机端概览（浅色）"></a>
+  <a href="docs/screenshots/05-mobile-dashboard-dark.png"><img src="docs/screenshots/05-mobile-dashboard-dark.png" width="22%" align="top" alt="手机端概览（深色）"></a>
+  <a href="docs/screenshots/06-mobile-instances.png"><img src="docs/screenshots/06-mobile-instances.png" width="22%" align="top" alt="手机端实例管理"></a>
+  <a href="docs/screenshots/07-mobile-instances-dark.png"><img src="docs/screenshots/07-mobile-instances-dark.png" width="22%" align="top" alt="手机端实例管理（深色）"></a>
 </p>
 
 ## ✨主要功能
@@ -42,9 +43,14 @@
 
 **说明**：一台实例自己管自己，掉了就拉起来，不换班、不碰别的实例。
 
+<details>
+<summary>详细说明</summary>
+
 > 每轮巡检（默认 60 秒，可自定义间隔与起始秒）停着就再下发一次开机，直到拉起为止；启动中不重复下发。
 >
 > **运行窗口（可选）**：比如只让它每天 08:00–20:00 跑，或只在这个月的 1–16 号跑，两项同时填按交集算。结束早于开始表示跨天到次日（如 `20:00–06:00`）；结束填 `00:00` 表示到 24:00；起止相同等于全天。窗口外自动停机、窗口内自动保活，窗口两端都**不推通知**。
+
+</details>
 
 **目的**：失联第一时间拉起来，保证在线率；设定运行窗口让实例只在用得上的时间在线，减少费用。
 
@@ -52,11 +58,16 @@
 
 **说明**：多台实例编成一组，按顺序轮流当班，同一时刻只留一台在线。排班周期两种任选：
 
+<details>
+<summary>详细说明</summary>
+
 >  **一天一轮**：填每台的工时，或直接排 0–24 点的固定时刻表，24 小时内换完；
 > 
 >  **一月一轮**：填每台上几天，1 号 0 点从第 1 位开始，最后一位承接当月剩下的天数。
 > 
 >  **交接顺序**：上班准时——到点先把当班实例开机；下班不抢跑——等下一台确认运行中，上一台才停机。
+
+</details>
 
 **目的**：通过联合换班，降低多台抢占式实例同时在线的成本，并充分利用每台实例各自的 200G CDT 免费流量包。
 
@@ -64,7 +75,12 @@
 
 **说明**：每台单独配阈值，超限自动停机；换班组会先尝试故障转移，全超才熔断。
 
+<details>
+<summary>详细说明</summary>
+
 > 故障转移的两种触发情形：当班流量到阈值，或当班被抢占后尝试3次无法拉起。
+
+</details>
 
 **目的**：不让任何一台实例烧穿流量包。
 
@@ -72,7 +88,12 @@
 
 **说明**：一条记录绑一台实例或一个换班组；目标在跑时，公网 IP 一变（开机换 IP、手动换弹性 IP）下一轮巡检自动指过去。
 
+<details>
+<summary>详细说明</summary>
+
 > 每轮巡检只拿API返回的IP比对本地记录，不查 Cloudflare；只有手动开机、单机保活拉起、换班结算这三个时点会强制查一次实际解析值。一致就不改记录，DNS 页的「上次同步」也不会跳；不一致才更新。
+
+</details>
 
 **目的**：单实例换了弹性 IP 不用手动改 DNS；换班组绑定的域名 `DDNS` 同步到目前当班运行的实例IP，组员搭建的同种服务共享配置后可无感切换使用该服务。
 
@@ -82,25 +103,28 @@
 
 **目的**：换班、故障转移、熔断、超限停机、抢占恢复、换班异常、每日报告都主动推给你，不用盯面板。
 
-实际推出来的样子（点开看原图）：
+<details>
+<summary>9 种通知的实际推送效果（点击展开，图可点看原图）</summary>
 
 <p align="center">
-  <img src="docs/screenshots/16-notify-shift.png" width="31%" align="top" alt="CDT 换班完成报告（换班组）">
-  <img src="docs/screenshots/17-notify-failover.png" width="31%" align="top" alt="CDT 故障转移报告（换班组）">
-  <img src="docs/screenshots/18-notify-breaker.png" width="31%" align="top" alt="CDT 全局熔断报告（换班组）">
+  <a href="docs/screenshots/16-notify-shift.png"><img src="docs/screenshots/16-notify-shift.png" width="31%" align="top" alt="CDT 换班完成报告（换班组）"></a>
+  <a href="docs/screenshots/17-notify-failover.png"><img src="docs/screenshots/17-notify-failover.png" width="31%" align="top" alt="CDT 故障转移报告（换班组）"></a>
+  <a href="docs/screenshots/18-notify-breaker.png"><img src="docs/screenshots/18-notify-breaker.png" width="31%" align="top" alt="CDT 全局熔断报告（换班组）"></a>
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/19-notify-limitstop.png" width="31%" align="top" alt="CDT 全局熔断报告（换班组·单台）">
-  <img src="docs/screenshots/20-notify-over-keepalive.png" width="31%" align="top" alt="CDT 超限停机报告（单机保活）">
-  <img src="docs/screenshots/21-notify-over-idle.png" width="31%" align="top" alt="CDT 超限停机报告（闲散手动）">
+  <a href="docs/screenshots/19-notify-limitstop.png"><img src="docs/screenshots/19-notify-limitstop.png" width="31%" align="top" alt="CDT 全局熔断报告（换班组·单台）"></a>
+  <a href="docs/screenshots/20-notify-over-keepalive.png"><img src="docs/screenshots/20-notify-over-keepalive.png" width="31%" align="top" alt="CDT 超限停机报告（单机保活）"></a>
+  <a href="docs/screenshots/21-notify-over-idle.png"><img src="docs/screenshots/21-notify-over-idle.png" width="31%" align="top" alt="CDT 超限停机报告（闲散手动）"></a>
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/22-notify-recovery.png" width="31%" align="top" alt="CDT 抢占恢复报告">
-  <img src="docs/screenshots/23-notify-error.png" width="31%" align="top" alt="CDT 换班异常报告（换班组）">
-  <img src="docs/screenshots/24-notify-daily.png" width="31%" align="top" alt="CDT 每日报告">
+  <a href="docs/screenshots/22-notify-recovery.png"><img src="docs/screenshots/22-notify-recovery.png" width="31%" align="top" alt="CDT 抢占恢复报告"></a>
+  <a href="docs/screenshots/23-notify-error.png"><img src="docs/screenshots/23-notify-error.png" width="31%" align="top" alt="CDT 换班异常报告（换班组）"></a>
+  <a href="docs/screenshots/24-notify-daily.png"><img src="docs/screenshots/24-notify-daily.png" width="31%" align="top" alt="CDT 每日报告"></a>
 </p>
+
+</details>
 
 ## 🚀快速开始
 
