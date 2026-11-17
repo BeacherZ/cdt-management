@@ -21,14 +21,14 @@
 
 ## 🖥️界面
 
-浅色 / 深色（`设置 → 常规设置 → 外观` 三选一，点图看大图）
+浅色 / 深色（`设置 → 常规设置 → 外观` ，点击查看大图）
 
 <p align="center">
   <a href="docs/screenshots/02-dashboard.png"><img src="docs/screenshots/02-dashboard.png" width="48%" alt="概览（浅色）"></a>
   <a href="docs/screenshots/03-dashboard-dark.png"><img src="docs/screenshots/03-dashboard-dark.png" width="48%" align="top" alt="概览（深色）"></a>
 </p>
 
-手机端（自适应布局，部分界面截图）
+手机端（自适应布局，部分界面）
 
 <p align="center">
   <a href="docs/screenshots/04-mobile-dashboard.png"><img src="docs/screenshots/04-mobile-dashboard.png" width="22%" align="top" alt="手机端概览（浅色）"></a>
