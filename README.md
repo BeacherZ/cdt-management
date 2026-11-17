@@ -21,11 +21,15 @@
 
 ## 🖥️界面
 
-![概览](docs/screenshots/02-dashboard.png)
+<p align="center">
+  <img src="docs/screenshots/02-dashboard.png" width="70%" alt="概览">
+</p>
 
 深色模式（`设置 → 常规设置 → 外观` 三选一：浅色 / 深色 / 跟随系统）
 
-![概览（深色）](docs/screenshots/03-dashboard-dark.png)
+<p align="center">
+  <img src="docs/screenshots/03-dashboard-dark.png" width="70%" alt="概览（深色）">
+</p>
 
 手机端（自适应布局，概览与实例管理各含浅色 / 深色）：
 
