@@ -27,7 +27,7 @@
 
 ![概览（深色）](docs/screenshots/03-dashboard-dark.png)
 
-手机端（自适应布局，概览与实例管理各含浅色 / 深色）
+手机端（自适应布局，部分界面截图）
 
 <p align="center">
   <img src="docs/screenshots/04-mobile-dashboard.png" width="22%" align="top" alt="手机端概览（浅色）">
