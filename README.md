@@ -27,6 +27,14 @@
 
 ![概览（深色）](docs/screenshots/03-dashboard-dark.png)
 
+手机端（自适应布局，浅色 / 深色 / 实例管理）：
+
+<p align="center">
+  <img src="docs/screenshots/04-mobile-dashboard.png" width="24%" align="top" alt="手机端概览（浅色）">
+  <img src="docs/screenshots/05-mobile-dashboard-dark.png" width="24%" align="top" alt="手机端概览（深色）">
+  <img src="docs/screenshots/06-mobile-instances.png" width="24%" align="top" alt="手机端实例管理">
+</p>
+
 ## ✨主要功能
 
 ### 单机保活

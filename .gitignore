@@ -22,4 +22,5 @@ test-smoke/
 docs/screenshots/*
 !docs/screenshots/02-dashboard.png
 !docs/screenshots/03-dashboard-dark.png
+!docs/screenshots/*-mobile-*.png
 !docs/screenshots/*-notify-*.png
