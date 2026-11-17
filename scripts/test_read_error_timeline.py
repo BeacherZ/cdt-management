@@ -125,14 +125,14 @@ class ReadErrorTimeline(unittest.TestCase):
         sid = _make_server("Ali-CDT-02")
         shift._read_error(  # noqa: SLF001
             server_id=sid,
-            title="状态读取异常（Ali-CDT-02）",
+            title="状态巡检异常（Ali-CDT-02）",
             exc="CDT 流量查询失败：网络不可达（cdt.aliyuncs.com）",
         )
         event = self._event(sid)
         self.assertEqual(event["status"], "running", "单次失败不能定性成已完成/错误")
         self.assertEqual(event["level"], "warning")
         # 有失败时刻、重试间隔、恢复承诺
-        self.assertRegex(event["detail"], r"^\d{2}:\d{2}:\d{2} 读取失败")
+        self.assertRegex(event["detail"], r"^\d{2}:\d{2}:\d{2} 巡检失败")
         self.assertIn("60 秒重试", event["detail"])
         self.assertIn("恢复后自动更新", event["detail"])
         # 时间线首条是「第 1 次失败」，与概览（带重试节奏）不同，不重复
@@ -147,7 +147,7 @@ class ReadErrorTimeline(unittest.TestCase):
         for _ in range(3):
             shift._read_error(  # noqa: SLF001
                 server_id=sid,
-                title="状态读取异常（Ali-CDT-02）",
+                title="状态巡检异常（Ali-CDT-02）",
                 exc="CDT 流量查询失败：网络不可达（cdt.aliyuncs.com）",
             )
         texts = [step["text"] for step in repo.get_event(self._event(sid)["id"])["progress"]]
@@ -161,7 +161,7 @@ class ReadErrorTimeline(unittest.TestCase):
         for _ in range(3):
             shift._read_error(  # noqa: SLF001
                 server_id=sid,
-                title="状态读取异常（Ali-CDT-02）",
+                title="状态巡检异常（Ali-CDT-02）",
                 exc="CDT 流量查询失败：网络不可达（cdt.aliyuncs.com）",
             )
         event = self._event(sid)
@@ -176,19 +176,19 @@ class ReadErrorTimeline(unittest.TestCase):
         for _ in range(3):
             shift._read_error(  # noqa: SLF001
                 server_id=sid,
-                title="状态读取异常（Ali-CDT-02）",
+                title="状态巡检异常（Ali-CDT-02）",
                 exc="CDT 流量查询失败：网络不可达（cdt.aliyuncs.com）",
             )
         eid = self._event(sid)["id"]
         self.assertEqual(repo.get_event(eid)["level"], "error")
         shift._read_recovered(  # noqa: SLF001
             server_id=sid,
-            title="状态读取已恢复（Ali-CDT-02）",
+            title="状态巡检已恢复（Ali-CDT-02）",
         )
         event = repo.get_event(eid) or {}
         self.assertEqual(event["status"], "done")
-        self.assertTrue(event["title"].startswith("状态读取已恢复"), event["title"])
-        self.assertRegex(event["detail"], r"^\d{2}:\d{2}:\d{2} 恢复正常")
+        self.assertTrue(event["title"].startswith("状态巡检已恢复"), event["title"])
+        self.assertRegex(event["detail"], r"^\d{2}:\d{2}:\d{2} 已恢复")
         self.assertIn("连续失败 3 次", event["detail"])
         # 收尾成「完成」就不能再挂红色错误图标
         self.assertEqual(event["level"], "info", "恢复后级别要降回 info")
@@ -201,7 +201,7 @@ class ReadErrorTimeline(unittest.TestCase):
         sid = _make_server("Ali-CDT-02")
         shift._read_recovered(  # noqa: SLF001
             server_id=sid,
-            title="状态读取已恢复（Ali-CDT-02）",
+            title="状态巡检已恢复（Ali-CDT-02）",
         )
         self.assertIsNone(repo.pending_event(sid, "read_error"))
         self.assertEqual(repo.list_events(group_id=0), [])
@@ -213,7 +213,7 @@ class ReadErrorTimeline(unittest.TestCase):
             sid = _make_server("Ali-CDT-02")
             shift._read_error(  # noqa: SLF001
                 server_id=sid,
-                title="状态读取异常（Ali-CDT-02）",
+                title="状态巡检异常（Ali-CDT-02）",
                 exc="CDT 流量查询失败：连接超时",
             )
             event = self._event(sid)
@@ -222,13 +222,47 @@ class ReadErrorTimeline(unittest.TestCase):
         finally:
             repo.set_settings({"reconcile_interval": "60"})
 
+    def test_stale_counter_resets(self) -> None:
+        """事件被清理、计数还留着：新一轮必须从「第 1 次失败」开始。"""
+        sid = _make_server("Ali-CDT-02")
+        repo.bump_flag(f"read_err:{sid}")
+        repo.bump_flag(f"read_err:{sid}")
+
+        shift._read_error(  # noqa: SLF001
+            server_id=sid,
+            title="状态巡检异常（Ali-CDT-02）",
+            exc="CDT 流量查询失败：连接超时",
+        )
+        event = self._event(sid)
+        self.assertEqual(repo.flag_value(f"read_err:{sid}"), 1)
+        self.assertRegex(event["detail"], r"^\d{2}:\d{2}:\d{2} 巡检失败")
+        self.assertNotIn("仍失败", event["detail"])
+
+    def test_title_follows_latest_scope(self) -> None:
+        """同一台机器从「成员」变成「当班」，标题要跟着换，不能一直挂旧身份。"""
+        sid = _make_server("Ali-CDT-02")
+        shift._read_error(  # noqa: SLF001
+            server_id=sid,
+            title="状态巡检异常（换班组：香港，成员 Ali-CDT-02）",
+            exc="CDT 流量查询失败：连接超时",
+            group_id=0,
+        )
+        shift._read_error(  # noqa: SLF001
+            server_id=sid,
+            title="状态巡检异常（换班组：香港，当班 Ali-CDT-02）",
+            exc="CDT 流量查询失败：连接超时",
+            group_id=0,
+        )
+        event = self._event(sid)
+        self.assertEqual(event["title"], "状态巡检异常（换班组：香港，当班 Ali-CDT-02）")
+
     def test_orphan_close_clears_counter(self) -> None:
         """移出监控时事件和计数一起收：否则重新纳管会从旧值续数。"""
         sid = _make_server("Ali-CDT-02")
         for _ in range(2):
             shift._read_error(  # noqa: SLF001
                 server_id=sid,
-                title="状态读取异常（Ali-CDT-02）",
+                title="状态巡检异常（Ali-CDT-02）",
                 exc="CDT 流量查询失败：连接超时",
             )
         self.assertEqual(repo.flag_value(f"read_err:{sid}"), 2)
@@ -241,7 +275,7 @@ class ReadErrorTimeline(unittest.TestCase):
         # 重新纳入监控后是全新的一次中断：从第 1 次重新数，而不是接着 3
         shift._read_error(  # noqa: SLF001
             server_id=sid,
-            title="状态读取异常（Ali-CDT-02）",
+            title="状态巡检异常（Ali-CDT-02）",
             exc="CDT 流量查询失败：连接超时",
         )
         self.assertEqual(repo.flag_value(f"read_err:{sid}"), 1)
@@ -355,7 +389,7 @@ class SettledShiftReadBlip(_ShiftBase):
 
     def _shift_events(self) -> list[str]:
         # 读取异常/恢复那两条是应该有的，不算换班事件
-        return [t for t in self._titles(self.group_id) if "状态读取" not in t]
+        return [t for t in self._titles(self.group_id) if "状态巡检" not in t]
 
     def test_blip_keeps_shift_settled_and_silent(self) -> None:
         # 锚点拨到 4 天前：万一真被打回 switching，超时逻辑会立刻报出来
@@ -465,7 +499,7 @@ class IdleReadFailure(unittest.TestCase):
 
         event = repo.pending_event(self.sid, "read_error")
         self.assertIsNotNone(event, "闲散机读失败也应该有事件")
-        self.assertIn("读取失败", event["detail"])
+        self.assertIn("巡检失败", event["detail"])
         self.assertIn("网络不可达", event["detail"])
 
         aliyun.get_traffic_gb = self._real_traffic
@@ -474,7 +508,7 @@ class IdleReadFailure(unittest.TestCase):
         self.assertIsNone(repo.pending_event(self.sid, "read_error"))
         latest = repo.list_events(limit=1)[0]
         self.assertEqual(latest["status"], "done")
-        self.assertTrue(latest["title"].startswith("状态读取已恢复"), latest["title"])
+        self.assertTrue(latest["title"].startswith("状态巡检已恢复"), latest["title"])
         self.assertFalse(repo.get_flag(f"read_err:{self.sid}"))
 
     def test_recovery_without_failure_is_silent(self) -> None:

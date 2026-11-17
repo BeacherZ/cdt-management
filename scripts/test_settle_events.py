@@ -173,7 +173,7 @@ class SettleWhenNotifyOff(_Base):
         self.assertEqual(event["status"], "done")
         self.assertTrue(event["title"].startswith("换班完成（换班组："), event["title"])
         # 关键：概览必须是结算结论，不能还停在「正在启动当班 A」
-        self.assertEqual(event["detail"], "当班 当班A / 待机 1 台 / ⏸ DDNS未启用")
+        self.assertEqual(event["detail"], "当班 当班A，待机 1 台，⏸ DDNS未启用")
 
 
 class SettleWhenNotifyDisabled(_Base):
@@ -211,7 +211,7 @@ class SettleWhenNotifyDisabled(_Base):
         self.assertEqual(event["status"], "done")
         self.assertEqual(
             event["detail"],
-            "当班 当班A / 待机 1 台 / ⏸ DDNS未启用",
+            "当班 当班A，待机 1 台，⏸ DDNS未启用",
             "概览必须是结算结论，不能停在「等待当班 A 到位」",
         )
 
@@ -243,8 +243,8 @@ class NewGroupEventShowsDdns(_Base):
 
         events = repo.list_events(limit=50, group_id=group_id)
         event = [e for e in events if e["kind"] == "group_new"][0]
-        # 概览：DDNS 那一段自带前缀，和「✅ DDNS已同步（…）」同一套写法
-        self.assertTrue(event["detail"].endswith(" / ⏸ DDNS未绑定"), event["detail"])
+        # 概览：三个字段用逗号并列，DDNS 那段自带前缀，和「✅ DDNS已同步（…）」同一套写法
+        self.assertTrue(event["detail"].endswith("，⏸ DDNS未绑定"), event["detail"])
         # 详情：新建组也要能看到「DDNS：…」这一步，而不是只有手动换班才有
         texts = [step["text"] for step in event["progress"]]
         self.assertIn(f"DDNS：{dns.STATUS_UNBOUND}", texts, texts)
@@ -281,7 +281,7 @@ class FailoverIsOneEvent(_Base):
         )
         self.assertIn("已下发开机指令（当班 待机B）", texts)
         self.assertIn("全部状态确认完毕", texts)
-        self.assertEqual(event["detail"].split(" / ")[0], "当班 待机B")
+        self.assertEqual(event["detail"].split("，")[0], "当班 待机B")
         # 报告只发一条
         self.assertEqual([m.kind for m in self.sent], ["shift_failover"], self.sent)
 

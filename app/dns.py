@@ -574,7 +574,7 @@ def reconcile(config: dict[str, str], force: bool = False) -> list[dict[str, Any
                 repo.add_event(
                     "dns",
                     messages.ev("DNS 记录已更新", messages.obj_server(record)),
-                    f"{previous or '—'} → {live}（{target.get('label')}）",
+                    f"已更新 / {previous or '—'} → {live}（{target.get('label')}）",
                 )
         else:
             # 同一类失败不要每分钟刷一条

@@ -122,7 +122,7 @@ def flag_age(key: str) -> float:
 
 
 def flag_value(key: str) -> int:
-    """标记附带的值（读取告警用它记「连续失败几次」）；不存在返回 0。"""
+    """标记附带的值（巡检告警用它记「连续失败几次」）；不存在返回 0。"""
     row = db.query_one("SELECT value FROM flags WHERE key=?", (key,))
     return int(row["value"] or 0) if row is not None else 0
 
@@ -1193,7 +1193,7 @@ def pending_event(server_id: int, pending_kind: str) -> dict[str, Any] | None:
 
 
 def running_pending_events(pending_kind: str) -> list[dict[str, Any]]:
-    """所有「进行中」且带指定 pending_kind 的事件（读取告警的收尾清理用）。"""
+    """所有「进行中」且带指定 pending_kind 的事件（巡检告警的收尾清理用）。"""
     rows = db.query(
         "SELECT * FROM events WHERE status='running' AND pending_kind=? ORDER BY id",
         (pending_kind,),

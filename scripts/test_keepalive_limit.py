@@ -103,7 +103,7 @@ class KeepaliveLimit(unittest.TestCase):
         self.assertEqual(event["title"], "流量超限，保活已暂停（保活机D）")
         self.assertEqual(event["status"], "running", "指令下发 ≠ 已停稳")
         texts = [str(step["text"]) for step in event["progress"]]
-        self.assertIn("已用 200.00 GB，超过阈值 188 GB", texts)
+        self.assertIn("已用 200.00 GB（阈值 188 GB）", texts)
         self.assertIn("已下发停机指令（节省停机）", texts)
 
         from app import scheduler  # noqa: PLC0415

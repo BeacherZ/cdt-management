@@ -114,7 +114,7 @@ class ShiftFlow(unittest.TestCase):
         self.assertTrue("首次指向" in ddns_step or "→" in ddns_step, ddns_step)
         # 概览的 DDNS 用 brief，和保活恢复、手动开机一字不差：
         # 以前这里错用了通知的 status，只显示「✅ 已同步」，少了「DDNS」和改没改的说明
-        self.assertTrue(event["detail"].startswith("当班 机器A / 待机 1 台 / "), event["detail"])
+        self.assertTrue(event["detail"].startswith("当班 机器A，待机 1 台，"), event["detail"])
         self.assertIn("✅ DDNS已同步（", event["detail"], event["detail"])
         # 通知里的 DDNS 行照旧只有「已同步 / 未绑定」，不带 IP 详情
         self.assertNotIn("→", str(summary.get("ddns") or ""), summary.get("ddns"))
@@ -487,14 +487,14 @@ class TrafficBreaker(unittest.TestCase):
             + [str(e.get("detail") or "") for e in events]
             + [step["text"] for e in events for step in e.get("progress") or []]
         )
-        self.assertIn("状态读取异常", joined, joined)
+        self.assertIn("状态巡检异常", joined, joined)
         self.assertNotIn("保守维持当班", joined, joined)
         # 熔断原因要如实写成「读不到」，不能编成「全员超限」
         run = db.query_one(
             "SELECT note FROM shift_runs WHERE group_id=? ORDER BY updated_at DESC LIMIT 1",
             (self.group_id,),
         )
-        self.assertIn("读取失败", str(dict(run or {})["note"] or ""))
+        self.assertIn("巡检失败", str(dict(run or {})["note"] or ""))
 
 
     def test_breaker_note_clears_after_recovery(self):

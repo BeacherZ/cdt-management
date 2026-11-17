@@ -26,12 +26,22 @@ PHASE_FAILOVER = "failover"
 # 和流量超限的 failover 共用一个覆盖字段，但对外必须说「手动换班」。
 PHASE_MANUAL = "manual"
 PHASE_BREAKER = "breaker"
+# 单机（流量超限）停机：没有熔断全组，只是当班自己停了。
+# 以前借用 PHASE_BREAKER，界面就显示成「已熔断停机」，和事件里
+# 「当班流量超限，节省停机」自相矛盾 —— 两个结论得能分开说。
+PHASE_LIMIT_STOP = "limit_stop"
 PHASE_ERROR = "error"
 
 # 这些阶段的班次「这一班已经处理过」：当班被重新拉起时是恢复，不是一次新换班。
-# breaker 也在内 —— 熔断 / 超限停机后流量回落，重新拉起当班属于恢复，不该记成
-# 一次新换班，更不该拿建行时那个可能已过去几小时的 started_at 去误报「换班超时」。
-_SETTLED_LIKE_PHASES = (PHASE_SETTLED, PHASE_FAILOVER, PHASE_MANUAL, PHASE_BREAKER)
+# breaker / limit_stop 也在内 —— 熔断或超限停机后流量回落，重新拉起当班属于恢复，
+# 不该记成一次新换班，更不该拿建行时那个可能已过去几小时的 started_at 去误报「换班超时」。
+_SETTLED_LIKE_PHASES = (
+    PHASE_SETTLED,
+    PHASE_FAILOVER,
+    PHASE_MANUAL,
+    PHASE_BREAKER,
+    PHASE_LIMIT_STOP,
+)
 
 # 结算那一条事件的 kind。班次被打回 switching 又重新就绪时，靠它判断
 # 「这一班其实早就结算过」，避免再开一条「换班进行中 → 换班完成」。
@@ -644,7 +654,7 @@ class Engine:
                     )
                     results.append({"group_id": group["id"], "error": str(exc)})
 
-            # 读取告警收尾：机器被删或移出监控后不会再有恢复回调，
+            # 巡检告警收尾：机器被删或移出监控后不会再有恢复回调，
             # 统一在每轮末尾把这类「进行中」事件收掉，避免它永远转圈。
             # 判据是「还在库里」而不是「在换班组/保活里」：闲散机器这一轮也会
             # 读状态、也会建读取事件，只认换班组+保活的话，它的告警会被刚建好
@@ -654,7 +664,7 @@ class Engine:
                     {int(server["id"]) for server in repo.list_servers()}
                 )
             except Exception:  # noqa: BLE001
-                log.exception("读取告警收尾失败")
+                log.exception("巡检告警收尾失败")
             return results
         finally:
             self._lock.release()
@@ -713,7 +723,7 @@ class Engine:
                     repo.add_event(
                         "warning",
                         messages.ev("单机保活已停用", messages.obj_server(str(item.get('label') or ''))),
-                        "已停用 / 由换班组接管，避免两边互相拉扯",
+                        "已停用：由换班组接管，避免两边互相拉扯",
                         level="warning",
                         server_id=server_id,
                     )
@@ -734,7 +744,7 @@ class Engine:
                 # 同一条事件里持续记录，带失败时刻与重试节奏；恢复时补上恢复时刻
                 _read_error(
                     server_id=server_id,
-                    title=messages.ev("状态读取异常", messages.obj_server(label)),
+                    title=messages.ev("状态巡检异常", messages.obj_server(label)),
                     exc=exc,
                     tz_name=tz_name,
                 )
@@ -742,7 +752,7 @@ class Engine:
                 continue
             _read_recovered(
                 server_id=server_id,
-                title=messages.ev("状态读取已恢复", messages.obj_server(label)),
+                title=messages.ev("状态巡检已恢复", messages.obj_server(label)),
                 tz_name=tz_name,
             )
 
@@ -986,7 +996,7 @@ class Engine:
             tail = "保活已暂停"
         else:
             tail = messages.stop_phrase(mode)
-        reason = f"已用 {_used_gb(server):.2f} GB（阈值 {float(server.get('threshold_gb') or 0):g} GB）"
+        reason = _limit_usage(server)
         stopped_already = _is_stopped_any_mode(server)
         event_id = repo.add_event(
             "limit_stop",
@@ -998,7 +1008,7 @@ class Engine:
             pending_status="Stopped",
             pending_kind="limit_stop",
         )
-        repo.add_event_progress(event_id, f"已用 {_used_gb(server):.2f} GB，超过阈值 {float(server.get('threshold_gb') or 0):g} GB")
+        repo.add_event_progress(event_id, _limit_usage(server))
         # 已经停着的机器没有「下发指令」这一步，写清楚，别让过程看起来断了一截
         repo.add_event_progress(
             event_id,
@@ -1040,14 +1050,14 @@ class Engine:
                 # 用户以为机器在跑。保活和换班组都有读取事件，闲散机不该是盲区。
                 _read_error(
                     server_id=server_id,
-                    title=messages.ev("状态读取异常", messages.obj_server(label)),
+                    title=messages.ev("状态巡检异常", messages.obj_server(label)),
                     exc=exc,
                     tz_name=tz_name,
                 )
                 continue
             _read_recovered(
                 server_id=server_id,
-                title=messages.ev("状态读取已恢复", messages.obj_server(label)),
+                title=messages.ev("状态巡检已恢复", messages.obj_server(label)),
                 tz_name=tz_name,
             )
             if _over_threshold(server):
@@ -1135,14 +1145,14 @@ class Engine:
                 healthy_others.append(server)
                 _read_recovered(
                     server_id=member_id,
-                    title=messages.ev("状态读取已恢复", messages.obj_member(str(name), member_label)),
+                    title=messages.ev("状态巡检已恢复", messages.obj_member(str(name), member_label)),
                     tz_name=tz_name,
                 )
             except Exception as exc:  # noqa: BLE001
                 unreadable.add(member_id)
                 _read_error(
                     server_id=member_id,
-                    title=messages.ev("状态读取异常", messages.obj_member(str(name), member_label)),
+                    title=messages.ev("状态巡检异常", messages.obj_member(str(name), member_label)),
                     exc=exc,
                     group_id=group_id,
                     tz_name=tz_name,
@@ -1156,7 +1166,7 @@ class Engine:
         if duty_error:
             _read_error(
                 server_id=int(duty["id"]),
-                title=messages.ev("状态读取异常", messages.obj_duty(str(name), str(duty.get('label') or ''))),
+                title=messages.ev("状态巡检异常", messages.obj_duty(str(name), str(duty.get('label') or ''))),
                 exc=duty_error,
                 group_id=group_id,
                 tz_name=tz_name,
@@ -1164,7 +1174,7 @@ class Engine:
             return {"group_id": group_id, "state_unreadable": duty_error}
         _read_recovered(
             server_id=int(duty["id"]),
-            title=messages.ev("状态读取已恢复", messages.obj_duty(str(name), str(duty.get('label') or ''))),
+            title=messages.ev("状态巡检已恢复", messages.obj_duty(str(name), str(duty.get('label') or ''))),
             tz_name=tz_name,
         )
 
@@ -1229,9 +1239,9 @@ class Engine:
                 # 一律按全局熔断处理：全部节省停机。
                 breaker = True
                 if not healthy_others:
-                    breaker_reason = "其他成员状态读取失败，无法确认可接班的成员"
+                    breaker_reason = "其他成员状态巡检失败，无法确认可接班的成员"
                 elif len(healthy_others) < len(others):
-                    breaker_reason = "可读取的成员流量均已超限，其余成员状态读取失败"
+                    breaker_reason = "可读取的成员流量均已超限，其余成员状态巡检失败"
                 else:
                     breaker_reason = "全部成员流量超限"
 
@@ -1242,6 +1252,12 @@ class Engine:
 
         if _over_threshold(duty) and not failover:
             return self._handle_limit_stop(group, config, now, slot_key, duty, others, notify_enabled)
+
+        # 走到这里说明本班次既没熔断、当班也不超限（流量包重置 / 用户调高了阈值 /
+        # 已换到另一台）。把这两个「这段已经报过」的标记清掉，否则本段之后再熔断、
+        # 再超限时会被历史标记压住：事件照记，通知永远不发。
+        repo.clear_flag(f"breaker:{group_id}:{slot_key}")
+        repo.clear_flag(f"limit_stop:{group_id}:{slot_key}")
 
         # 抢占恢复跨多轮，用 flag 记住「这次是恢复而不是换班」（本地变量活不过一轮）；
         # event_id 是本班次正在进行的那条事件，后面「起不来」要复用它改成故障转移结论。
@@ -1402,7 +1418,7 @@ class Engine:
                             "error",
                             messages.ev("当班未就绪，无成员接替", messages.obj_group(str(name))),
                             f"{duty.get('label')}（{status_text}）{stall_reason}，"
-                            "其余成员要么流量也已超限，要么状态读取失败",
+                            "其余成员要么流量也已超限，要么状态巡检失败",
                             level="error",
                             group_id=group_id,
                             server_id=int(duty["id"]),
@@ -1419,7 +1435,7 @@ class Engine:
         # 已经结算过的班次被打回 switching、又重新就绪时，本班次的换班事件早就
         # 收尾了。此时若按「没结算过」处理，就会新建一条「换班进行中」并在两秒后
         # 改成「换班完成」—— 事件里一条开关机步骤都没有，因为机器本来就都在位。
-        # 实测触发场景：非换班时段网络抖了一下（成员状态读取失败），恢复后凭空
+        # 实测触发场景：非换班时段网络抖了一下（成员状态巡检失败），恢复后凭空
         # 多出一条「换班完成」。所以这里除了看 phase，还看本班次事件是不是已收尾。
         settled_before = previously_settled
         if not settled_before and run.get("event_id"):
@@ -1680,13 +1696,16 @@ class Engine:
                 elif waited >= _DDNS_WAIT_SECONDS:
                     ddns_ok = True
                     repo.clear_flag(wait_key)
-                    repo.add_event(
+                    eid = repo.add_event(
                         "error",
                         messages.ev("DDNS 未同步，换班照常结算", messages.obj_group(str(name))),
-                        f"已放行结算 / 等待 {_DDNS_WAIT_SECONDS // 60} 分钟仍未同步（{ddns_text}），"
-                        "请检查记录名、Token 与 Zone",
+                        f"已放行结算 / 等待 {_DDNS_WAIT_SECONDS // 60} 分钟仍未同步（{ddns_text}）",
                         level="warning",
                         group_id=group_id,
+                    )
+                    # 概览只陈述事实，排查建议放过程条目里，别让祈使句混进摘要。
+                    repo.add_event_progress(
+                        eid, "排查建议：检查记录名、Token 与 Zone"
                     )
             # 每班首次结算都写这一行：绑没绑域名、DDNS 开没开，详情里都要有
             # 「DDNS：…」。以前只在「开了 DDNS 且绑了域名」时才写，概览里明明写着
@@ -1948,7 +1967,7 @@ class Engine:
                 event_id = repo.add_event(
                     "breaker",
                     messages.ev("全局熔断", messages.obj_group(str(name))),
-                    f"{messages.stop_tail(everyone)} / {why}",
+                    f"{messages.stop_tail(everyone)}：{why}",
                     level="error",
                     group_id=group_id,
                 )
@@ -2000,15 +2019,13 @@ class Engine:
                         event_flag = f"limit_stop_evt:{group_id}:{slot_key}"
                         if not repo.get_flag(event_flag):
                             repo.set_flag(event_flag)
-                            used = _used_gb(duty)
-                            thr = float(duty.get('threshold_gb') or 0)
                             event_id = repo.add_event(
                                 "limit_stop",
                                 messages.ev(
                                     f"当班流量超限，{messages.stop_phrase(mode)}",
                                     messages.obj_duty(str(name), str(duty.get('label') or '')),
                                 ),
-                                f"等待停机到位 / 已用 {used:.2f} GB（阈值 {thr:g} GB）",
+                                f"等待停机到位 / {_limit_usage(duty)}",
                                 level="warning",
                                 group_id=group_id,
                                 server_id=int(duty["id"]),
@@ -2016,7 +2033,7 @@ class Engine:
                                 pending_status="Stopped",
                                 pending_kind="limit_stop",
                             )
-                            repo.add_event_progress(event_id, f"已用 {used:.2f} GB，超过阈值 {thr:g} GB")
+                            repo.add_event_progress(event_id, _limit_usage(duty))
                             repo.add_event_progress(event_id, f"已下发停机指令（{messages.mode_label(mode)}）")
                     except Exception as exc:  # noqa: BLE001
                         err_flag = f"limit_stop_err:{group_id}:{slot_key}"
@@ -2056,7 +2073,7 @@ class Engine:
         repo.upsert_run(
             group_id,
             slot_key,
-            phase=PHASE_BREAKER,
+            phase=PHASE_LIMIT_STOP,
             event_id=0,
             duty_server_id=int(duty["id"]),
             standby_server_ids=_encode_ids(others),
@@ -2306,6 +2323,11 @@ class Engine:
 
         results = notify.send_all(config, message)
         repo.set_flag(flag)
+        # 本班次已经结算，超时标记到此为止。以前只在上面 delayed 那条分支清，
+        # 走故障转移结算时标记会留到下一班：这一班后来被打回 switching（待机被
+        # 拉起来要重新停一遍）再超时，`_maybe_report_timeout` 一看到标记就直接
+        # return —— 既不发通知也不记事件，等于彻底静默。
+        repo.clear_flag(f"timeout:{group_id}:{slot_key}")
         self._record_settled(
             group_id,
             slot_key,
@@ -2341,7 +2363,8 @@ class Engine:
         DDNS 这段用 brief（「✅ DDNS已同步（…）」），与保活、手动开机的概览一致；
         通知里仍用 status，保持短句。
         """
-        detail = f"当班 {duty.get('label')} / 待机 {len(others)} 台 / {ddns_brief}"
+        # 三个字段并列，用逗号；「 / 」只留给「结论 / 细节」。
+        detail = f"当班 {duty.get('label')}，待机 {len(others)} 台，{ddns_brief}"
         run = repo.get_run(group_id, slot_key) or {}
         run_event_id = int(run.get("event_id") or 0)
         if run_event_id:
@@ -2472,7 +2495,7 @@ class Engine:
                 except Exception as exc:  # noqa: BLE001
                     mismatched += 1
                     repo.add_event_progress(
-                        event_id, f"{label}：状态读取失败（{_brief_exc(exc)}），交给下一轮同步重试"
+                        event_id, f"{label}：状态巡检失败（{_brief_exc(exc)}），交给下一轮同步重试"
                     )
                     continue
                 status = str(server.get("instance_status") or "")
@@ -2563,7 +2586,7 @@ class Engine:
                     repo.add_event_progress(event_id, f"{label}：{status}{suffix}，保持不动")
                 except Exception as exc:  # noqa: BLE001
                     repo.add_event_progress(
-                        event_id, f"{label}：状态读取失败（{_brief_exc(exc)}），保持不动"
+                        event_id, f"{label}：状态巡检失败（{_brief_exc(exc)}），保持不动"
                     )
 
                 item = keepalives.get(server_id)
@@ -3068,6 +3091,18 @@ def _used_gb(server: dict[str, Any]) -> float:
     return float(server.get("traffic_used") or 0)
 
 
+def _limit_usage(server: dict[str, Any]) -> str:
+    """「已用 30.00 GB（阈值 100 GB）」。
+
+    超限停机的概览与过程首条共用这一句：两处以前各写一遍，一处用括号、一处写
+    「超过阈值」，同一条信息两种措辞，看着像两条不同的事。
+    """
+    return (
+        f"已用 {_used_gb(server):.2f} GB"
+        f"（阈值 {float(server.get('threshold_gb') or 0):g} GB）"
+    )
+
+
 # 物理上已停机、可以不再下停机指令的 StoppedMode 取值。
 # 其中 Not-applicable 表示「本实例不支持停机不收费」，停机后照常收费，
 # 且无论怎么重发 StopCharging 都不可能变成节省停机 —— 必须认它「已停机」，
@@ -3496,7 +3531,7 @@ def _brief_exc(exc: Exception | str) -> str:
         text = aliyun.brief_error(exc)
     else:
         text = str(exc).strip()[:140]
-    # 上层模板已经写了「读取失败：」，这里去掉异常自带的「CDT 流量查询失败：」
+    # 上层模板已经写了「巡检失败：」，这里去掉异常自带的「CDT 流量查询失败：」
     # 之类前缀，避免一句话里连着两个「失败」。
     for sep in ("失败：", "失败:", "异常：", "异常:"):
         idx = text.find(sep)
@@ -3513,23 +3548,28 @@ def _read_error(
     group_id: int = 0,
     tz_name: str = "Asia/Shanghai",
 ) -> None:
-    """记一次状态读取失败：同一条进行中事件里写明失败时刻与重试节奏。
+    """记一次状态巡检失败：同一条进行中事件里写明失败时刻与重试节奏。
 
     不因为「这一次」就定性成错误：第一次只建一条**进行中**事件，详情写
-    「HH:MM:SS 读取失败（原因），每 N 秒重试，恢复后自动更新」；后续只刷新
+    「HH:MM:SS 巡检失败（原因），每 N 秒重试，恢复后自动更新」；后续只刷新
     概览里的最近时刻与次数，连续失败到阈值才升格为 error。恢复由
     _read_recovered 收尾并补上恢复时刻。
     """
     now = int(time.time())
     brief = _brief_exc(exc)
-    count = repo.bump_flag(f"read_err:{server_id}")
     interval = _retry_interval()
     event = repo.pending_event(server_id, "read_error")
+    key = f"read_err:{server_id}"
+    if event is None:
+        # 新的一段故障：计数从零开始。残留下的旧计数会让「第 1 次失败」
+        # 和恢复时的「连续失败 N 次」对不上。
+        repo.clear_flag(key)
+    count = repo.bump_flag(key)
     if event is None:
         eid = repo.add_event(
             "warning",
             title,
-            f"{_hms(now, tz_name)} 读取失败：{brief}；"
+            f"{_hms(now, tz_name)} 巡检失败：{brief}；"
             f"每 {interval} 秒重试，恢复后自动更新",
             level="warning",
             group_id=group_id,
@@ -3539,12 +3579,16 @@ def _read_error(
         )
         # 时间线首条用「第 1 次失败」而不是照抄概览（概览还带了重试节奏），
         # 这样展开后不会看到同一句话出现两遍，又能和第 2、3 次连成序列。
-        repo.add_event_progress(eid, f"{_hms(now, tz_name)} 第 1 次失败：{brief}")
+        # 条目不写时刻：前端左侧已经显示每条的 ts，正文再写一遍就重复了。
+        repo.add_event_progress(eid, f"第 1 次失败：{brief}")
         return
 
     eid = int(event["id"])
     repo.update_event(
         eid,
+        # 标题一并刷新：同一台机器可能先以「成员」身份失败、下一轮变成「当班」，
+        # 归属写在标题括号里，不跟着更新就会一直显示旧身份。
+        title=title,
         detail=(
             f"{_hms(now, tz_name)} 仍失败（连续 {count} 次）：{brief}；"
             f"每 {interval} 秒重试"
@@ -3553,7 +3597,7 @@ def _read_error(
     # 升格那一次（第 _READ_ERROR_ESCALATE 次）必须留痕：它是从「抖一下」变成
     # 「真有问题」的转折点，比前后任意一次都值得看，哪怕不在里程碑里也要记。
     if count in _READ_ERROR_MILESTONES or count == _READ_ERROR_ESCALATE:
-        repo.add_event_progress(eid, f"{_hms(now, tz_name)} 第 {count} 次失败：{brief}")
+        repo.add_event_progress(eid, f"第 {count} 次失败：{brief}")
     if count >= _READ_ERROR_ESCALATE:
         repo.update_event(eid, level="error")
 
@@ -3566,7 +3610,7 @@ def _read_recovered(
 ) -> None:
     """读取恢复正常：给那条进行中的事件补上恢复时刻并收尾。
 
-    title 是收尾后的标题（如「Ali-CDT-02 状态读取已恢复」）；本来就没在
+    title 是收尾后的标题（如「Ali-CDT-02 状态巡检已恢复」）；本来就没在
     失败中时直接返回，不产生任何事件。
     """
     key = f"read_err:{server_id}"
@@ -3581,12 +3625,12 @@ def _read_recovered(
     eid = int(event["id"])
     now = int(time.time())
     minutes = max(1, int(round(age / 60)))
-    repo.add_event_progress(eid, f"{_hms(now, tz_name)} 已恢复")
+    repo.add_event_progress(eid, "已恢复")
     repo.update_event(
         eid,
         title=title,
         detail=(
-            f"{_hms(now, tz_name)} 恢复正常"
+            f"{_hms(now, tz_name)} 已恢复"
             f"（此前连续失败 {count} 次，持续约 {minutes} 分钟）"
         ),
         # 收尾必须把级别降回来：图标颜色看 level、徽章看 status，只改 status
@@ -3608,7 +3652,7 @@ def _close_orphan_read_errors(monitored: set[int]) -> None:
             continue
         eid = int(event["id"])
         # 计数跟事件同生共死。只收事件不清标记的话，机器哪天重新被纳入监控，
-        # 下一轮读取失败会从旧值接着往上数：一上来就「连续 12 次」、立刻升红，
+        # 下一轮巡检失败会从旧值接着往上数：一上来就「连续 12 次」、立刻升红，
         # 恢复时还会写出「连续失败 14 次，持续约 1 分钟」这种自相矛盾的话。
         if server_id:
             repo.clear_flag(f"read_err:{server_id}")
@@ -3617,7 +3661,7 @@ def _close_orphan_read_errors(monitored: set[int]) -> None:
         repo.finish_event(
             eid,
             "done",
-            detail="对象已不在监控中，读取告警自动收尾",
+            detail="对象已不在监控中，巡检告警自动收尾",
         )
 
 
