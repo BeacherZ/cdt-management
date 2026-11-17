@@ -28,7 +28,7 @@
   <a href="docs/screenshots/03-dashboard-dark.png"><img src="docs/screenshots/03-dashboard-dark.png" width="48%" align="top" alt="概览（深色）"></a>
 </p>
 
-手机端（自适应布局，部分界面）
+手机端（自适应布局，点击查看大图）
 
 <p align="center">
   <a href="docs/screenshots/04-mobile-dashboard.png"><img src="docs/screenshots/04-mobile-dashboard.png" width="23.7%" align="top" alt="手机端概览（浅色）"></a>
