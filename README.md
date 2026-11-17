@@ -31,10 +31,10 @@
 手机端（自适应布局，部分界面）
 
 <p align="center">
-  <a href="docs/screenshots/04-mobile-dashboard.png"><img src="docs/screenshots/04-mobile-dashboard.png" width="22%" align="top" alt="手机端概览（浅色）"></a>
-  <a href="docs/screenshots/05-mobile-dashboard-dark.png"><img src="docs/screenshots/05-mobile-dashboard-dark.png" width="22%" align="top" alt="手机端概览（深色）"></a>
-  <a href="docs/screenshots/06-mobile-instances.png"><img src="docs/screenshots/06-mobile-instances.png" width="22%" align="top" alt="手机端实例管理"></a>
-  <a href="docs/screenshots/07-mobile-instances-dark.png"><img src="docs/screenshots/07-mobile-instances-dark.png" width="22%" align="top" alt="手机端实例管理（深色）"></a>
+  <a href="docs/screenshots/04-mobile-dashboard.png"><img src="docs/screenshots/04-mobile-dashboard.png" width="23.7%" align="top" alt="手机端概览（浅色）"></a>
+  <a href="docs/screenshots/05-mobile-dashboard-dark.png"><img src="docs/screenshots/05-mobile-dashboard-dark.png" width="23.7%" align="top" alt="手机端概览（深色）"></a>
+  <a href="docs/screenshots/06-mobile-instances.png"><img src="docs/screenshots/06-mobile-instances.png" width="23.7%" align="top" alt="手机端实例管理"></a>
+  <a href="docs/screenshots/07-mobile-instances-dark.png"><img src="docs/screenshots/07-mobile-instances-dark.png" width="23.7%" align="top" alt="手机端实例管理（深色）"></a>
 </p>
 
 ## ✨主要功能
