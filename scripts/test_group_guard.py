@@ -466,32 +466,51 @@ class LogoutRevokesTicket(_Base):
 
 
 class LoginRateLimitClient(_Base):
-    """限速按真实客户端算，但不给伪造留口子。"""
+    """限速按真实客户端算，但不给伪造留口子。
 
-    def test_public_peer_ignores_forwarded_for(self):
+    主桶是直连对端（严格 8 次），副桶是合法的 X-Forwarded-For（放宽 8 倍）。
+    以前「私网对端就无条件信 XFF」：Docker 端口映射下 peer 恒为 172.x 网关，
+    攻击者每轮编一个新 XFF 就是一个新桶，8 次/5 分钟的限流等于不存在。
+    """
+
+    def test_public_peer_is_primary(self):
         # 8.8.8.8 才是「公网直连」：192.0.2/198.51.100/203.0.113 这几段在
         # ipaddress 里也算 private，拿它们做样本会误判成「前面有代理」。
         request = _request("8.8.8.8", forwarded="198.51.100.7")
-        self.assertEqual(api._client_ip(request), "8.8.8.8")  # noqa: SLF001
+        self.assertEqual(api._client_keys(request)[0], "8.8.8.8")  # noqa: SLF001
 
-    def test_private_peer_uses_forwarded_for(self):
+    def test_private_peer_keeps_both_buckets(self):
         request = _request("172.18.0.1", forwarded="198.51.100.7, 172.18.0.1")
-        self.assertEqual(api._client_ip(request), "198.51.100.7")  # noqa: SLF001
+        self.assertEqual(  # noqa: SLF001
+            api._client_keys(request), ["172.18.0.1", "198.51.100.7"]
+        )
 
-    def test_invalid_forwarded_for_falls_back_to_peer(self):
+    def test_invalid_forwarded_for_ignored(self):
         request = _request("127.0.0.1", forwarded="not-an-ip")
-        self.assertEqual(api._client_ip(request), "127.0.0.1")  # noqa: SLF001
+        self.assertEqual(api._client_keys(request), ["127.0.0.1"])  # noqa: SLF001
+
+    def test_forged_forwarded_for_cannot_bypass(self):
+        """每轮伪造一个新 XFF，只是多开一个副桶；共用的 peer 桶照样会满。"""
+        api._login_failures.clear()  # noqa: SLF001
+        for i in range(api.LOGIN_MAX_FAILURES):  # noqa: SLF001
+            forged = _request("172.18.0.1", forwarded=f"198.51.100.{i + 1}")
+            api._record_failure(api._client_keys(forged))  # noqa: SLF001
+        # 第 9 次换了个从没出现过的 IP：主桶已经到顶，必须拒
+        forged = _request("172.18.0.1", forwarded="203.0.113.250")
+        self.assertTrue(api._rate_limited(api._client_keys(forged)))  # noqa: SLF001
+        api._login_failures.clear()  # noqa: SLF001
 
     def test_failures_expire(self):
         api._login_failures.clear()  # noqa: SLF001
+        keys = ["198.51.100.7"]
         for _ in range(api.LOGIN_MAX_FAILURES):  # noqa: SLF001
-            api._record_failure("198.51.100.7")  # noqa: SLF001
-        self.assertTrue(api._rate_limited("198.51.100.7"))  # noqa: SLF001
+            api._record_failure(keys)  # noqa: SLF001
+        self.assertTrue(api._rate_limited(keys))  # noqa: SLF001
         # 窗口过了就不再锁
         api._login_failures["198.51.100.7"] = [  # noqa: SLF001
             time.time() - api.LOGIN_WINDOW - 1  # noqa: SLF001
         ] * api.LOGIN_MAX_FAILURES  # noqa: SLF001
-        self.assertFalse(api._rate_limited("198.51.100.7"))  # noqa: SLF001
+        self.assertFalse(api._rate_limited(keys))  # noqa: SLF001
         self.assertNotIn("198.51.100.7", api._login_failures)  # noqa: SLF001
         api._login_failures.clear()  # noqa: SLF001
 

@@ -75,6 +75,8 @@ export function groupStateTone(state: string): Tone {
   if (state === 'manual') return 'blue'
   if (state === 'switching') return 'blue'
   if (state === 'breaker') return 'red'
+  // 超限停机比熔断轻一档：只停了当班，不是整组都没法接
+  if (state === 'limit_stop') return 'amber'
   if (state === 'error') return 'red'
   return 'gray'
 }
@@ -268,6 +270,9 @@ export function Segmented<T extends string>({
 
 /* -------------------------------------------------------------- 模态 */
 
+/** 打开中的弹窗栈（底 → 顶）。Esc 只关最上面那一层。 */
+const modalStack: symbol[] = []
+
 export function Modal({
   title,
   icon,
@@ -284,6 +289,7 @@ export function Modal({
   wide?: boolean
 }) {
   const ref = useRef<HTMLDivElement>(null)
+  const modalId = useRef(Symbol('modal'))
   // onClose 每次渲染都是新函数（父组件里是内联箭头），不能进依赖数组：
   // 否则父组件每秒 setTick 重渲染一次，这个 effect 就每秒重跑一次，
   // 每次都 focus() 一下会把 <select> 的原生下拉框顶掉——表现就是「点开闪一下就没了」。
@@ -291,8 +297,15 @@ export function Modal({
   closeRef.current = onClose
 
   useEffect(() => {
+    const id = modalId.current
+    modalStack.push(id)
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') closeRef.current()
+      if (event.key !== 'Escape') return
+      // 只让最上面那一层响应。以前每层都独立监听 document，ServerDialog 里再开
+      // 停机确认框时，一次 Esc 会把两层一起关掉，AK/SK 和没保存的输入全丢。
+      if (modalStack[modalStack.length - 1] !== id) return
+      event.stopPropagation()
+      closeRef.current()
     }
     document.addEventListener('keydown', onKey)
     const previousOverflow = document.body.style.overflow
@@ -301,6 +314,8 @@ export function Modal({
     ref.current?.focus()
     return () => {
       document.removeEventListener('keydown', onKey)
+      const index = modalStack.lastIndexOf(id)
+      if (index >= 0) modalStack.splice(index, 1)
       document.body.style.overflow = previousOverflow
     }
   }, [])

@@ -45,6 +45,13 @@ export function applyTheme(mode: ThemeMode | undefined): ResolvedTheme {
   document
     .querySelector('meta[name="theme-color"]')
     ?.setAttribute('content', THEME_COLOR[resolved])
+  // 记下上次真正呈现的主题：index.html 里的内联脚本靠它在本轮请求返回前
+  // 就把 data-theme 写上，深色用户刷新时不会先白一屏。
+  try {
+    localStorage.setItem('cdt_theme', resolved)
+  } catch {
+    /* 隐私模式下 localStorage 可能不可写，忽略 */
+  }
   return resolved
 }
 

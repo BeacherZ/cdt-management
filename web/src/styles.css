@@ -325,6 +325,18 @@ a:hover {
     0 10px 20px -12px rgba(11, 122, 88, 0.5);
 }
 
+/* 深色主题下 --accent-grad 换成亮绿（见 :root[data-theme='dark']），白字压上去
+   只有 1.9:1，远低于 4.5:1 ——「添加实例 / 保存 / 立即换班」在这种底色上几乎是虚的。
+   只换文字颜色，渐变、内高光、hover 扫光都不动。登录页 .auth 特意把渐变调回深绿，
+   那里继续保持白字。 */
+:root[data-theme='dark'] .btn.primary {
+  color: #04241b;
+}
+
+:root[data-theme='dark'] .auth .btn.primary {
+  color: #fff;
+}
+
 /* hover 时一道光从左扫到右，给主按钮一点「活」的质感 */
 .btn.primary::after {
   content: '';
@@ -2113,6 +2125,13 @@ input[type='number']::-webkit-inner-spin-button {
   color: #fff;
   background: var(--accent-grad);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.26);
+}
+
+/* 「当班」胶囊与主按钮同底，深色下同样要换深色字，否则白字压在亮绿上看不清 */
+:root[data-theme='dark'] .slot-top .duty-tag,
+:root[data-theme='dark'] .slot-side .duty-tag,
+:root[data-theme='dark'] .inst-owner-line .duty-tag {
+  color: #04241b;
 }
 
 /* 槽位主体：左信息 / 右 IP+流量。列宽写在样式里而不是内联，

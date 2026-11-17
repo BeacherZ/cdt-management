@@ -100,6 +100,7 @@ class GroupState(unittest.TestCase):
             "manual",
             "recovering",
             "breaker",
+            "limit_stop",
             "error",
             "disabled",
             "idle",

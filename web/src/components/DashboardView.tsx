@@ -45,6 +45,9 @@ const EVENT_ICON: Record<string, typeof Info> = {
   keepalive_resume: Cloud,
   keepalive_quiet: Cloud,
   keepalive_rest_error: AlertTriangle,
+  // 巡检 / 费用这类「读不到数据但系统还在跑」的事件拿 warning 当形状，颜色看 level。
+  // 以前没有这条映射，会落到 Info 的圆圈图标，和 kind=error 的旧事件长得不一样。
+  warning: AlertTriangle,
 }
 
 /** 事件列表默认露这么多条，点一次「显示更多事件」再加这么多（后端最多给 20 条） */

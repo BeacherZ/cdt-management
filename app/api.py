@@ -20,6 +20,7 @@ from .shift import (
     PHASE_BREAKER,
     PHASE_ERROR,
     PHASE_FAILOVER,
+    PHASE_LIMIT_STOP,
     PHASE_MANUAL,
     PHASE_SETTLED,
     PHASE_SWITCHING,
@@ -43,6 +44,7 @@ PHASE_LABELS = {
     PHASE_FAILOVER: "故障转移",
     PHASE_MANUAL: "手动换班",
     PHASE_BREAKER: "熔断停机",
+    PHASE_LIMIT_STOP: "流量超限停机",
     PHASE_ERROR: "异常",
     "pending": "待执行",
 }
@@ -56,6 +58,7 @@ GROUP_STATES = {
     "manual": "手动换班中",
     "recovering": "恢复中",
     "breaker": "已熔断停机",
+    "limit_stop": "已超限停机",
     "error": "换班异常",
     "disabled": "已停用",
     "idle": "待排班",
@@ -86,6 +89,10 @@ def group_state(
         return "error"
     if phase == PHASE_BREAKER:
         return "breaker"
+    # 超限停机不等于熔断：熔断是全组都没法接、全部停掉；这里只是当班自己超了阈值。
+    # 分开报，否则界面说「已熔断」、事件说「当班流量超限停机」，两个结论打架。
+    if phase == PHASE_LIMIT_STOP:
+        return "limit_stop"
 
     duty_id = int(picked[0]["server_id"])
     duty = servers.get(duty_id) or {}
@@ -261,6 +268,9 @@ _login_failures: dict[str, list[float]] = {}
 _login_lock = threading.Lock()
 LOGIN_WINDOW = 300
 LOGIN_MAX_FAILURES = 8
+# 副桶（X-Forwarded-For 那一把）的阈值倍数：伪造来源 IP 的人只能打满自己编的桶，
+# 共用的网关桶要累积到 8×8 次才锁，足够挡住爆破又不至于误伤同一出口的正常用户。
+_LOGIN_BACKUP_FACTOR = 8
 
 # 概览页的事件窗口：一次最多给这么多条。前端先露 8 条，
 # 剩下的点「显示更多事件」再展开，不用每次翻页都重新请求。
@@ -293,8 +303,12 @@ def _current_user(request: Request) -> str | None:
         if repo.is_session_revoked(security.session_id(token)):
             return None
     except Exception:  # noqa: BLE001
-        # 黑名单查不到（库锁住之类）不该把整个请求打成 500：签名本身已经验过了
-        log.warning("会话黑名单查询失败，按未吊销处理", exc_info=True)
+        # 黑名单查不到就保守拒绝（fail-closed）。签名本身虽然验过了，但「查不到
+        # 吊销名单」意味着无法排除这是一张已注销/被盗的票据 —— 放行等于让退出登录
+        # 在这段时间里形同虚设。库真锁住了，其它接口本来也用不了，让人重登一次
+        # 比静默放行安全。
+        log.warning("会话黑名单查询失败，本次请求按未登录处理", exc_info=True)
+        return None
     return user
 
 
@@ -678,8 +692,8 @@ def register(app: FastAPI) -> None:
     # -- 登录 -----------------------------------------------------------
     @app.post("/api/v1/auth/login")
     def login(request: Request, payload: dict[str, Any]):  # noqa: ANN202
-        client = _client_ip(request)
-        if _rate_limited(client):
+        keys = _client_keys(request)
+        if _rate_limited(keys):
             raise HTTPException(status_code=429, detail="尝试过于频繁，请 5 分钟后再试")
 
         username = str(payload.get("username") or "").strip()
@@ -688,10 +702,10 @@ def register(app: FastAPI) -> None:
         stored_hash = repo.get_setting("admin_password")
 
         if username != stored_user or not security.verify_password(password, stored_hash):
-            _record_failure(client)
+            _record_failure(keys)
             raise HTTPException(status_code=401, detail="用户名或密码不正确")
 
-        _reset_failures(client)
+        _reset_failures(keys)
         response = JSONResponse({"ok": True, "username": username})
         _attach_session(response, username)
         return response
@@ -1328,35 +1342,41 @@ def _attach_session(response: JSONResponse, username: str, epoch: int | None = N
 # 登录限速
 # --------------------------------------------------------------------------
 
-def _is_private_peer(host: str) -> bool:
-    try:
-        addr = ipaddress.ip_address(host)
-    except ValueError:
-        return False
-    return addr.is_private or addr.is_loopback or addr.is_link_local
+def _client_keys(request: Request) -> list[str]:
+    """登录限速用的桶：主桶（直连对端）严格，副桶（合法 XFF）放宽。
 
+    只信 X-Forwarded-For 会被「每次伪造一个头就是一个新桶」绕过；只信直连对端
+    又会在反向代理后面把所有人塞进同一个桶（Docker 端口映射下 peer 恒为 172.x
+    网关），别人连错 8 次、管理员跟着被锁 5 分钟。
 
-def _client_ip(request: Request) -> str:
-    """登录限速用的客户端标识。
-
-    直接暴露时直连对端就是真实来源，X-Forwarded-For 一概不信 —— 否则攻击者
-    每次随便填一个 IP 就绕过了限速。只有当直连对端是内网/回环地址（说明前面
-    有反向代理，Docker 默认桥接也一样）时才取 XFF 的第一段，否则所有人共用
-    网关那一个 IP，别人连错 8 次，管理员跟着被锁 5 分钟。
+    所以两把都记：peer 一把，合法的 XFF 再一把。主桶按正常阈值判，副桶放宽
+    `_LOGIN_BACKUP_FACTOR` 倍 —— 伪造 XFF 的攻击者只能把自己编的假桶打满，共用
+    的那把网关桶迟早会到顶；正常用户也不会因为邻居手滑就立刻被牵连。
     """
     peer = (request.client.host if request.client else "") or "unknown"
-    if _is_private_peer(peer):
-        forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    keys = [peer]
+    forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    if forwarded and forwarded != peer:
         try:
             ipaddress.ip_address(forwarded)
         except ValueError:
             pass
         else:
-            return forwarded
-    return peer
+            keys.append(forwarded)
+    return keys
 
 
-def _rate_limited(client: str) -> bool:
+def _over_limit(client: str, limit: int, now: float) -> bool:
+    """清掉窗口外的记录，再判断这个桶是否到顶。调用方必须已持有 _login_lock。"""
+    attempts = [t for t in _login_failures.get(client, []) if now - t < LOGIN_WINDOW]
+    if attempts:
+        _login_failures[client] = attempts
+    else:
+        _login_failures.pop(client, None)
+    return len(attempts) >= limit
+
+
+def _rate_limited(keys: list[str]) -> bool:
     now = time.time()
     with _login_lock:
         # 顺手清掉过期条目：只清理当前 key 的话，字典会跟着来访 IP 一直长
@@ -1365,19 +1385,22 @@ def _rate_limited(client: str) -> bool:
                 k for k, v in _login_failures.items() if not v or now - v[-1] >= LOGIN_WINDOW
             ]:
                 _login_failures.pop(key, None)
-        attempts = [t for t in _login_failures.get(client, []) if now - t < LOGIN_WINDOW]
-        if attempts:
-            _login_failures[client] = attempts
-        else:
-            _login_failures.pop(client, None)
-        return len(attempts) >= LOGIN_MAX_FAILURES
+        if _over_limit(keys[0], LOGIN_MAX_FAILURES, now):
+            return True
+        return any(
+            _over_limit(key, LOGIN_MAX_FAILURES * _LOGIN_BACKUP_FACTOR, now)
+            for key in keys[1:]
+        )
 
 
-def _record_failure(client: str) -> None:
+def _record_failure(keys: list[str]) -> None:
+    now = time.time()
     with _login_lock:
-        _login_failures.setdefault(client, []).append(time.time())
+        for key in keys:
+            _login_failures.setdefault(key, []).append(now)
 
 
-def _reset_failures(client: str) -> None:
+def _reset_failures(keys: list[str]) -> None:
     with _login_lock:
-        _login_failures.pop(client, None)
+        for key in keys:
+            _login_failures.pop(key, None)

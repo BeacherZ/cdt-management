@@ -232,5 +232,82 @@ class GroupPath(_Base):
         self.assertAlmostEqual(self._traffic_of(duty), 195.0)
 
 
+class LimitStopPhase(_Base):
+    """单机超限停机要写自己的相位，不能借用「熔断」。
+
+    以前 `_handle_limit_stop` 也写 `phase=breaker`，界面徽章就显示成
+    「已熔断停机」，而事件里写的是「当班流量超限停机」—— 两个结论打架。
+    """
+
+    def _group(self, duty: int, standby: int, failover: bool = False) -> int:
+        group_id = repo.upsert_group(
+            {
+                "name": "超限组",
+                "enabled": True,
+                "failover_enabled": failover,
+                "members": [
+                    {"server_id": duty, "hours": 12},
+                    {"server_id": standby, "hours": 12},
+                ],
+            }
+        )
+        db.execute(
+            "UPDATE shift_groups SET anchor_at=? WHERE id=?",
+            (int(time.time() - 3600), group_id),
+        )
+        return group_id
+
+    def _last_run(self, group_id: int) -> dict:
+        row = db.query_one(
+            "SELECT * FROM shift_runs WHERE group_id=? ORDER BY rowid DESC LIMIT 1",
+            (group_id,),
+        )
+        return dict(row) if row else {}
+
+    def test_phase_is_limit_stop_not_breaker(self) -> None:
+        duty = _make_server("当班A", status="Running", traffic=195.0)
+        standby = _make_server("休班B", status="Stopped", traffic=10.0)
+        _add_sample_at(duty, 195.0, int(time.time()) - 3600)
+        _add_sample_at(standby, 10.0, int(time.time()) - 3600)
+        # 关掉自动换班：超限时没有可接班的，走「单机停机」这条分支
+        group_id = self._group(duty, standby, failover=False)
+
+        shift.engine.reconcile_group(
+            repo.get_group(group_id) or {}, repo.get_settings(), _now_dt(), float(time.time())
+        )
+
+        run = self._last_run(group_id)
+        self.assertEqual(str(run.get("phase")), shift.PHASE_LIMIT_STOP)
+        self.assertNotEqual(str(run.get("phase")), shift.PHASE_BREAKER)
+
+    def test_dedupe_flags_cleared_when_back_to_normal(self) -> None:
+        """流量回落后（月包重置 / 调高阈值）要清掉「这段已报过」的标记。
+
+        不清的话，同一班次再熔断 / 再超限时只记事件、永远不推通知。
+        """
+        duty = _make_server("当班A", status="Running", traffic=10.0)
+        standby = _make_server("休班B", status="Stopped", traffic=10.0)
+        _add_sample_at(duty, 10.0, int(time.time()) - 3600)
+        _add_sample_at(standby, 10.0, int(time.time()) - 3600)
+        group_id = self._group(duty, standby, failover=False)
+
+        # 先跑一轮把本班次的 slot_key 建出来
+        shift.engine.reconcile_group(
+            repo.get_group(group_id) or {}, repo.get_settings(), _now_dt(), float(time.time())
+        )
+        slot = str(self._last_run(group_id).get("slot") or "")
+        self.assertTrue(slot, "应该已经建出本班次的 run 行")
+
+        repo.set_flag(f"breaker:{group_id}:{slot}")
+        repo.set_flag(f"limit_stop:{group_id}:{slot}")
+
+        shift.engine.reconcile_group(
+            repo.get_group(group_id) or {}, repo.get_settings(), _now_dt(), float(time.time()) + 5
+        )
+
+        self.assertFalse(repo.get_flag(f"breaker:{group_id}:{slot}"))
+        self.assertFalse(repo.get_flag(f"limit_stop:{group_id}:{slot}"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

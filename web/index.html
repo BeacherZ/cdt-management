@@ -6,6 +6,29 @@
     <!-- 默认浅色：主题由后端设置决定，由 theme.ts 在运行时改写这两个 meta -->
     <meta name="color-scheme" content="light" />
     <meta name="theme-color" content="#eceff3" />
+    <!-- 首屏防白闪：后端设置要等一次请求，那几百毫秒里深色用户会看到整页白底。
+         这里先用上次真正呈现过的主题（localStorage）或系统偏好把属性写上，
+         theme.ts 拿到后端设置后再纠正 —— 大多数情况下两者一致，不会闪。 -->
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem('cdt_theme')
+          var theme =
+            saved === 'dark' || saved === 'light'
+              ? saved
+              : window.matchMedia('(prefers-color-scheme: dark)').matches
+                ? 'dark'
+                : 'light'
+          if (theme === 'dark') document.documentElement.dataset.theme = 'dark'
+          var scheme = document.querySelector('meta[name="color-scheme"]')
+          if (scheme) scheme.setAttribute('content', theme)
+          var color = document.querySelector('meta[name="theme-color"]')
+          if (color) color.setAttribute('content', theme === 'dark' ? '#080b0f' : '#eceff3')
+        } catch (e) {
+          /* localStorage 被禁用（隐私模式）：退回 index.html 的默认浅色 */
+        }
+      })()
+    </script>
     <title>CDT-Management</title>
     <link
       rel="icon"
