@@ -104,24 +104,10 @@
 **说明**：支持 Telegram、邮件、Webhook 三类渠道，可同时开启。
 
 <details>
-<summary>9 种通知的实际推送效果（点击展开）</summary>
+<summary>9 种通知的实际推送效果（点击查看大图）</summary>
 
 <p align="center">
-  <a href="docs/screenshots/16-notify-shift.png"><img src="docs/screenshots/16-notify-shift.png" width="31%" align="top" alt="CDT 换班完成报告（换班组）"></a>
-  <a href="docs/screenshots/17-notify-failover.png"><img src="docs/screenshots/17-notify-failover.png" width="31%" align="top" alt="CDT 故障转移报告（换班组）"></a>
-  <a href="docs/screenshots/18-notify-breaker.png"><img src="docs/screenshots/18-notify-breaker.png" width="31%" align="top" alt="CDT 全局熔断报告（换班组）"></a>
-</p>
-
-<p align="center">
-  <a href="docs/screenshots/19-notify-limitstop.png"><img src="docs/screenshots/19-notify-limitstop.png" width="31%" align="top" alt="CDT 全局熔断报告（换班组·单台）"></a>
-  <a href="docs/screenshots/20-notify-over-keepalive.png"><img src="docs/screenshots/20-notify-over-keepalive.png" width="31%" align="top" alt="CDT 超限停机报告（单机保活）"></a>
-  <a href="docs/screenshots/21-notify-over-idle.png"><img src="docs/screenshots/21-notify-over-idle.png" width="31%" align="top" alt="CDT 超限停机报告（闲散手动）"></a>
-</p>
-
-<p align="center">
-  <a href="docs/screenshots/22-notify-recovery.png"><img src="docs/screenshots/22-notify-recovery.png" width="31%" align="top" alt="CDT 抢占恢复报告"></a>
-  <a href="docs/screenshots/23-notify-error.png"><img src="docs/screenshots/23-notify-error.png" width="31%" align="top" alt="CDT 换班异常报告（换班组）"></a>
-  <a href="docs/screenshots/24-notify-daily.png"><img src="docs/screenshots/24-notify-daily.png" width="31%" align="top" alt="CDT 每日报告"></a>
+  <a href="docs/screenshots/25-notify-overview.png"><img src="docs/screenshots/25-notify-overview.png" width="96%" alt="9 种通知推送效果：换班完成、故障转移、全局熔断、超限停机（换班组 / 单机保活 / 闲散）、抢占恢复、换班异常、每日报告"></a>
 </p>
 
 </details>
