@@ -229,7 +229,7 @@ class MonthCycle(unittest.TestCase):
         starts: list[int] = []
         stops: list[int] = []
 
-        def _fake_refresh(server: dict) -> None:
+        def _fake_refresh(server: dict, with_traffic: bool = True) -> None:
             state = status[int(server["id"])]
             server["instance_status"] = state
             server["stopped_mode"] = "StopCharging" if state == "Stopped" else ""

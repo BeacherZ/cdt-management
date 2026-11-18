@@ -122,7 +122,7 @@ class _DdnsFailBase(_Base):
             (int(time.time() - 3600), self.group_id),
         )
 
-        def _fake_refresh(server):  # noqa: ANN001
+        def _fake_refresh(server, with_traffic: bool = True):  # noqa: ANN001
             if int(server["id"]) == self.duty:
                 server.update(
                     traffic_used=1.0,

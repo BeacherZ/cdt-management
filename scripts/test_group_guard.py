@@ -327,7 +327,7 @@ class LimitStopThrottle(_Base):
             (int(time.time() - 3600), self.group_id),
         )
 
-        def _fake_refresh(server):  # noqa: ANN001
+        def _fake_refresh(server, with_traffic: bool = True):  # noqa: ANN001
             if int(server["id"]) == self.duty:
                 server.update(
                     traffic_used=195.0,
@@ -397,7 +397,7 @@ class UnreadableStateNoCommand(_Base):
         started: list[int] = []
         aliyun.start_instance = lambda server: started.append(int(server["id"]))
 
-        def _boom(server):  # noqa: ANN001, ARG002
+        def _boom(server, with_traffic: bool = True):  # noqa: ANN001, ARG002
             raise RuntimeError("RequestTimeout")
 
         shift._refresh = _boom  # noqa: SLF001
@@ -413,7 +413,7 @@ class UnreadableStateNoCommand(_Base):
     def test_member_unreadable_blocks_settle(self):
         """组员状态读不到时不能算「全部到位」，否则会带着一台可能还在跑的机器结算。"""
 
-        def _partial(server):  # noqa: ANN001
+        def _partial(server, with_traffic: bool = True):  # noqa: ANN001
             if int(server["id"]) == self.a:
                 server.update(
                     traffic_used=10.0,
@@ -554,7 +554,7 @@ class SingleActiveMemberGroup(_Base):
         self.assertEqual(result.get("skipped"), "成员不足两台")
 
         # dry-run 的 mock 会用自己的流量覆盖库里的值，这里钉住「在跑 + 已超限」
-        def _fake_refresh(server):  # noqa: ANN001
+        def _fake_refresh(server, with_traffic: bool = True):  # noqa: ANN001
             server.update(
                 traffic_used=260.0,
                 instance_status="Running",
@@ -621,7 +621,7 @@ class StopAlwaysFallsBack(_Base):
         group_id = self._group()
         traffic = {self.duty: 10.0, self.standby: 5.0}
 
-        def _fake_refresh(server):  # noqa: ANN001
+        def _fake_refresh(server, with_traffic: bool = True):  # noqa: ANN001
             sid = int(server["id"])
             if sid == self.standby:
                 server.update(
@@ -648,7 +648,7 @@ class StopAlwaysFallsBack(_Base):
     def test_breaker_uses_fallback(self):
         group_id = self._group(failover=True)
 
-        def _fake_refresh(server):  # noqa: ANN001
+        def _fake_refresh(server, with_traffic: bool = True):  # noqa: ANN001
             server.update(
                 traffic_used=260.0,
                 instance_status="Running",
@@ -665,7 +665,7 @@ class StopAlwaysFallsBack(_Base):
     def test_limit_stop_uses_fallback(self):
         group_id = self._group(failover=False)
 
-        def _fake_refresh(server):  # noqa: ANN001
+        def _fake_refresh(server, with_traffic: bool = True):  # noqa: ANN001
             if int(server["id"]) == self.duty:
                 server.update(
                     traffic_used=260.0,

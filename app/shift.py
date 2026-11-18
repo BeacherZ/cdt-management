@@ -602,9 +602,171 @@ def current_member_index(group: dict[str, Any], now_ts: float) -> int:
 # 引擎
 # --------------------------------------------------------------------------
 
+# 用户手动操作（新建组 / 手动换班 / 解散 / 单机开关机）等这一组正在跑的那轮
+# 对账结束时最多等多久。换班一轮只有几次 API 调用，正常几百毫秒就放锁；
+# 等满这个数说明确实卡住了，宁可让用户重试，也不能并发下发指令。
+_GROUP_LOCK_TIMEOUT = 30.0
+
 class Engine:
     def __init__(self) -> None:
         self._lock = threading.Lock()
+        # 换班加速用的两样东西：
+        #   _group_locks —— 按组互斥。日常巡检和加速通道都会跑 reconcile_group，
+        #                   同一组必须只有一条线在推进，否则两边都读到「当班没起来」
+        #                   会各发一次开机指令。锁是**按组**的，所以加速不会把整轮
+        #                   日常巡检挤掉，只会让该组这一轮跳过（它正被加速推着走）。
+        #   _awaiting    —— 「已经下发了指令、正在等状态到位」的组：
+        #                   group_id → (班次键, 打开时刻, 截止时刻)。
+        #                   没有指令在飞就不加速，避免为了「等 DDNS」这种纯等待也提速。
+        self._group_locks: dict[int, threading.Lock] = {}
+        self._group_locks_guard = threading.Lock()
+        # 谁持着这把组锁：threading.Lock 允许**非持有者** release，将来任何一处
+        # 误调用都会静默破坏互斥且不报错，所以自己记归属，只放自己拿的那把。
+        self._group_owner: dict[int, int] = {}
+        self._awaiting: dict[int, tuple[str, float, float]] = {}
+        # 窗口记账会被两条线程同时碰（加速通道收过期窗口、对账线程登记新窗口），
+        # 读-改-写必须串起来，否则预算会被算漏、窗口关不干净。
+        self._await_guard = threading.RLock()
+        # 每个班次已经用掉的加速秒数：group_id → (班次键, 累计秒数)。
+        # 卡死场景（竞价没库存、欠费冻结）里每轮巡检都会重新下发指令，只靠 TTL
+        # 挡不住窗口被反复打开，必须有按班次的预算上限。
+        self._await_used: dict[int, tuple[str, float]] = {}
+        # 上次真正读过流量的时刻：加速轮不查流量，靠它判断要不要补读一次，
+        # 免得日常巡检被跳过的那几轮让超限判断一直用旧读数。
+        self._traffic_checked: dict[int, float] = {}
+
+    # -- 按组互斥 ---------------------------------------------------------
+    def _lock_for(self, group_id: int) -> threading.Lock:
+        with self._group_locks_guard:
+            lock = self._group_locks.get(group_id)
+            if lock is None:
+                lock = threading.Lock()
+                self._group_locks[group_id] = lock
+            return lock
+
+    def _group_lock(self, group_id: int, timeout: float = 0.0) -> bool:
+        """拿这一组的推进权。
+
+        默认非阻塞（timeout=0）：抢不到说明另一条通道正在推进它，跳过这一组就好
+        （只跳这一组，别的组、保活、闲散照常）。用户手动操作传 timeout，
+        等正在跑的那一轮结束，避免两条线同时给同一批实例下指令。
+        """
+        gid = int(group_id)
+        lock = self._lock_for(gid)
+        ok = lock.acquire(blocking=False) if timeout <= 0 else lock.acquire(timeout=timeout)
+        if ok:
+            with self._group_locks_guard:
+                self._group_owner[gid] = threading.get_ident()
+        return ok
+
+    def _group_unlock(self, group_id: int) -> None:
+        gid = int(group_id)
+        me = threading.get_ident()
+        with self._group_locks_guard:
+            lock = self._group_locks.get(gid)
+            owner = self._group_owner.get(gid)
+        if lock is None or owner != me:
+            # 不是自己拿的锁：宁可不放。放错了会让另一条线程以为拿到了互斥。
+            log.warning("换班组 %s 的组锁不由当前线程持有，跳过解锁", gid)
+            return
+        try:
+            lock.release()
+        except RuntimeError:  # pragma: no cover - 正常路径不会触发
+            pass
+        finally:
+            with self._group_locks_guard:
+                if self._group_owner.get(gid) == me:
+                    self._group_owner.pop(gid, None)
+
+    # -- 换班加速窗口 -----------------------------------------------------
+    def _close_awaiting(self, group_id: int, now: float | None = None) -> None:
+        """关窗口并把这半段用掉的加速时长记进本班次预算。"""
+        gid = int(group_id)
+        with self._await_guard:
+            win = self._awaiting.pop(gid, None)
+            if win is None:
+                return
+            slot, opened_at, deadline = win
+            spent = max(
+                0.0, min(now if now is not None else time.time(), deadline) - opened_at
+            )
+            used_slot, used = self._await_used.get(gid, (slot, 0.0))
+            if used_slot != slot:
+                used = 0.0
+            self._await_used[gid] = (slot, used + spent)
+
+    def _clear_awaiting(self, group_id: int) -> None:
+        self._close_awaiting(group_id)
+
+    def _mark_awaiting(self, group_id: int, slot: str = "") -> None:
+        """刚下发过一次开机/停机指令：接下来这段时间加密读状态。
+
+        窗口从**下发那一刻**开始算，不是整段换班期。当班还在跑、待机还没下
+        停机指令时不需要加速（那些轮次也没有指令在飞）。
+
+        三重限制，缺一个就会让 10 秒轮询变成常态：
+          1) 窗口不续期：已经在窗口里就不再往后推，最多 SHIFT_AWAIT_TTL 自动回落；
+          2) 按班次记账：同一班次累计加速超过 SHIFT_AWAIT_BUDGET 就不再打开；
+          3) 换班次才重置预算 —— 真正的新一轮换班值得一个完整的加速额度。
+        """
+        gid = int(group_id)
+        slot = str(slot or "")
+        now = time.time()
+        with self._await_guard:
+            win = self._awaiting.get(gid)
+            if win is not None:
+                if win[2] > now and win[0] == slot:
+                    return  # 同一段窗口还在，不续期
+                self._close_awaiting(gid, now)
+            used_slot, used = self._await_used.get(gid, (slot, 0.0))
+            if used_slot != slot:
+                used = 0.0
+                self._await_used[gid] = (slot, 0.0)
+            if used >= settings.SHIFT_AWAIT_BUDGET:
+                return  # 本班次的加速额度已用完，回落成日常巡检间隔
+            self._awaiting[gid] = (slot, now, now + settings.SHIFT_AWAIT_TTL)
+
+    def awaiting_groups(self) -> list[int]:
+        """当前需要加速读取的组（顺手做过期清理）。"""
+        now = time.time()
+        with self._await_guard:
+            expired = [gid for gid, win in self._awaiting.items() if win[2] <= now]
+            for gid in expired:
+                self._close_awaiting(gid, now)
+            return list(self._awaiting)
+
+    def reconcile_awaiting(self) -> None:
+        """加速通道：只跑「有指令在飞」的那几组，只读状态、不查流量。
+
+        和日常巡检走同一段 reconcile_group，判断逻辑一行没改 —— 只是把这组的
+        闹钟从「巡检间隔」换成「10 秒」。巡检周期参数完全不受影响。
+        """
+        group_ids = self.awaiting_groups()
+        if not group_ids:
+            return
+        config = repo.get_settings()
+        tz_name = config.get("timezone") or "Asia/Shanghai"
+        now = dt.datetime.now(_timezone(tz_name))
+        now_ts = now.timestamp()
+        # 日常巡检被跳过的那几轮，这一组的流量读数就没人刷新了。加速轮本身不查
+        # 流量（省 CDT 调用），所以每两个巡检周期让其中一轮顺手补读一次，
+        # 免得超限判断一直用很久以前的读数。
+        traffic_stale_after = max(120.0, float(_retry_interval()) * 2)
+        for group_id in group_ids:
+            group = repo.get_group(group_id)
+            if group is None or not group.get("enabled"):
+                self._clear_awaiting(group_id)
+                continue
+            if not self._group_lock(group_id):
+                # 日常巡检（或用户手动操作）正好在跑这一组，让它跑完；10 秒后再来。
+                continue
+            try:
+                stale = now_ts - self._traffic_checked.get(group_id, 0.0) >= traffic_stale_after
+                self.reconcile_group(group, config, now, now_ts, fast=not stale)
+            except Exception:  # noqa: BLE001
+                log.exception("换班加速对账失败 group=%s", group_id)
+            finally:
+                self._group_unlock(group_id)
 
     # -- 总入口 -----------------------------------------------------------
     def reconcile_all(self) -> list[dict[str, Any]] | None:
@@ -641,6 +803,13 @@ class Engine:
                 )
 
             for group in repo.list_groups():
+                group_id = int(group["id"])
+                # 按组互斥：加速通道正好在推进这一组（刚下发过指令、等状态到位）时
+                # 跳过它。只跳过这一组 —— 保活、闲散、其他组照常跑，日常巡检的
+                # 周期参数一秒不变。抢不到锁说明这一组正在被推进，本来就不会漏。
+                if not self._group_lock(group_id):
+                    log.debug("换班组 %s 正在加速对账中，本轮跳过", group_id)
+                    continue
                 try:
                     results.append(self.reconcile_group(group, config, now, now_ts))
                 except Exception as exc:  # noqa: BLE001
@@ -653,6 +822,8 @@ class Engine:
                         group_id=int(group["id"]),
                     )
                     results.append({"group_id": group["id"], "error": str(exc)})
+                finally:
+                    self._group_unlock(group_id)
 
             # 巡检告警收尾：机器被删或移出监控后不会再有恢复回调，
             # 统一在每轮末尾把这类「进行中」事件收掉，避免它永远转圈。
@@ -1078,7 +1249,12 @@ class Engine:
         now: dt.datetime,
         now_ts: float,
         notify_enabled: bool = True,
+        fast: bool = False,
     ) -> dict[str, Any]:
+        # fast=True 只有加速通道会用：读状态但**不查流量**（沿用库里上一轮读数），
+        # 省掉每次 2 台 × 1 次 CDT 查询。流量是 GB 级慢数据，差一两分钟不影响
+        # 超限判断；而 CDT 接口正是最该省着打的那个。
+        with_traffic = not fast
         group_id = int(group["id"])
         name = group.get("name") or f"#{group_id}"
 
@@ -1086,6 +1262,7 @@ class Engine:
             # 停用组时把仍在转的事件收尾：否则保存停用后，最近事件里那条
             # 「换班进行中」会一直转圈，看不出是被停用中止的。
             _close_group_events(group_id, "换班组已停用，本节流程中止")
+            self._clear_awaiting(group_id)
             return {"group_id": group_id, "skipped": "disabled"}
 
         # 时刻表模式需要知道时区
@@ -1099,6 +1276,7 @@ class Engine:
         if picked is None:
             # 所有成员都停用 / 只剩一台：排不出当班，正在转的事件同样要收尾
             _close_group_events(group_id, "启用成员不足两台，排不出当班，流程中止")
+            self._clear_awaiting(group_id)
             return {"group_id": group_id, "skipped": "成员不足两台"}
         duty_member, shift_start = picked
         slot_key = str(shift_start)
@@ -1116,6 +1294,7 @@ class Engine:
 
         duty = repo.get_server(int(duty_member["server_id"]), decrypt_secret=True)
         if duty is None:
+            self._clear_awaiting(group_id)
             return {"group_id": group_id, "skipped": "当班服务器已被删除"}
 
         others: list[dict[str, Any]] = []
@@ -1126,12 +1305,18 @@ class Engine:
             if server is not None:
                 others.append(server)
         if not others:
+            self._clear_awaiting(group_id)
             return {"group_id": group_id, "skipped": "没有其他成员"}
 
         # 1) 读取全部成员实时状态
+        #    加速轮（10 秒一次）**不写健康事件**：状态巡检的失败计数、升红阈值、
+        #    以及事件里那句「每 N 秒重试」，都是按用户配的巡检间隔算的。10 秒
+        #    一轮还照写的话，一次 30 秒的网络抖动就会把事件刷成 error，文案里
+        #    写的重试频率也和实际对不上。健康统计交给日常巡检，加速轮只负责
+        #    「读到预期状态就推进下一步」。
         duty_error = ""
         try:
-            _refresh(duty)
+            _refresh(duty, with_traffic=with_traffic)
         except Exception as exc:  # noqa: BLE001
             duty_error = str(exc)
         healthy_others: list[dict[str, Any]] = []
@@ -1141,22 +1326,24 @@ class Engine:
             member_id = int(server["id"])
             member_label = str(server.get("label") or f"#{member_id}")
             try:
-                _refresh(server)
+                _refresh(server, with_traffic=with_traffic)
                 healthy_others.append(server)
-                _read_recovered(
-                    server_id=member_id,
-                    title=messages.ev("状态巡检已恢复", messages.obj_member(str(name), member_label)),
-                    tz_name=tz_name,
-                )
+                if not fast:
+                    _read_recovered(
+                        server_id=member_id,
+                        title=messages.ev("状态巡检已恢复", messages.obj_member(str(name), member_label)),
+                        tz_name=tz_name,
+                    )
             except Exception as exc:  # noqa: BLE001
                 unreadable.add(member_id)
-                _read_error(
-                    server_id=member_id,
-                    title=messages.ev("状态巡检异常", messages.obj_member(str(name), member_label)),
-                    exc=exc,
-                    group_id=group_id,
-                    tz_name=tz_name,
-                )
+                if not fast:
+                    _read_error(
+                        server_id=member_id,
+                        title=messages.ev("状态巡检异常", messages.obj_member(str(name), member_label)),
+                        exc=exc,
+                        group_id=group_id,
+                        tz_name=tz_name,
+                    )
 
         # 当班状态读不到：本轮不许凭库里的旧快照发指令。
         # 旧快照说「停着」而机器其实在跑，就会给运行中的实例发开机，阿里云回
@@ -1164,19 +1351,28 @@ class Engine:
         # 反过来旧快照说「跑着」而机器已经停了，就漏掉一次该有的拉起。
         # 读不到就等下一轮 —— 拿不到状态时「什么都不做」比「猜着做」安全。
         if duty_error:
-            _read_error(
+            # 读不到状态，「等状态到位」这个前提已经不成立：关掉加速窗口回落成
+            # 日常巡检节奏。不关的话故障期间每 10 秒重来一次，既刷接口又和事件里
+            # 写的「每 N 秒重试」自相矛盾。
+            self._clear_awaiting(group_id)
+            if not fast:
+                _read_error(
+                    server_id=int(duty["id"]),
+                    title=messages.ev("状态巡检异常", messages.obj_duty(str(name), str(duty.get('label') or ''))),
+                    exc=duty_error,
+                    group_id=group_id,
+                    tz_name=tz_name,
+                )
+            return {"group_id": group_id, "state_unreadable": duty_error}
+        if with_traffic:
+            # 记下这一组真正读过流量的时刻，加速通道据此决定要不要补读一次
+            self._traffic_checked[group_id] = now_ts
+        if not fast:
+            _read_recovered(
                 server_id=int(duty["id"]),
-                title=messages.ev("状态巡检异常", messages.obj_duty(str(name), str(duty.get('label') or ''))),
-                exc=duty_error,
-                group_id=group_id,
+                title=messages.ev("状态巡检已恢复", messages.obj_duty(str(name), str(duty.get('label') or ''))),
                 tz_name=tz_name,
             )
-            return {"group_id": group_id, "state_unreadable": duty_error}
-        _read_recovered(
-            server_id=int(duty["id"]),
-            title=messages.ev("状态巡检已恢复", messages.obj_duty(str(name), str(duty.get('label') or ''))),
-            tz_name=tz_name,
-        )
 
         # 2) 当班超限 → 找一台没超的接班；找不到就停机，绝不让超限的当班继续跑
         failover = False
@@ -1246,11 +1442,15 @@ class Engine:
                     breaker_reason = "全部成员流量超限"
 
         if breaker:
+            # 熔断/超限是「等外部条件（流量回落）」，不是等状态到位，不该加速：
+            # 加速下去只会每 10 秒读一遍已经停稳的机器。
+            self._clear_awaiting(group_id)
             return self._handle_breaker(
                 group, config, now, slot_key, duty, others, notify_enabled, breaker_reason
             )
 
         if _over_threshold(duty) and not failover:
+            self._clear_awaiting(group_id)
             return self._handle_limit_stop(group, config, now, slot_key, duty, others, notify_enabled)
 
         # 走到这里说明本班次既没熔断、当班也不超限（流量包重置 / 用户调高了阈值 /
@@ -1297,6 +1497,15 @@ class Engine:
                 repo.set_flag(stall_flag)
             if duty_now in TRANSIENT_STATUS:
                 stall = repo.flag_age(stall_flag) >= stall_limit
+            elif fast:
+                # 加速轮（10 秒一轮）必须加墙钟下限：只看次数会在 30 秒内凑满
+                # 3 次，一次状态同步稍慢就被判「起不来」，触发故障转移、连环
+                # 换人。日常巡检轮不加这条 —— 间隔本来就是 30 秒以上，按次数的
+                # 语义和改动前完全一致（把间隔调到 30 秒的用户不会被无谓推迟）。
+                stall = (
+                    tries >= settings.DUTY_START_TRIES
+                    and repo.flag_age(stall_flag) >= settings.DUTY_STALL_SECONDS
+                )
             else:
                 stall = tries >= settings.DUTY_START_TRIES
             # 事件里说清「为什么判死」，两种口径说法不一样
@@ -1452,6 +1661,17 @@ class Engine:
         duty_status = str(duty.get("instance_status") or "")
         duty_not_running = duty_status not in ("Running",) and duty_status not in TRANSIENT_STATUS
 
+        # 开机指令节流，**只在加速轮生效**：日常巡检每轮读的都是真实状态，
+        # 读到 Stopped 就该重试（那正是「尝试 3 次」的语义），不能拿时间去猜。
+        # 加速窗口 10 秒一轮才有必要拦一下，否则每轮砸一次 StartInstance。
+        start_sent_key = f"start_sent:{group_id}:{slot_key}"
+        if duty_not_running and fast:
+            sent_age = repo.flag_age(start_sent_key)
+            if 0 <= sent_age < settings.DUTY_START_RETRY_SECONDS:
+                duty_status = "Starting"
+                duty_not_running = False
+                self._mark_awaiting(group_id, slot_key)
+
         if duty_not_running:
             if settled_before:
                 # 已结算的班次里当班又不跑了（被抢占 / 被手动停掉）→ 单独记一条恢复事件。
@@ -1481,9 +1701,16 @@ class Engine:
                     group_id, slot_key, name, duty.get("label") or "", int(duty["id"])
                 )
 
+            # 记下这次下发的时刻，供上面的节流判断用。成败都记：节流按「两次尝试
+            # 的间隔」算，下发失败后立刻重试只会白砸接口。必须 clear 再 set ——
+            # bump_flag 只在首次写 created_at，刷新不了时间。
+            repo.clear_flag(start_sent_key)
+            repo.set_flag(start_sent_key)
             try:
                 aliyun.start_instance(duty)
                 repo.clear_flag(f"start_err:{group_id}:{slot_key}")
+                # 指令已经在飞了：从这一刻起单独加密读状态，直到当班到位。
+                self._mark_awaiting(group_id, slot_key)
                 # 下发成功也得记一次尝试：StartInstance 返回 200 不等于机器起来了。
                 # 库存不足回滚、欠费冻结、刚起来又被人抢占关机，这几种都是「接口成功、
                 # 状态仍是 Stopped」，只在下发失败时计数的话 tries 永远停在 0，
@@ -1563,6 +1790,8 @@ class Engine:
             self._maybe_report_timeout(
                 group, config, now_ts, slot_key, shift_start, duty, others, notify_enabled
             )
+            # 等当班起来这段最耗时间：保持加速读取，进程重启后也能靠状态自愈
+            self._mark_awaiting(group_id, slot_key)
             return {"group_id": group_id, "slot": slot_key, "ready": False, "stage": "starting_duty"}
 
         # 4) 当班已 Running：先确认公网 IP 就绪（DDNS 启用时）。
@@ -1585,6 +1814,8 @@ class Engine:
             self._maybe_report_timeout(
                 group, config, now_ts, slot_key, shift_start, duty, others, notify_enabled
             )
+            # 等公网 IP 就绪（EIP 绑定有几秒延迟）同样要加速，否则白等一轮巡检
+            self._mark_awaiting(group_id, slot_key)
             return {"group_id": group_id, "slot": slot_key, "ready": False, "stage": "waiting_ip"}
 
         if not settled_before:
@@ -1617,7 +1848,19 @@ class Engine:
                 if not stalled_out:
                     all_stopped = False
                     continue
+            # 停机指令节流，**只在加速轮生效**：接口成功但实例没停（被锁定 / 刚停
+            # 又被拉起）时，10 秒一轮会变成 10 秒砸一次 StopInstance。日常巡检
+            # 间隔本来就 ≥30 秒，读到 Running 照常发，语义和以前一致。
+            stop_sent_key = f"stop_sent:{int(server['id'])}"
+            if fast:
+                sent_age = repo.flag_age(stop_sent_key)
+                if 0 <= sent_age < settings.SHIFT_STOP_RETRY_SECONDS:
+                    all_stopped = False
+                    continue
             try:
+                # 成败都记下发时刻：按「两次尝试的间隔」节流，失败后立刻重试只是白砸接口
+                repo.clear_flag(stop_sent_key)
+                repo.set_flag(stop_sent_key)
                 stop_mode = stop_server_by_pref(server)
                 repo.clear_flag(f"stop_err:{server['id']}")
                 # 停机模式按实例设置走，事件里写实际生效的那个：选了节省停机但规格
@@ -1626,6 +1869,9 @@ class Engine:
                     event_id,
                     f"已下发停机指令（{server.get('label')}，{messages.mode_label(stop_mode)}）",
                 )
+                # 停机是一次性动作（之后状态变 Stopping，不会被重发），
+                # 现在开始加速读它是否停稳，读到就立刻结算。
+                self._mark_awaiting(group_id, slot_key)
             except Exception as exc:  # noqa: BLE001
                 flag = f"stop_err:{server['id']}"
                 if not repo.get_flag(flag):
@@ -1729,6 +1975,11 @@ class Engine:
                     # 跨轮可能先失败后成功，这里不用 once：文案变了就该补一条，
                     # 完全相同的相邻文案 add_event_progress 自己会吞掉。
                     repo.add_event_progress(event_id, text)
+
+        # 机器已经全部到位、只差 DDNS 收尾时就不再加速：解析同步是慢操作，
+        # 按日常巡检节奏重试即可，别把 Cloudflare 也拖进 10 秒一轮。
+        if duty_status == "Running" and all_stopped:
+            self._clear_awaiting(group_id)
 
         ready = duty_status == "Running" and all_stopped and (has_ip or not ddns_enabled) and ddns_ok
 
@@ -2528,13 +2779,18 @@ class Engine:
             # 交给换班流程真正下发指令：启动当班 → 停非当班 → DDNS → 结算。
             # 状态没到位（还在开机）时它只推进一轮就返回，事件保持 running，
             # 后面的例行对账接着走，过程一直追加在同一条事件上。
-            result = self.reconcile_group(group, config, now, now_ts, notify_enabled=False)
-            if not result.get("ready"):
-                # 还没摆到位（多半在等开机）：申请一段加密对账窗口，
-                # 让调度线程把间隔临时压到 10 秒，别让用户对着「进行中」等满一分钟
-                from . import scheduler  # 延迟导入：scheduler 顶层 import 了本模块
-
-                scheduler.request_fast_reconcile()
+            #
+            # 必须先拿组锁：加速通道（10 秒一轮）随时可能在推进同一组，两边都读到
+            # 「当班没起来」就会各发一次开机。先把加速窗口收掉，再等正在跑的那轮结束。
+            self._clear_awaiting(group_id)
+            if not self._group_lock(group_id, timeout=_GROUP_LOCK_TIMEOUT):
+                # 等到超时说明后台确实卡在这一组上：不并发下发指令，交给正在跑的
+                # 那一轮继续推进（事件已经在里，进度不会丢）。
+                return {"group_id": group_id, "event_id": event_id, "deferred": True}
+            try:
+                result = self.reconcile_group(group, config, now, now_ts, notify_enabled=False)
+            finally:
+                self._group_unlock(group_id)
             return {"group_id": group_id, "event_id": event_id, **result}
         finally:
             self._lock.release()
@@ -2551,10 +2807,18 @@ class Engine:
         """
         if not self._lock.acquire(timeout=30):
             raise ValueError("后台正在同步，请稍后再试")
+        group_locked = False
         try:
             group = repo.get_group(group_id)
             if group is None:
                 raise ValueError("换班组不存在")
+            # 先拿组锁再动手：加速通道可能正拿着这一组的对象推进换班，若此刻把组
+            # 删掉，它会在「解散不下发任何指令」的承诺外继续发停机/开机。收掉加速
+            # 窗口 + 等那一轮结束，才能保证「保持原状」这句话是真的。
+            self._clear_awaiting(group_id)
+            if not self._group_lock(group_id, timeout=_GROUP_LOCK_TIMEOUT):
+                raise ValueError("该换班组正在后台同步，请稍后重试")
+            group_locked = True
             name = group.get("name") or f"#{group_id}"
             member_ids = [int(m["server_id"]) for m in (group.get("members") or [])]
             bound = repo.dns_records_of(dns.TARGET_GROUP, group_id)
@@ -2613,6 +2877,8 @@ class Engine:
             repo.finish_event(event_id, "done")
             return {"ok": True, "event_id": event_id, "servers": len(member_ids)}
         finally:
+            if group_locked:
+                self._group_unlock(group_id)
             self._lock.release()
 
     # -- 手动操作 ---------------------------------------------------------
@@ -2629,10 +2895,17 @@ class Engine:
         # 和后台调度抢同一把锁：否则两边会同时给同一批实例下指令
         if not self._lock.acquire(timeout=30):
             raise ValueError("后台正在同步，请稍后再试")
+        group_locked = False
         try:
             group = repo.get_group(group_id)
             if group is None:
                 raise ValueError("换班组不存在")
+            # 手动换班要改 run 并下发启停指令：先把加速窗口收掉、再拿住组锁，
+            # 免得加速通道正在推进同一组时两条线各发一次开机/停机。
+            self._clear_awaiting(group_id)
+            if not self._group_lock(group_id, timeout=_GROUP_LOCK_TIMEOUT):
+                raise ValueError("该换班组正在后台同步，请稍后重试")
+            group_locked = True
             config = repo.get_settings()
             now = dt.datetime.now(_timezone(config.get("timezone") or "Asia/Shanghai"))
             now_ts = now.timestamp()
@@ -2697,17 +2970,17 @@ class Engine:
                 )
             return self._finish_manual(self.reconcile_group(fresh, config, now, now_ts))
         finally:
+            if group_locked:
+                self._group_unlock(group_id)
             self._lock.release()
 
     def _finish_manual(self, result: dict[str, Any]) -> dict[str, Any]:
-        """手动换班还没走完（多在等开机 / 等原当班停稳）就申请加密对账窗口。
+        """手动换班还没走完（多在等开机 / 等原当班停稳）时不用额外做什么。
 
-        不这么做，用户点完「立即换班」只能盯着「进行中」等满一个对账间隔。
+        reconcile_group 已经在「下发开机/停机」那一刻登记了加速窗口，换班加速
+        线程会在 10 秒内接着读状态、推进下一步。这里保持函数是为了不惊动调用点，
+        也留个说明：不要再改成压缩全局对账间隔，那会让巡检参数失效。
         """
-        if isinstance(result, dict) and not result.get("ready"):
-            from . import scheduler  # 延迟导入：scheduler 顶层 import 了本模块
-
-            scheduler.request_fast_reconcile()
         return result
 
     def _manual_event(
@@ -2810,6 +3083,20 @@ class Engine:
         self._manual_event(group_id, slot_key, group.get("name") or "", current_member, next_member)
         return self.reconcile_group(repo.get_group(group_id) or group, config, now, now_ts)
 
+    def _group_of_server(self, server_id: int) -> int:
+        """这台机器被哪个**启用**的换班组接管；没有就返回 0。
+
+        手动开关机靠它拿组锁：托管中的机器必须和换班流程互斥，否则会出现
+        「用户点开机、换班流程同一秒给它停机」这种反向指令同时飞的情况。
+        """
+        for group in repo.list_groups():
+            if not group.get("enabled"):
+                continue
+            for member in group.get("members") or []:
+                if member.get("enabled") and int(member["server_id"]) == server_id:
+                    return int(group["id"])
+        return 0
+
     def _managed_note(self, server_id: int) -> str:
         """这台机器是否被自动化流程托管。托管时返回一句说明，闲散机器返回空串。"""
         for group in repo.list_groups():
@@ -2855,25 +3142,37 @@ class Engine:
             }
 
         # 1) 下发指令。停机按实例设置里的停机模式（默认节省停机，不支持时退化普通停机）。
+        #    手动操作也要和换班流程互斥：加速通道 10 秒一轮，撞上「刚停机又开机」
+        #    就是两条反向指令同时飞。拿不到锁说明后台正推这一组，让用户等一下。
+        group_id = self._group_of_server(server_id)
+        group_locked = False
+        if group_id:
+            group_locked = self._group_lock(group_id, timeout=_GROUP_LOCK_TIMEOUT)
+            if not group_locked:
+                raise ValueError("该机器所在的换班组正在后台同步，请稍后重试")
         stop_mode = ""
-        if action == "start":
-            # 手动开机也不能绕过流量阈值：以前这里不判断，点一下就把一台已经到
-            # 阈值的机器点起来，下一轮巡检才把它停掉 —— 中间那几十秒白烧的流量
-            # 补不回来。先拉一次实时流量再判，库里的快照最多可能旧一分钟。
-            try:
-                _refresh(server)
-            except Exception:  # noqa: BLE001
-                # 读不到就按库里的旧值判断：宁可少拦一次，也别把人挡在门外
-                pass
-            if _over_threshold(server):
-                raise ValueError(
-                    f"已用 {_used_gb(server):.2f} GB，已达阈值 "
-                    f"{float(server.get('threshold_gb') or 0):g} GB，不能开机；"
-                    "请先调高阈值，或等流量包重置后再试"
-                )
-            aliyun.start_instance(server)
-        else:
-            stop_mode = stop_server_by_pref(server)
+        try:
+            if action == "start":
+                # 手动开机也不能绕过流量阈值：以前这里不判断，点一下就把一台已经到
+                # 阈值的机器点起来，下一轮巡检才把它停掉 —— 中间那几十秒白烧的流量
+                # 补不回来。先拉一次实时流量再判，库里的快照最多可能旧一分钟。
+                try:
+                    _refresh(server)
+                except Exception:  # noqa: BLE001
+                    # 读不到就按库里的旧值判断：宁可少拦一次，也别把人挡在门外
+                    pass
+                if _over_threshold(server):
+                    raise ValueError(
+                        f"已用 {_used_gb(server):.2f} GB，已达阈值 "
+                        f"{float(server.get('threshold_gb') or 0):g} GB，不能开机；"
+                        "请先调高阈值，或等流量包重置后再试"
+                    )
+                aliyun.start_instance(server)
+            else:
+                stop_mode = stop_server_by_pref(server)
+        finally:
+            if group_locked:
+                self._group_unlock(group_id)
 
         # 2) 建 running 事件，交给后台确认器轮询确认，不在这里同步等状态。
         detail = f"等待{label}到位"
@@ -3665,10 +3964,21 @@ def _close_orphan_read_errors(monitored: set[int]) -> None:
         )
 
 
-def _refresh(server: dict[str, Any]) -> None:
-    real_traffic = aliyun.get_traffic_gb(server)
-    empty_reading = real_traffic is None
-    traffic = _resolve_empty_traffic(server) if empty_reading else float(real_traffic)
+def _refresh(server: dict[str, Any], with_traffic: bool = True) -> None:
+    """读一台机器的实时状态（顺带刷流量）。
+
+    with_traffic=False 只给换班加速通道用：那段窗口里每 10 秒跑一次，流量是
+    GB 级的慢数据，差一两分钟不影响超限判断，而 CDT 是账号级接口、一台一次，
+    跟着一起提速纯属白烧。此时 traffic=None，连 traffic_checked_at 都不动，
+    「上次查流量是什么时候」不会被加速轮刷成现在。
+    """
+    if with_traffic:
+        real_traffic = aliyun.get_traffic_gb(server)
+        empty_reading = real_traffic is None
+        traffic = _resolve_empty_traffic(server) if empty_reading else float(real_traffic)
+    else:
+        empty_reading = False
+        traffic = None
     info = aliyun.get_instance(server)
     repo.update_server_runtime(
         int(server["id"]),
@@ -3679,11 +3989,16 @@ def _refresh(server: dict[str, Any]) -> None:
         region_id=info.region_id,
     )
     # 空读数不落样本：曲线里插一个假 0 会让人以为流量掉了，实际只是没读上来。
-    if not empty_reading:
+    if with_traffic and not empty_reading:
         repo.add_sample(int(server["id"]), traffic, info.status)
-    if repo.get_flag(f"traffic_empty:{int(server['id'])}") and not empty_reading:
+    if (
+        with_traffic
+        and repo.get_flag(f"traffic_empty:{int(server['id'])}")
+        and not empty_reading
+    ):
         repo.clear_flag(f"traffic_empty:{int(server['id'])}")
-    server["traffic_used"] = traffic
+    if traffic is not None:
+        server["traffic_used"] = traffic
     server["instance_status"] = info.status
     server["stopped_mode"] = info.stopped_mode
     server["public_ip"] = info.public_ip

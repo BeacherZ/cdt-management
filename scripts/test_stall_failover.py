@@ -114,7 +114,7 @@ class _Base(unittest.TestCase):
     def _wire(self, start_to: str = "Starting") -> None:
         """接上桩：状态由 self.status 决定，开机后落到 start_to（默认卡在 Starting）。"""
 
-        def _fake_refresh(server: dict) -> None:  # noqa: ANN001
+        def _fake_refresh(server: dict, with_traffic: bool = True) -> None:  # noqa: ANN001
             state = self.status[int(server["id"])]
             server["instance_status"] = state
             server["stopped_mode"] = "StopCharging" if state == "Stopped" else ""
@@ -133,10 +133,10 @@ class _Base(unittest.TestCase):
         aliyun.start_instance = _fake_start
         aliyun.stop_instance = _fake_stop
 
-    def _reconcile(self, group_id: int, notify_enabled: bool = True) -> dict:
+    def _reconcile(self, group_id: int, notify_enabled: bool = True, fast: bool = False) -> dict:
         group = repo.get_group(group_id) or {}
         return shift.engine.reconcile_group(
-            group, repo.get_settings(), _now_dt(), float(time.time()), notify_enabled
+            group, repo.get_settings(), _now_dt(), float(time.time()), notify_enabled, fast
         )
 
     def _events(self) -> list[dict]:
@@ -586,7 +586,7 @@ class StartFailureSingleEvent(_Base):
         self.status = {self.a: "Stopped", self.b: "Stopped"}
         self._wire()
 
-        def _boom(server):  # noqa: ANN001, ARG001
+        def _boom(server, with_traffic: bool = True):  # noqa: ANN001, ARG001
             raise aliyun.AliyunError("启动实例失败：欠费")
 
         aliyun.start_instance = _boom
@@ -711,9 +711,15 @@ class TriesNotClock(_Base):
         self.assertEqual(len([s for s in self.started if s == self.a]), 3, self.started)
 
     def test_failover_right_after_third_failed_attempt(self):
-        """试满 3 次仍起不来 → 下一轮换人，事件里写清试了几次。"""
-        for _ in range(3):
+        """试满 3 次仍起不来 → 下一轮换人，事件里写清试了几次。
+
+        墙钟按真实巡检间隔推进：每轮 120 秒，3 轮就是 6 分钟，早已越过
+        DUTY_STALL_SECONDS（180 秒）的下限 —— 加速轮的判死要「次数 + 墙钟」
+        双条件，只看次数的话 10 秒一轮能在 30 秒凑满 3 次、把慢启动判成起不来。
+        """
+        for i in range(1, 4):
             self._reconcile(self.group_id)
+            self._age_flag(self.stall, 120 * i)
         self.assertEqual(self._duty(), self.a)
 
         self._reconcile(self.group_id)  # 第 4 轮：判死、换人
@@ -724,6 +730,34 @@ class TriesNotClock(_Base):
         self.assertTrue(
             any(f"已尝试 {settings.DUTY_START_TRIES} 次仍未能拉起" in t for t in steps), steps
         )
+
+    def test_daily_round_is_not_delayed_by_wall_clock(self):
+        """日常巡检轮只看次数：巡检间隔调到 30 秒的用户，换人时机和以前一致。
+
+        墙钟下限是给加速轮（10 秒一轮）兜底的 —— 不加它 30 秒就能凑满 3 次；
+        但把它套到日常轮上，就会把 30–59 秒间隔的用户的换人硬推后好几分钟。
+        """
+        for _ in range(3):
+            self._reconcile(self.group_id)
+        self._age_flag(self.stall, 30)  # 只等了 30 秒
+        self._reconcile(self.group_id)
+        self.assertEqual(self._duty(), self.b, "日常轮按次数判死，不该被墙钟拖住")
+
+    def test_accel_round_needs_wall_clock(self):
+        """加速轮必须次数 + 墙钟都满足，否则一次状态同步慢就连环换人。"""
+        # 加速轮有 60 秒开机节流，靠反复对账凑不满 3 次，直接把计数摆到位
+        self._reconcile(self.group_id, fast=True)
+        tries_key = f"duty_tries:{self.group_id}:{self.slot}"
+        db.execute(
+            "UPDATE flags SET value=? WHERE key=?", (settings.DUTY_START_TRIES, tries_key)
+        )
+        self._age_flag(self.stall, 30)
+        self._reconcile(self.group_id, fast=True)
+        self.assertEqual(self._duty(), self.a, "加速轮墙钟没过下限就换人，会连环踢皮球")
+
+        self._age_flag(self.stall, settings.DUTY_STALL_SECONDS + 20)
+        self._reconcile(self.group_id, fast=True)
+        self.assertEqual(self._duty(), self.b, "次数与墙钟都满足才换人")
 
 
 class StartFailureReports(_Base):
@@ -753,7 +787,7 @@ class StartFailureReports(_Base):
         self.slot = str(repo.recent_runs(1)[0]["slot"])
         self.sent.clear()
 
-        def _boom(server):  # noqa: ANN001, ARG001
+        def _boom(server, with_traffic: bool = True):  # noqa: ANN001, ARG001
             raise aliyun.AliyunError("启动实例失败：欠费")
 
         aliyun.start_instance = _boom

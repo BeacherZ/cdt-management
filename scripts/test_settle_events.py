@@ -100,7 +100,7 @@ class _Base(unittest.TestCase):
         aliyun.stop_instance = self._orig_stop
 
     def _wire(self, start_to: str = "Running") -> None:
-        def _fake_refresh(server: dict) -> None:  # noqa: ANN001
+        def _fake_refresh(server: dict, with_traffic: bool = True) -> None:  # noqa: ANN001, ARG001
             state = self.status[int(server["id"])]
             server["instance_status"] = state
             server["stopped_mode"] = "StopCharging" if state == "Stopped" else ""

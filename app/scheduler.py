@@ -27,18 +27,17 @@ EVENT_POLL_INTERVAL = 5
 # 事件被标成「超时未确认」而实例其实正常起来了，看着像失败。
 EVENT_CONFIRM_TIMEOUT = 600
 
-# 加密对账窗口：新建换班组后要尽快把组员摆到排班表该有的位置（开机 + 停待机
-# 要跨好几轮），这段时间把对账间隔临时压到 10 秒，最多持续 90 秒。
-# 场景结束就自动恢复成用户配置的间隔，不是长期提速。
-_FAST_INTERVAL = 10
-_FAST_WINDOW = 90
-_fast_until = 0.0
+# 换班加速：下发开机/停机指令后，对「这一组」单独加密读状态，读到预期状态
+# 就立刻推进下一步。与日常巡检完全并行 —— 日常巡检严格按 reconcile_interval
+# 跑，一秒不改；这条线程只查「有指令在飞」的那几组，而且只读状态、不查流量。
+_shift_thread: threading.Thread | None = None
+
 # 「立刻跑一轮」的唤醒信号：让 _wait 不必睡满 interval
 _wake = threading.Event()
 
 
 def start() -> None:
-    global _thread, _confirm_thread
+    global _thread, _confirm_thread, _shift_thread
     if _thread is not None and _thread.is_alive():
         return
     _stop.clear()
@@ -49,6 +48,11 @@ def start() -> None:
             target=_confirm_loop, name="cdt-event-confirm", daemon=True
         )
         _confirm_thread.start()
+    if _shift_thread is None or not _shift_thread.is_alive():
+        _shift_thread = threading.Thread(
+            target=_shift_loop, name="cdt-shift-await", daemon=True
+        )
+        _shift_thread.start()
     log.info("调度线程已启动，对账间隔 %s 秒", settings.RECONCILE_INTERVAL)
     if settings.GRACE_ORDER_BROKEN:
         # 只在有人把 CDT_SHIFT_TIMEOUT_MINUTES 调到 3 分钟及以下时出现：
@@ -62,17 +66,6 @@ def start() -> None:
 
 def stop() -> None:
     _stop.set()
-    _wake.set()
-
-
-def request_fast_reconcile(seconds: float = _FAST_WINDOW) -> None:
-    """申请一段加密对账窗口，并立刻唤醒调度线程跑一轮。
-
-    新建换班组保存后调这个：用户期望「点完保存就看到组员被摆到位」，
-    等满一个对账间隔（默认 60 秒）才推进下一步太久了。
-    """
-    global _fast_until
-    _fast_until = max(_fast_until, time.time() + seconds)
     _wake.set()
 
 
@@ -150,8 +143,8 @@ def _loop() -> None:
                 log.exception("清理历史事件失败")
 
         interval = _interval()
-        if time.time() < _fast_until:
-            interval = min(interval, _FAST_INTERVAL)
+        # 对账间隔只来自用户设置，不再有任何临时提速：换班那几组的加速走
+        # _shift_loop 的独立通道，范围限定在组内，且只读状态不查流量。
         # 对齐到固定的秒位，而不是「跑完再睡 interval 秒」：后者会把执行耗时
         # 计入周期，触发时刻一路漂移，也做不到「每分钟第 18 秒」这种错峰。
         _wait(_next_tick(time.time(), interval, _offset()))
@@ -162,6 +155,29 @@ def _interval() -> int:
         return max(30, int(repo.get_setting("reconcile_interval", str(settings.RECONCILE_INTERVAL))))
     except Exception:
         return settings.RECONCILE_INTERVAL
+
+
+# --------------------------------------------------------------------------
+# 换班加速：下发指令之后、预期状态到位之前
+# --------------------------------------------------------------------------
+
+def _shift_loop() -> None:
+    """每 10 秒问一次：有没有「指令刚下发、还在等状态」的组。
+
+    有就只跑那几组 —— 读到预期状态后立刻下发下一步（开当班 → 停待机 → 结算）。
+    没有就什么都不做，开销只是读一个内存字典。
+
+    这条线程和日常巡检是并行的：日常巡检的间隔只来自用户设置，不受这里影响；
+    两者遇到同一组时按组互斥，谁先拿到谁跑，另一个跳过这一组。
+    """
+    while not _stop.is_set():
+        _stop.wait(settings.SHIFT_AWAIT_INTERVAL)
+        if _stop.is_set():
+            break
+        try:
+            engine.reconcile_awaiting()
+        except Exception:  # noqa: BLE001
+            log.exception("换班加速对账异常")
 
 
 # --------------------------------------------------------------------------

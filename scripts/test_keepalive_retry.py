@@ -84,7 +84,7 @@ class KeepaliveRetry(unittest.TestCase):
         self.state = "Stopped"
         self.start_error: Exception | None = None
 
-        def _fake_refresh(server: dict) -> None:  # noqa: ANN001
+        def _fake_refresh(server: dict, with_traffic: bool = True) -> None:  # noqa: ANN001
             server["instance_status"] = self.state
             server["stopped_mode"] = "StopCharging" if self.state == "Stopped" else ""
             server["public_ip"] = "47.0.0.1" if self.state == "Running" else ""
@@ -246,7 +246,7 @@ class KeepaliveEventLifecycle(unittest.TestCase):
         self._orig_get = aliyun.get_instance
         self.state = "Stopped"
 
-        def _fake_refresh(server: dict) -> None:  # noqa: ANN001
+        def _fake_refresh(server: dict, with_traffic: bool = True) -> None:  # noqa: ANN001
             server["instance_status"] = self.state
             server["stopped_mode"] = "StopCharging" if self.state == "Stopped" else ""
             server["public_ip"] = "47.0.0.1" if self.state == "Running" else ""

@@ -44,8 +44,13 @@ SHIFT_TIMEOUT_MINUTES = max(2, int(os.environ.get("CDT_SHIFT_TIMEOUT_MINUTES", "
 # start_instance 的那些轮（卡在启动中的轮次不会再下发，不计数）。
 DUTY_START_TRIES = max(2, int(os.environ.get("CDT_DUTY_START_TRIES", "3")))
 
-# 当班迟迟起不来的容忍秒数 —— 现在只用于**中间态兜底**：
-# 实例停在 Starting / Pending 时不会再下发启动指令、次数不涨，只能按时间判死。
+# 当班迟迟起不来的容忍秒数。两个用处：
+#   1) 中间态兜底：实例停在 Starting / Pending 时不会再下发启动指令、次数不涨，
+#      只能按时间判死。
+#   2) 换班加速窗口内的次数判死下限：加速时 10 秒一轮，「试满 3 次」只有 30 秒，
+#      一次状态同步稍慢就会判成起不来。所以加速轮要「次数够 + 这段已经持续
+#      DUTY_STALL_SECONDS」两个条件同时满足；日常巡检轮不加这条，行为和以前一致
+#      （否则把巡检间隔调到 30 秒的用户，换人时机会被无谓推迟）。
 # 不能设太短：竞价实例冷启动本身就要几十秒，太短会把「慢」当成「死」。
 DUTY_STALL_SECONDS = max(60, int(os.environ.get("CDT_DUTY_STALL_SECONDS", "180")))
 
@@ -68,6 +73,28 @@ DUTY_START_GRACE = max(
 )
 # 超时设得比 stall 阈值还短（最小 2 分钟）时，顺序无法再靠宽限修正。
 GRACE_ORDER_BROKEN = DUTY_START_GRACE >= SHIFT_TIMEOUT_MINUTES * 60
+
+# 同一班次两次下发开机指令的最小间隔（秒）。日常巡检间隔本来就大，这条不起作用；
+# 只有换班加速（下发指令后 10 秒一轮读状态）时才生效 —— 否则「每轮没起来就重发」
+# 会变成每 10 秒砸一次 StartInstance，白烧写接口、也让「尝试 3 次」从 6 分钟
+# 缩成 30 秒，把慢启动判成起不来。
+DUTY_START_RETRY_SECONDS = max(30, int(os.environ.get("CDT_DUTY_START_RETRY_SECONDS", "60")))
+
+# 换班加速：下发开机/停机指令之后、预期状态还没到位的这段窗口，单独加密读取。
+# 只读「这一组」的实例状态，不查流量，**不改变日常巡检间隔**。
+SHIFT_AWAIT_INTERVAL = max(5, int(os.environ.get("CDT_SHIFT_AWAIT_INTERVAL", "10")))
+# 单个等待窗口最长持续多久（秒）。卡死时到点自动退出，不会把加速变成常态。
+# 取 300（5 分钟）：正常换班几十秒就走完，Windows 慢启动 3–4 分钟也够；
+# 再长就跟换班超时（默认 10 分钟）比肩，超时通知发出后还在加速读，没有意义。
+SHIFT_AWAIT_TTL = max(60, int(os.environ.get("CDT_SHIFT_AWAIT_TTL", "300")))
+# 同一班次累计允许加速多久（秒）。竞价库存不足、欠费冻结这类卡死场景里，每轮
+# 日常巡检都会下发一次重启，窗口会被一次次重新打开 —— 光靠 TTL 挡不住，10 秒
+# 一轮会变成常态（3 台组 ≈ 每天 2.6 万次 DescribeInstances）。预算用尽就不再
+# 打开窗口，回落成用户配的巡检间隔；只有换了班次（真正的新一轮换班）才重置。
+SHIFT_AWAIT_BUDGET = max(60, int(os.environ.get("CDT_SHIFT_AWAIT_BUDGET", "600")))
+# 同一台机器两次下发停机指令的最小间隔（秒），只在加速轮生效：停机接口成功但
+# 实例没停（被锁定 / 被立即拉起）时，10 秒一轮会变成 10 秒砸一次 StopInstance。
+SHIFT_STOP_RETRY_SECONDS = max(30, int(os.environ.get("CDT_SHIFT_STOP_RETRY_SECONDS", "60")))
 
 # dry-run：不调真实阿里云接口，用于本地 UI 调试
 DRY_RUN = os.environ.get("CDT_DRY_RUN", "0") == "1"
