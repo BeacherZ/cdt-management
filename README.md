@@ -15,7 +15,7 @@
 
 这几套流程之上还有一层**流量保护**：每台单独设阈值，超限就停。
 
-**实例不限抢占式**：流量保护和流量均衡只看用量、不看计费方式，按量付费与包年包月同样适用，只是用不到抢占式专属的「抢占恢复」。
+**实例不限抢占式**：流量保护和流量均衡只看用量、不看计费方式，按量付费与包年包月同样适用。
 
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 ![python](https://img.shields.io/badge/python-3.13-blue)
