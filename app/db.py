@@ -166,6 +166,59 @@ CREATE TABLE IF NOT EXISTS dns_records (
 CREATE INDEX IF NOT EXISTS idx_dns_target_lookup
     ON dns_records(target_kind, target_id) WHERE target_kind <> '';
 
+-- 流量均衡组：不看时钟，看流量。每到一个评估点，把域名指给累计用得最少的那台。
+-- 与联合换班的区别：成员可以一直在线（包年包月停机不省钱），切换只动 DNS。
+CREATE TABLE IF NOT EXISTS balance_groups (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    name              TEXT    NOT NULL,
+    enabled           INTEGER NOT NULL DEFAULT 1,
+    -- 当班流量到阈值、或被抢占后起不来，自动换流量最少的顶班
+    failover_enabled  INTEGER NOT NULL DEFAULT 1,
+    -- 评估周期（分钟），取值 60/180/360/720/1440
+    interval_minutes  INTEGER NOT NULL DEFAULT 60,
+    -- 差值阈值（GB）：当班比最少的那台多这么多才值得切，避免无意义抖动
+    diff_gb           REAL    NOT NULL DEFAULT 10,
+    -- 最短当班（分钟）：刚切过去不许马上再切走
+    min_duty_minutes  INTEGER NOT NULL DEFAULT 30,
+    created_at        INTEGER NOT NULL DEFAULT 0
+);
+
+-- 均衡组成员。position 只决定「流量相同时谁优先」，不参与轮换顺序计算。
+CREATE TABLE IF NOT EXISTS balance_members (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id   INTEGER NOT NULL,
+    server_id  INTEGER NOT NULL,
+    position   INTEGER NOT NULL DEFAULT 0,
+    -- 下班动作：keep 保持运行 / stop 按实例的停机模式停掉
+    off_action TEXT    NOT NULL DEFAULT 'keep',
+    enabled    INTEGER NOT NULL DEFAULT 1,
+    UNIQUE(group_id, position)
+);
+CREATE INDEX IF NOT EXISTS idx_balance_members_group ON balance_members(group_id, position);
+
+-- 组的运行状态：当班是谁、下次评估什么时候、这一档从多少 GB 起算
+CREATE TABLE IF NOT EXISTS balance_state (
+    group_id       INTEGER PRIMARY KEY,
+    duty_server_id INTEGER NOT NULL DEFAULT 0,
+    -- 切换前的当班：DNS 切过去之后，按它的下班动作决定停不停
+    prev_duty_id   INTEGER NOT NULL DEFAULT 0,
+    -- idle / starting（新当班开机中）/ switching（切 DNS + 处理旧当班）/
+    -- exhausted（全员到阈值）/ error
+    phase          TEXT    NOT NULL DEFAULT 'idle',
+    stage          TEXT    NOT NULL DEFAULT '',
+    -- 切换那一刻当班的累计流量，用来算「这一档用了多少」
+    slot_base_gb   REAL    NOT NULL DEFAULT 0,
+    -- 账期键 YYYY-MM：跨月后流量归零，档位计数要跟着清
+    cycle_key      TEXT    NOT NULL DEFAULT '',
+    event_id       INTEGER NOT NULL DEFAULT 0,
+    last_switch_at INTEGER NOT NULL DEFAULT 0,
+    next_eval_at   INTEGER NOT NULL DEFAULT 0,
+    -- 当班连续开机尝试次数，判「被抢占起不来」用
+    attempts       INTEGER NOT NULL DEFAULT 0,
+    note           TEXT    NOT NULL DEFAULT '',
+    updated_at     INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS events (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     ts         INTEGER NOT NULL DEFAULT 0,
@@ -239,6 +292,8 @@ DEFAULTS: dict[str, str] = {
     "daily_report_time": "23:58",
     "notify_on_shift": "1",
     "notify_on_failover": "1",
+    "notify_on_balance": "1",
+    "notify_on_balance_error": "1",
     "notify_on_recovery": "1",
     "notify_on_breaker": "1",
     "notify_on_limit_stop": "1",

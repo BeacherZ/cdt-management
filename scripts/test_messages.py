@@ -69,6 +69,7 @@ class ShiftDone(unittest.TestCase):
             "┃ 🌐 ＩＰ：198.51.100.1\n"
             "┃ 📍 地域：中国香港\n"
             "┃ ☁️ DDNS：✅ 已同步\n"
+            "┃ 📈 流量：12.00 GB / 200GB\n"
             "┃ 🟢 状态：Running\n"
             f"{SEP}\n"
             "⚪ <b>停止账号 </b>\n"
@@ -76,6 +77,7 @@ class ShiftDone(unittest.TestCase):
             "┃ 📦 实例：<code>i-bbb222</code>\n"
             "┃ 🌐 ＩＰ：198.51.100.2\n"
             "┃ 📍 地域：中国香港\n"
+            "┃ 📈 流量：190.00 GB / 200GB\n"
             "┃ ⚪ 状态：Stopped (StopCharging)\n"
             f"{SEP}"
         )
@@ -170,9 +172,34 @@ class ShiftDone(unittest.TestCase):
         self.assertIn("均已普通停机", message.html)
         self.assertNotIn("均已节省停机", message.html)
 
-    def test_no_usage_line_in_shift_report(self):
-        # 脚本的换班报告里没有「已用」这一行，别被顺手加回来
-        self.assertNotIn("已用", messages.shift_done(A, [B], "AM", "✅ 已同步").html)
+    def test_traffic_line_before_status(self):
+        """每个账号块都要有流量行，且固定落在「状态」上面（换班 / 均衡一致）。
+
+        早期照抄脚本时换班报告是没有「已用」这一行的，加了流量行之后，读报告的人
+        才能直接比出「这台还剩多少额度」。
+        """
+        html = messages.shift_done(A, [B], "AM", "✅ 已同步").html
+        self.assertEqual(html.count("┃ 📈 流量："), 2)
+        self.assertIn("┃ 📈 流量：12.00 GB / 200GB\n┃ 🟢 状态：Running", html)
+        self.assertIn(
+            "┃ 📈 流量：190.00 GB / 200GB\n┃ ⚪ 状态：Stopped (StopCharging)",
+            html,
+        )
+
+    def test_traffic_line_without_quota_or_threshold(self):
+        """没填额度 / 阈值时不留空壳，也不要写「额度 0 GB」。"""
+        bare = {**A, "quota_gb": 0, "threshold_gb": 0}
+        html = messages.shift_done(bare, [B], "AM", "✅ 已同步").html
+        # 只看运行账号那一块（停止账号 B 有自己的额度和阈值）
+        block = html.split(SEP)[1]
+        self.assertIn("┃ 📈 流量：12.00 GB\n", block)
+        self.assertNotIn("额度", block)
+        self.assertNotIn("（阈值", block)
+
+    def test_traffic_line_unknown_usage(self):
+        """流量还没查过时写「—」，不能写 0.00 GB 冒充「一点没用到」。"""
+        html = messages.shift_done({**A, "traffic_used": None}, [B], "AM", "✅ 已同步").html
+        self.assertIn("┃ 📈 流量：— / 200GB", html)
 
     def test_group_name_in_title(self):
         # 标题带组名 + 全角范围括号；不传组名时退回「（换班组）」
@@ -211,6 +238,7 @@ class ShiftFailover(unittest.TestCase):
             "┃ 🌐 ＩＰ：198.51.100.2\n"
             "┃ 📍 地域：中国香港\n"
             "┃ ☁️ DDNS：✅ 已同步\n"
+            "┃ 📈 流量：190.00 GB / 200GB\n"
             "┃ 🟢 状态：Running\n"
             f"{SEP}\n"
             "⚪ <b>超限账号 </b>\n"
@@ -218,7 +246,7 @@ class ShiftFailover(unittest.TestCase):
             "┃ 📦 实例：<code>i-aaa111</code>\n"
             "┃ 🌐 ＩＰ：198.51.100.1\n"
             "┃ 📍 地域：中国香港\n"
-            "┃ 📈 已用：190.00 GB\n"
+            "┃ 📈 流量：190.00 GB / 200GB\n"
             "┃ ⚪ 状态：Stopped (StopCharging)\n"
             f"{SEP}"
         )
@@ -235,6 +263,130 @@ class ShiftFailover(unittest.TestCase):
         message = messages.shift_failover(B, [A], [C], "✅ 已同步")
         self.assertIn("⚪ <b>超限账号 </b>", message.html)
         self.assertIn("⚪ <b>停止账号 </b>", message.html)
+
+
+class BalanceReports(unittest.TestCase):
+    """均衡组报告：正文照换班报告写，只有标题和概览那行不同。
+
+    换班完成 = 运行账号 + 停止账号；故障转移 = 接替账号 + 超限账号 + 停止账号。
+    均衡报告用同一套块标题，不另造「接替 / 交班 / 待机」——同一件事两种叫法，
+    读通知的人得先在脑子里对一遍。
+
+    均衡组的成员 dict 来自 balance_members 联表（服务器 id 在 server_id 上），
+    换班那边是 servers 行（id），两边的去重键不一样，这里按真实形状造数据。
+    """
+
+    DUTY = {
+        **A,
+        "id": 11,
+        "server_id": 1,
+        "label": "新加坡-均衡A",
+        "public_ip": "198.51.100.11",
+        "instance_status": "Running",
+        "traffic_used": 12.0,
+    }
+    PREV = {
+        **B,
+        "id": 12,
+        "server_id": 2,
+        "label": "新加坡-均衡B",
+        "public_ip": "198.51.100.12",
+        "traffic_used": 190.0,
+    }
+    REST = {
+        **C,
+        "id": 13,
+        "server_id": 3,
+        "label": "新加坡-均衡C",
+        "public_ip": "198.51.100.13",
+        "traffic_used": 5.0,
+    }
+
+    def test_manual_switch_lists_every_member(self):
+        message = messages.balance_switch(
+            self.DUTY,
+            [self.DUTY, self.PREV, self.REST],
+            "✅ 已同步",
+            group_name="新加坡",
+            prev=self.PREV,
+            manual=True,
+        )
+        html = message.html
+        self.assertEqual(message.title, "CDT 手动均衡完成报告（均衡组：新加坡）")
+        # 和换班完成报告同一套块标题：运行账号 1 块 + 停止账号 2 块
+        self.assertIn("🟢 <b>运行账号 </b>", html)
+        self.assertEqual(html.count("<b>运行账号 </b>"), 1)
+        self.assertEqual(html.count("<b>停止账号 </b>"), 2)
+        self.assertNotIn("接替账号", html)
+        self.assertNotIn("交班账号", html)
+        self.assertNotIn("待机账号", html)
+        # 每块都带流量行，且在三块里各出现一次
+        self.assertEqual(html.count("┃ 📈 流量："), 3)
+        self.assertIn("┃ 📈 流量：12.00 GB / 200GB", html)
+        self.assertIn("┃ 📈 流量：190.00 GB / 200GB", html)
+        self.assertIn("┃ 📈 流量：5.00 GB / 200GB", html)
+
+    def test_auto_switch_same_shape_as_manual(self):
+        """自动 / 手动只差标题和概览那行，正文块完全一样。"""
+        message = messages.balance_switch(
+            self.DUTY, [self.DUTY, self.PREV], "✅ 已同步", group_name="新加坡", prev=self.PREV
+        )
+        self.assertEqual(message.title, "CDT 均衡完成报告（均衡组：新加坡）")
+        self.assertIn("🟢 <b>运行账号 </b>", message.html)
+        self.assertIn("⚪ <b>停止账号 </b>", message.html)
+        self.assertNotIn("上一台", message.html)
+
+    def test_switch_block_heads_match_shift_done(self):
+        """换班完成报告有哪些块标题，均衡完成就有哪些（只允许标题和概览不同）。"""
+        shift = messages.shift_done(A, [B], "AM", "✅ 已同步").html
+        balance = messages.balance_switch(
+            self.DUTY, [self.DUTY, self.PREV], "✅ 已同步", prev=self.PREV
+        ).html
+        for head in ("运行账号", "停止账号"):
+            self.assertIn(f"<b>{head} </b>", shift)
+            self.assertIn(f"<b>{head} </b>", balance)
+        # 概览：换班写班次，均衡写为什么切
+        self.assertIn("🕒 <b>当前班次</b>", shift)
+        self.assertIn("📊 <b>流量均衡</b>", balance)
+        # 每块的字段顺序也要一致（流量行在状态行上面）
+        for html in (shift, balance):
+            self.assertIn("┃ 📈 流量：", html)
+            self.assertLess(html.index("┃ 📈 流量："), html.index("状态："))
+
+    def test_member_listed_once_even_if_passed_twice(self):
+        """members 传了全部成员、prev 又在里面，同一台不能列两遍。"""
+        html = messages.balance_switch(
+            self.DUTY,
+            [self.DUTY, self.PREV, self.PREV],
+            "✅ 已同步",
+            prev=self.PREV,
+        ).html
+        self.assertEqual(html.count("新加坡-均衡B"), 1)
+
+    def test_failover_lists_remaining_members(self):
+        message = messages.balance_failover(
+            self.DUTY,
+            [self.PREV],
+            [self.DUTY, self.PREV, self.REST],
+            "✅ 已同步",
+            group_name="新加坡",
+            reason="traffic",
+        )
+        html = message.html
+        self.assertEqual(message.title, "CDT 均衡转移报告（均衡组：新加坡）")
+        self.assertIn("⚪ <b>超限账号 </b>", html)
+        # 剩下的第三台也要出现，标成「停止账号」（与故障转移报告一致）
+        self.assertIn("⚪ <b>停止账号 </b>", html)
+        self.assertIn("新加坡-均衡C", html)
+        self.assertNotIn("待机账号", html)
+        self.assertEqual(html.count("┃ 📈 流量："), 3)
+
+    def test_stall_says_offline(self):
+        message = messages.balance_failover(
+            self.DUTY, [self.PREV], [], "✅ 已同步", reason="stall"
+        )
+        self.assertIn("⚪ <b>离线账号 </b>", message.html)
+        self.assertIn("疑被抢占", message.html)
 
 
 class Breaker(unittest.TestCase):
@@ -358,6 +510,13 @@ class OtherReports(unittest.TestCase):
         self.assertIn("┃ 🟢 状态：Running", message.html)
         # 域名的状态行：其它换班报告都有，异常报告同样要有（只挂在应当运行那台）
         self.assertIn("┃ ☁️ DDNS：⏸ 目标未运行", message.html)
+
+    def test_error_reports_have_traffic_line(self):
+        """异常报告的账号块也要有流量行：卡住时用户要同时看「用掉多少」判断还能撑多久。"""
+        shift = messages.shift_error(B, [A], 10).html
+        self.assertEqual(shift.count("┃ 📈 流量："), 2)
+        balance = messages.balance_error(B, 10).html
+        self.assertEqual(balance.count("┃ 📈 流量："), 1)
 
     def test_every_notification_has_region_line(self):
         # 所有通知的实例块都要跟每日报告一样带「地域」行（IP 下面一行；熔断块没有 IP 行，

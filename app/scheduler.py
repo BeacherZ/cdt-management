@@ -7,7 +7,7 @@ import logging
 import threading
 import time
 
-from . import aliyun, billing, dns, messages, notify, repo, settings
+from . import aliyun, balance, billing, dns, messages, notify, repo, settings
 from .shift import engine, keepalive_window, _timezone
 
 log = logging.getLogger("cdt-management.scheduler")
@@ -32,12 +32,16 @@ EVENT_CONFIRM_TIMEOUT = 600
 # 跑，一秒不改；这条线程只查「有指令在飞」的那几组，而且只读状态、不查流量。
 _shift_thread: threading.Thread | None = None
 
+# 流量均衡加速：同一套思路，只推进「开机 / 切换进行中」的组。均衡没有班次表，
+# 整段切换都在等「接替那台什么时候 Running」，所以这条通道就是它的到位判定。
+_balance_thread: threading.Thread | None = None
+
 # 「立刻跑一轮」的唤醒信号：让 _wait 不必睡满 interval
 _wake = threading.Event()
 
 
 def start() -> None:
-    global _thread, _confirm_thread, _shift_thread
+    global _thread, _confirm_thread, _shift_thread, _balance_thread
     if _thread is not None and _thread.is_alive():
         return
     _stop.clear()
@@ -53,6 +57,11 @@ def start() -> None:
             target=_shift_loop, name="cdt-shift-await", daemon=True
         )
         _shift_thread.start()
+    if _balance_thread is None or not _balance_thread.is_alive():
+        _balance_thread = threading.Thread(
+            target=_balance_loop, name="cdt-balance-await", daemon=True
+        )
+        _balance_thread.start()
     log.info("调度线程已启动，对账间隔 %s 秒", settings.RECONCILE_INTERVAL)
     if settings.GRACE_ORDER_BROKEN:
         # 只在有人把 CDT_SHIFT_TIMEOUT_MINUTES 调到 3 分钟及以下时出现：
@@ -117,6 +126,12 @@ def _loop() -> None:
         except Exception:  # noqa: BLE001
             log.exception("对账轮次异常")
 
+        # 流量均衡：每轮只读当班一台，到评估点才读全员，故不额外放大 CDT 调用量
+        try:
+            balance.reconcile_all(repo.get_settings())
+        except Exception:  # noqa: BLE001
+            log.exception("流量均衡对账异常")
+
         try:
             _maybe_daily_report()
         except Exception:  # noqa: BLE001
@@ -158,7 +173,7 @@ def _interval() -> int:
 
 
 # --------------------------------------------------------------------------
-# 换班加速：下发指令之后、预期状态到位之前
+# 换班 / 均衡加速：下发指令之后、预期状态到位之前
 # --------------------------------------------------------------------------
 
 def _shift_loop() -> None:
@@ -178,6 +193,22 @@ def _shift_loop() -> None:
             engine.reconcile_awaiting()
         except Exception:  # noqa: BLE001
             log.exception("换班加速对账异常")
+
+
+def _balance_loop() -> None:
+    """每 10 秒问一次：有没有均衡组正在等接替那台开机。
+
+    与换班加速同构：没有等待中的组时，一次循环只做一个小查询；有的话只推进
+    那几组，只读实例状态、不查流量。日常巡检间隔完全不受影响。
+    """
+    while not _stop.is_set():
+        _stop.wait(settings.BALANCE_AWAIT_INTERVAL)
+        if _stop.is_set():
+            break
+        try:
+            balance.reconcile_awaiting()
+        except Exception:  # noqa: BLE001
+            log.exception("流量均衡加速对账异常")
 
 
 # --------------------------------------------------------------------------

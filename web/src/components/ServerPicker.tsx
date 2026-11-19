@@ -1,12 +1,17 @@
 import { useState } from 'react'
-import { Check, HeartPulse, Repeat, TriangleAlert } from 'lucide-react'
+import { Check, HeartPulse, Repeat, Scale, TriangleAlert } from 'lucide-react'
 import { del } from '../api'
-import { ownerLabel } from '../owners'
+import { ownerBase, ownerLabel, ownerTone } from '../owners'
 import type { Server } from '../types'
 import { Modal } from './ui'
 
 type Props = {
   servers: Server[]
+  /**
+   * 正在编辑的是哪一类组：换班组（group）还是均衡组（balance）。
+   * 决定「本组成员」的判定口径——均衡组成员在换班组里必须算占用，反之亦然。
+   */
+  currentKind?: 'group' | 'balance'
   /** 正在编辑的组 id：new 时为 undefined，用于区分「本组」和「别的组」 */
   currentGroupId?: number
   /** 本组其它行已经占用的实例 id，避免同一台被选两次 */
@@ -22,10 +27,11 @@ type Props = {
  *
  * - 闲散手动：直接选中
  * - 单机保活：先问一句「取消保活并加入」，因为保活记录不删的话两边会抢同一台机器
- * - 已加入别的换班组：灰掉，不给选（一台机器只能在一个组里）
+ * - 已加入别的换班组 / 均衡组：灰掉，不给选（一台机器只能归一个流程管）
  */
 export default function ServerPicker({
   servers,
+  currentKind = 'group',
   currentGroupId,
   taken,
   onClose,
@@ -93,8 +99,8 @@ export default function ServerPicker({
               : `「${confirming.label}」有一条停用中的单机保活记录。`}
           </p>
           <p className="confirm-hint">
-            加入本换班组前会先删掉这台机器的保活配置（只删配置，机器不启停）；
-            之后它只听排班表的。想反悔得重新加回单机保活。
+            加入这个组前会先删掉这台机器的保活配置（只删配置，机器不启停）；
+            之后它只听这个组的调度。想反悔得重新加回单机保活。
           </p>
         </div>
         {error && (
@@ -115,7 +121,7 @@ export default function ServerPicker({
       footer={
         <>
           <span style={{ fontSize: 12, color: 'var(--muted)' }}>
-            已加入换班组的机器是灰的，一台只能进一个组
+            灰掉的是已归其他流程的实例：一台只能归单机保活 / 联合换班 / 流量均衡其中之一
           </span>
           <span className="spacer" />
           <button className="btn" onClick={onClose}>
@@ -130,15 +136,19 @@ export default function ServerPicker({
         <div className="server-pick-list">
           {servers.map((server) => {
             const owner = server.managed ?? null
+            // 本组自己的成员可以留在这里（编辑已有组时不至于把自己的机器灰掉）
             const sameGroup =
-              owner?.kind === 'group' && currentGroupId != null && owner.group_id === currentGroupId
-            const otherGroup = owner?.kind === 'group' && !sameGroup
+              owner?.kind === currentKind &&
+              currentGroupId != null &&
+              owner.group_id === currentGroupId
+            // 别的换班组、均衡组都算占用；单机保活不灰，走上面「取消保活并加入」的确认
+            const otherFlow = owner != null && !sameGroup && owner.kind !== 'keepalive'
             const used = taken.has(server.id)
-            const blocked = otherGroup || used
+            const blocked = otherFlow || used
             const reason = used
               ? '本组别的行已经选了这台'
-              : otherGroup
-                ? '已加入别的换班组，一台只能进一个组'
+              : otherFlow
+                ? `已加入${ownerBase(owner)}，一台实例只能归一个流程管，先移出后再添加`
                 : ''
             return (
               <button
@@ -153,12 +163,17 @@ export default function ServerPicker({
                   <span className="server-pick-name">{server.label}</span>
                   <code className="server-pick-id">{server.instance_id || '未填实例 ID'}</code>
                 </span>
-                <span className={`owner-tag${owner ? (owner.active ? ' locked' : ' paused') : ' free'}`}>
+                <span
+                  className={`owner-tag ${ownerTone(owner)}${owner && !owner.active ? ' paused' : ''}`}
+                  title={ownerLabel(owner)}
+                >
                   {owner?.kind === 'group' ? <Repeat size={10} /> : null}
+                  {owner?.kind === 'balance' ? <Scale size={10} /> : null}
                   {owner?.kind === 'keepalive' ? <HeartPulse size={10} /> : null}
-                  <span className="owner-tag-text">{ownerLabel(owner)}</span>
+                  <span className="owner-tag-text">{owner ? ownerBase(owner) : '闲散手动'}</span>
                 </span>
                 {used && <span className="server-pick-note">已在其他行</span>}
+                {otherFlow && <span className="server-pick-note">已占用</span>}
               </button>
             )
           })}

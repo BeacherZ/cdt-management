@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ArrowDown, ArrowUp, Divide, GripVertical, Plus, Repeat, Trash2, TriangleAlert } from 'lucide-react'
-import { post, SLOW_TIMEOUT_MS } from '../api'
+import { api, post, SLOW_TIMEOUT_MS } from '../api'
 import type { Server, ShiftGroup } from '../types'
 import { Modal, Segmented, Switch } from './ui'
 import ServerPicker from './ServerPicker'
@@ -150,6 +150,9 @@ export default function GroupDialog({
     return [emptyRow(), emptyRow()]
   })
   const [picking, setPicking] = useState<number | null>(null)
+  // 组绑定的记录改在这里选：一条域名只归一个组，选项只列还没被占用的
+  const [record, setRecord] = useState(group?.ddns_record?.split('、')[0] ?? '')
+  const [recordOptions, setRecordOptions] = useState<string[]>([])
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   // 日期框正在敲数字时的临时值：不然「9→20」敲到「2」就被夹到 9，第二位数字进不来
@@ -347,6 +350,22 @@ export default function GroupDialog({
     })
   }
 
+  useEffect(() => {
+    let alive = true
+    api<{ items: string[] }>(`/api/v1/dns/options?kind=group&target_id=${group?.id ?? 0}`)
+      .then((result) => {
+        if (alive) setRecordOptions(result.items ?? [])
+      })
+      .catch(() => {
+        if (alive) setRecordOptions(record ? [record] : [])
+      })
+    return () => {
+      alive = false
+    }
+    // 只在打开 / 切换组时取一次；record 变化不需要重拉选项
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [group?.id])
+
   async function save() {
     setError('')
     const blank = rows.findIndex((row) => !row.server_id)
@@ -406,7 +425,7 @@ export default function GroupDialog({
           enabled,
           failover_enabled: failover,
           cycle,
-          // 域名绑定不在这里改：由 DNS 页统一维护，避免两个入口写出不一致的绑定
+          ddns_record: record,
           members: rows.map((row, index) => ({
             server_id: row.server_id,
             hours: row.hours,
@@ -438,7 +457,7 @@ export default function GroupDialog({
 
   return (
     <Modal
-      title={editing ? '编辑联合换班组' : '新建联合换班组'}
+      title={editing ? '编辑换班组' : '新建换班组'}
       icon={<Repeat size={16} style={{ color: 'var(--green)' }} />}
       onClose={onClose}
       wide
@@ -651,16 +670,22 @@ export default function GroupDialog({
       </div>
 
       <div className="field">
-        <label>DDNS 记录</label>
-        <div className="readonly-value">
-          {group?.ddns_record ? (
-            <code>{group.ddns_record}</code>
-          ) : (
-            <span className="muted">未绑定 —— 这个组换班时不会去动任何域名</span>
-          )}
-        </div>
+        <label htmlFor="gdns">DDNS 记录</label>
+        <select
+          id="gdns"
+          className="select"
+          value={record}
+          onChange={(event) => setRecord(event.target.value)}
+        >
+          <option value="">不绑定 —— 换班时不改任何域名</option>
+          {recordOptions.map((item) => (
+            <option key={item} value={item}>
+              {item}
+            </option>
+          ))}
+        </select>
         <div className="hint">
-          绑定在左侧「DNS」页维护：一条域名只归一个组，两边不会抢。
+          只列出还没被其他组占用的记录；一条域名只归一个组。要先在 DNS 页登记，这里才选得到。
         </div>
       </div>
 
@@ -684,6 +709,7 @@ export default function GroupDialog({
       {picking !== null && (
         <ServerPicker
           servers={servers}
+          currentKind="group"
           currentGroupId={group?.id || undefined}
           taken={
             new Set(

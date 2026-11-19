@@ -5,9 +5,10 @@ export type StopMode = 'StopCharging' | 'Stop'
 
 /** 服务器被哪个自动化流程托管；null 表示闲散机器，可随时手动开关机 */
 export type Managed = {
-  kind: 'keepalive' | 'group'
+  kind: 'keepalive' | 'group' | 'balance'
   name: string
   active: boolean
+  /** 换班组或流量均衡组的 id（kind 为 group / balance 时有效） */
   group_id?: number
   keepalive_id?: number
 }
@@ -27,15 +28,15 @@ export type Billing = {
   error: string
 }
 
-/** DNS 绑定的目标：一台服务器（含单机保活）或一个换班组 */
+/** DNS 绑定的目标：一台服务器（含单机保活）、一个换班组或一个均衡组 */
 export type DnsTarget = {
-  kind: 'server' | 'group'
+  kind: 'server' | 'group' | 'balance'
   id: number
   label: string
   status: string
   running: boolean
   ip: string
-  /** 换班组专用：此刻当班那台叫什么 */
+  /** 换班组 / 均衡组专用：此刻当班那台叫什么 */
   duty?: string
 }
 
@@ -158,6 +159,46 @@ export type ShiftGroup = {
   current_index: number
 }
 
+export type BalanceMember = {
+  id: number
+  server_id: number
+  position: number
+  /** 下班动作：keep 保持运行 / stop 按实例设置停机 */
+  off_action: 'keep' | 'stop'
+  enabled: boolean
+  is_duty: boolean
+  label: string
+  instance_id: string
+  region_id: string
+  site: string
+  instance_status: string
+  public_ip: string
+  traffic_used: number | null
+  quota_gb: number
+  threshold_gb: number
+  over_limit: boolean
+}
+
+export type BalanceGroup = {
+  id: number
+  name: string
+  enabled: boolean
+  failover_enabled: boolean
+  /** 评估周期（分钟）：60/180/360/720/1440 */
+  interval_minutes: number
+  /** 差值阈值：当班比最少者多这么多 GB 才切 */
+  diff_gb: number
+  min_duty_minutes: number
+  ddns_record: string
+  members: BalanceMember[]
+  duty_server_id: number
+  phase: 'idle' | 'starting' | 'switching' | 'exhausted' | 'error'
+  note: string
+  last_switch_at: number
+  next_eval_at: number
+  updated_at: number
+}
+
 export type EventItem = {
   id: number
   ts: number
@@ -191,6 +232,7 @@ export type Overview = {
   servers: Server[]
   keepalives: Keepalive[]
   groups: ShiftGroup[]
+  balances: BalanceGroup[]
   dns: DnsState
   notifications: {
     channels: string[]
@@ -216,6 +258,8 @@ export type Settings = {
   daily_report_enabled: boolean
   daily_report_time: string
   notify_on_shift: boolean
+  notify_on_balance: boolean
+  notify_on_balance_error: boolean
   notify_on_failover: boolean
   notify_on_recovery: boolean
   notify_on_breaker: boolean

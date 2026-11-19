@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   GripVertical,
   Globe2,
+  Hand,
   HeartPulse,
   LayoutGrid,
   List,
@@ -14,17 +15,20 @@ import {
   PowerOff,
   RefreshCw,
   Repeat,
+  Scale,
   Server as ServerIcon,
   Trash2,
 } from 'lucide-react'
 import { regionLabel } from '../regions'
-import { ownerBase, ownerLabel } from '../owners'
+import { ownerBase, ownerLabel, ownerTone } from '../owners'
 import { clockText } from '../time'
-import type { Billing, Server } from '../types'
+import type { Billing, Managed, Server } from '../types'
 import { Badge, Empty, Meter, money, statusLabel, statusTone, stoppedModeLabel } from './ui'
 
 type Props = {
   servers: Server[]
+  /** 全量归属表（含已停用的组员 / 保活）：筛选与归属标签都以它为准 */
+  owners: Map<number, Managed>
   busyId: number | null
   billingId: number | null
   onAdd: () => void
@@ -39,6 +43,30 @@ type Props = {
 
 type ViewMode = 'card' | 'list'
 
+/** 归属筛选的一颗胶囊。按**类型**分档，不按组名：
+    联合换班、流量均衡下面可能各挂好几个组，列成组名一排排不下，找的也不是「哪个组」。 */
+type OwnerChip = {
+  key: string
+  label: string
+  tone: string
+  icon: typeof Hand
+  count: number
+}
+
+/** 分档顺序固定：闲散手动 → 单机保活 → 联合换班 → 流量均衡，跟侧栏口径一致 */
+const OWNER_TABS: { key: string; label: string; tone: string; icon: typeof Hand }[] = [
+  { key: 'free', label: '闲散手动', tone: 'tone-free', icon: Hand },
+  { key: 'keepalive', label: '单机保活', tone: 'tone-keepalive', icon: HeartPulse },
+  { key: 'shift', label: '联合换班', tone: 'tone-shift', icon: Repeat },
+  { key: 'balance', label: '流量均衡', tone: 'tone-balance', icon: Scale },
+]
+
+/** 一台机器属于哪一档：同一个类型下的多个组并进同一档，计数相加 */
+function ownerKeyOf(owner: Managed | null): string {
+  if (!owner) return 'free'
+  return owner.kind === 'group' ? 'shift' : owner.kind
+}
+
 /** 后端把多台记录用顿号连成一串（一台可以绑多条），这里拆回一个个小框 */
 function dnsRecords(value?: string): string[] {
   return (value || '')
@@ -49,6 +77,7 @@ function dnsRecords(value?: string): string[] {
 
 export default function ServersView({
   servers,
+  owners,
   busyId,
   billingId,
   onAdd,
@@ -60,11 +89,32 @@ export default function ServersView({
   onBilling,
   onReorder,
 }: Props) {
-  const idleCount = servers.filter((server) => !server.managed).length
   const [viewMode, setViewMode] = useState<ViewMode>('card')
+  // 归属筛选：'all' = 不过滤，其余见 ownerKeyOf
+  const [ownerKey, setOwnerKey] = useState<string>('all')
   // 拖拽排序：记录当前被拖的 id 与悬停目标 id，用于视觉反馈与松手换位
   const [dragId, setDragId] = useState<number | null>(null)
   const [overId, setOverId] = useState<number | null>(null)
+
+  const ownerOf = (server: Server): Managed | null => owners.get(server.id) ?? server.managed ?? null
+
+  // 按类型计数：同一个类型下的多个组并成一档
+  const counted = new Map<string, number>()
+  for (const server of servers) {
+    const key = ownerKeyOf(ownerOf(server))
+    counted.set(key, (counted.get(key) ?? 0) + 1)
+  }
+  const chips: OwnerChip[] = OWNER_TABS.map((tab) => ({ ...tab, count: counted.get(tab.key) ?? 0 })).filter(
+    (chip) => chip.count > 0,
+  )
+
+  // 选中的这一档没了（最后一台机器移出该流程）就退回「全部」，别停在空列表上
+  const activeKey = ownerKey === 'all' || counted.has(ownerKey) ? ownerKey : 'all'
+  const visible =
+    activeKey === 'all'
+      ? servers
+      : servers.filter((server) => ownerKeyOf(ownerOf(server)) === activeKey)
+  const idleCount = counted.get('free') ?? 0
 
   function handleDrop(targetId: number) {
     if (dragId === null || dragId === targetId) {
@@ -72,19 +122,23 @@ export default function ServersView({
       setOverId(null)
       return
     }
-    const next = [...servers]
-    const from = next.findIndex((server) => server.id === dragId)
-    const to = next.findIndex((server) => server.id === targetId)
+    const visibleIds = visible.map((server) => server.id)
+    const from = visibleIds.indexOf(dragId)
+    const to = visibleIds.indexOf(targetId)
     if (from < 0 || to < 0) {
       setDragId(null)
       setOverId(null)
       return
     }
-    const [moved] = next.splice(from, 1)
+    const nextVisible = [...visibleIds]
+    const [moved] = nextVisible.splice(from, 1)
     // 向下拖时 to 是删除前算的：先 splice 掉 from，目标整体左移一位，
     // 直接插到 to 会落在目标后面（差一格）。向上拖不受影响。
-    next.splice(from < to ? to - 1 : to, 0, moved)
-    onReorder(next.map((server) => server.id))
+    nextVisible.splice(from < to ? to - 1 : to, 0, moved)
+    // 筛选状态下只重排「看得见的那些位置」，被筛掉的机器原地不动
+    const slots = new Set(visibleIds)
+    let cursor = 0
+    onReorder(servers.map((server) => (slots.has(server.id) ? nextVisible[cursor++] : server.id)))
     setDragId(null)
     setOverId(null)
   }
@@ -127,6 +181,40 @@ export default function ServersView({
         </div>
       </div>
 
+      {/* 归属选择：机器一多，卡片墙一眼扫不到「那台保活的」在哪。
+          按归属分档后点一下只剩这一档，档内还是原来的顺序，开关机 / 拖拽都不受影响。
+          只有一档归属（全都是闲散、或者只有一台）时不显示，免得白占一行。 */}
+      {chips.length > 1 && (
+        <div className="owner-filter" role="group" aria-label="按归属筛选实例">
+          <button
+            type="button"
+            className={`owner-chip${activeKey === 'all' ? ' on' : ''}`}
+            aria-pressed={activeKey === 'all'}
+            onClick={() => setOwnerKey('all')}
+          >
+            全部
+            <span className="owner-chip-count">{servers.length}</span>
+          </button>
+          {chips.map((chip) => {
+            const Icon = chip.icon
+            return (
+              <button
+                key={chip.key}
+                type="button"
+                className={`owner-chip ${chip.tone}${activeKey === chip.key ? ' on' : ''}`}
+                aria-pressed={activeKey === chip.key}
+                title={`只看${chip.label}`}
+                onClick={() => setOwnerKey(chip.key)}
+              >
+                <Icon size={12} />
+                {chip.label}
+                <span className="owner-chip-count">{chip.count}</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+
       {servers.length === 0 ? (
         <div className="card">
           <Empty icon={<ServerIcon size={20} />} title="还没有实例">
@@ -136,7 +224,8 @@ export default function ServersView({
         </div>
       ) : viewMode === 'list' ? (
         <ServerTable
-          servers={servers}
+          servers={visible}
+          owners={owners}
           busyId={busyId}
           billingId={billingId}
           onEdit={onEdit}
@@ -148,9 +237,9 @@ export default function ServersView({
         />
       ) : (
         <div className="server-grid">
-          {servers.map((server) => {
+          {visible.map((server) => {
             const running = server.instance_status === 'Running'
-            const owner = server.managed ?? null
+            const owner = ownerOf(server)
             const busy = busyId === server.id
             const locked = Boolean(owner?.active)
             const ownerText = owner ? ownerLabel(owner) : ''
@@ -267,23 +356,37 @@ export default function ServersView({
                   <div style={{ fontSize: 12, color: 'var(--muted-soft)' }}>{server.remark}</div>
                 )}
 
+                {dnsRecords(server.dns_record).length > 0 && (
+                  <div className="card-dns-row">
+                    {dnsRecords(server.dns_record).map((record) => (
+                      <span className="dns-chip" key={record} title={record}>
+                        <Globe2 size={10} />
+                        <span className="dns-chip-text">{record}</span>
+                      </span>
+                    ))}
+                  </div>
+                )}
+
                 <div className="card-foot">
-                  <span className={`owner-tag${owner ? (locked ? ' locked' : ' paused') : ' free'}`}>
+                  <span
+                    className={`owner-tag ${ownerTone(owner)}${owner && !owner.active ? ' paused' : ''}`}
+                    title={ownerText || '闲散手动'}
+                  >
                     {owner ? (
                       <>
-                        {owner.kind === 'group' ? <Repeat size={10} /> : <HeartPulse size={10} />}
-                        <span className="owner-tag-text">{ownerText}</span>
+                        {owner.kind === 'group' ? (
+                          <Repeat size={10} />
+                        ) : owner.kind === 'balance' ? (
+                          <Scale size={10} />
+                        ) : (
+                          <HeartPulse size={10} />
+                        )}
+                        <span className="owner-tag-text">{ownerBase(owner)}</span>
                       </>
                     ) : (
                       <>闲散手动</>
                     )}
                   </span>
-                  {dnsRecords(server.dns_record).map((record) => (
-                    <span className="dns-chip" key={record} title={record}>
-                      <Globe2 size={10} />
-                      <span className="dns-chip-text">{record}</span>
-                    </span>
-                  ))}
 
                   <div className="foot-actions">
                     {!owner && (
@@ -320,6 +423,7 @@ export default function ServersView({
 /** 表格视图：一屏看全所有实例的核心字段，适合机器多的时候快速对比 */
 function ServerTable({
   servers,
+  owners,
   busyId,
   billingId,
   onEdit,
@@ -330,6 +434,7 @@ function ServerTable({
   onBilling,
 }: {
   servers: Server[]
+  owners: Map<number, Managed>
   busyId: number | null
   billingId: number | null
   onEdit: (server: Server) => void
@@ -360,7 +465,7 @@ function ServerTable({
         <tbody>
           {servers.map((server) => {
             const running = server.instance_status === 'Running'
-            const owner = server.managed ?? null
+            const owner = owners.get(server.id) ?? server.managed ?? null
             const busy = busyId === server.id
             const locked = Boolean(owner?.active)
             const ownerText = ownerLabel(owner)
@@ -442,13 +547,19 @@ function ServerTable({
                 </td>
                 <td data-label="归属">
                   <span
-                    className={`owner-tag${owner ? (locked ? ' locked' : ' paused') : ' free'}`}
-                    title={ownerText}
+                    className={`owner-tag ${ownerTone(owner)}${owner && !owner.active ? ' paused' : ''}`}
+                    title={ownerText || '闲散手动'}
                   >
                     {owner ? (
                       <>
-                        {owner.kind === 'group' ? <Repeat size={10} /> : <HeartPulse size={10} />}
-                        <span className="owner-tag-text">{ownerText}</span>
+                        {owner.kind === 'group' ? (
+                          <Repeat size={10} />
+                        ) : owner.kind === 'balance' ? (
+                          <Scale size={10} />
+                        ) : (
+                          <HeartPulse size={10} />
+                        )}
+                        <span className="owner-tag-text">{ownerBase(owner)}</span>
                       </>
                     ) : (
                       <>闲散手动</>

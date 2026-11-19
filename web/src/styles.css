@@ -58,6 +58,9 @@
   --red-soft: rgba(189, 54, 69, 0.1);
   --amber: #a06408;
   --amber-soft: rgba(168, 102, 8, 0.12);
+  /* 单机保活的归属色：紫。绿=换班、蓝=均衡，再取紫才不会和它们撞色 */
+  --violet: #6b4fbd;
+  --violet-soft: rgba(107, 79, 189, 0.11);
 
   /* 形状 */
   --radius-xl: 22px;
@@ -115,6 +118,8 @@
   --red-soft: rgba(240, 112, 126, 0.14);
   --amber: #e0a13a;
   --amber-soft: rgba(224, 161, 58, 0.16);
+  --violet: #a992ff;
+  --violet-soft: rgba(169, 146, 255, 0.16);
 
   --shadow-1: 0 1px 1px rgba(0, 0, 0, 0.4), 0 2px 6px -2px rgba(0, 0, 0, 0.5);
   --shadow-2: 0 1px 2px rgba(0, 0, 0, 0.45), 0 10px 24px -14px rgba(0, 0, 0, 0.8);
@@ -1006,6 +1011,13 @@ input[type='number']::-webkit-inner-spin-button {
 
 .ring.blue .ring-bar {
   stroke: var(--blue);
+  filter: drop-shadow(0 0 5px var(--blue-soft));
+}
+
+/* 单机保活：和「归属」胶囊里的紫色同一个色，四个模块各自一色，扫一眼分得清 */
+.ring.violet .ring-bar {
+  stroke: var(--violet);
+  filter: drop-shadow(0 0 5px var(--violet-soft));
 }
 
 .ring-text {
@@ -1116,6 +1128,41 @@ input[type='number']::-webkit-inner-spin-button {
   flex: 1;
 }
 
+/* 通知类别分成「流程完成 / 流程异常 / 实例与保护」三组：
+   七项平铺时看不出哪条属于哪套逻辑，分组后扫一眼就知道在配什么 */
+.switch-group + .switch-group > .switch-group-label {
+  margin-top: 18px;
+}
+
+/* 通知类别的分组标题：之前 11.5px 灰字，和下面的开关名几乎分不出层级。
+   现在加一条主色竖条 + 右侧延伸的分隔线，扫一眼就知道换组了。 */
+.switch-group-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 2px;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--ink);
+}
+
+.switch-group-label::before {
+  content: '';
+  flex: 0 0 auto;
+  width: 3px;
+  height: 12px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.switch-group-label::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--line-strong);
+}
+
 .toggle-text strong {
   font-size: 13px;
   font-weight: 600;
@@ -1178,6 +1225,9 @@ input[type='number']::-webkit-inner-spin-button {
 
 .segmented {
   display: inline-flex;
+  /* 装不下时整颗换行，而不是把「1 小时」拆成「1 小 / 时」 */
+  flex-wrap: wrap;
+  max-width: 100%;
   padding: 3px;
   gap: 2px;
   border-radius: var(--radius-md);
@@ -1193,6 +1243,8 @@ input[type='number']::-webkit-inner-spin-button {
   font-family: inherit;
   font-size: 12px;
   font-weight: 550;
+  /* 选项文案一律不折行：按钮再窄也只是整体换行，词不会被劈开 */
+  white-space: nowrap;
   padding: 5px 15px;
   border-radius: 8px;
   cursor: pointer;
@@ -1347,6 +1399,16 @@ input[type='number']::-webkit-inner-spin-button {
 /* 指标卡标签里的小图标统一上品牌色，让四个卡一眼有主次 */
 .stat .label svg {
   color: var(--accent);
+}
+
+/* 但归属模块那两张（单机保活 / 流量均衡）用各自的归属色，
+   和实例管理顶上的筛选胶囊、侧栏的归属提示保持同一套语义 */
+.stat .label.violet svg {
+  color: var(--violet);
+}
+
+.stat .label.blue svg {
+  color: var(--blue);
 }
 
 .stat .value {
@@ -1527,6 +1589,14 @@ input[type='number']::-webkit-inner-spin-button {
 
 /* ---------------------------------------------------- 卡片底部：托管 / 手动 */
 
+/* 域名单独占一行（倒数第二行）。和归属胶囊挤在同一行时，绑了域名的卡片会多折
+   一行，同一排卡片的归属就高低不齐；拆出来以后归属永远贴着底边对齐。 */
+.card-dns-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .card-foot {
   margin-top: auto;
   padding-top: 11px;
@@ -1619,24 +1689,153 @@ input[type='number']::-webkit-inner-spin-button {
   opacity: 0.85;
 }
 
-/* 闲散：可以随便开关机，给一点主色提示 */
+/* 归属胶囊按**类型**上色，不再按「托管中 / 已暂停」：
+   换班组绿、均衡组蓝、单机保活紫，闲散手动不上色。
+   以前四种状态只有三种颜色，换班组和均衡组都是蓝，扫一眼分不出是哪套逻辑。
+
+   闲散手动刻意留白：颜色只用来标「这台被哪个自动化流程接管」，
+   没人管的机器用中性描边反而最清楚 —— 一排卡片里没颜色的那几台就是可以随便动的。 */
 .owner-tag.free {
+  color: var(--muted);
+  border-color: var(--line);
+  background: transparent;
+}
+
+.owner-tag.kind-shift {
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 26%, transparent);
   background: var(--accent-soft);
 }
 
-/* 暂停中的自动化流程：机器归你手动管 */
-.owner-tag.paused {
-  color: var(--amber);
-  border-color: color-mix(in srgb, var(--amber) 26%, transparent);
-  background: var(--amber-soft);
-}
-
-.owner-tag.locked {
+.owner-tag.kind-balance {
   color: var(--blue);
   border-color: color-mix(in srgb, var(--blue) 24%, transparent);
   background: var(--blue-soft);
+}
+
+.owner-tag.kind-keepalive {
+  color: var(--violet);
+  border-color: color-mix(in srgb, var(--violet) 26%, transparent);
+  background: var(--violet-soft);
+}
+
+/* 暂停中的自动化流程：颜色还是这套流程的，只加虚线边 —— 一眼看出「还挂着但没在管」 */
+.owner-tag.paused {
+  border-style: dashed;
+  opacity: 0.86;
+}
+
+/* ------------------------------------------------ 实例管理的归属筛选 */
+
+/* 机器一多，卡片墙就看不出「那台保活的」在第几行。
+   顶部按归属分档，点一下只剩这一档；颜色沿用 .owner-tag 那套映射
+   （换班绿 / 均衡蓝 / 保活紫 / 闲散中性），筛选结果和卡片上的归属是同一个说法。 */
+.owner-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: -4px 0 16px;
+}
+
+.owner-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-inset);
+  color: var(--ink-soft);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 550;
+  line-height: 1.35;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+
+.owner-chip svg {
+  flex: none;
+  opacity: 0.72;
+}
+
+.owner-chip:hover {
+  border-color: var(--line-strong);
+  color: var(--ink);
+}
+
+.owner-chip:hover svg {
+  opacity: 1;
+}
+
+/* 未选中时图标就先带上归属色：不用点开也知道哪颗是换班、哪颗是均衡 */
+.owner-chip.tone-shift svg {
+  color: var(--accent);
+  opacity: 0.9;
+}
+
+.owner-chip.tone-balance svg {
+  color: var(--blue);
+  opacity: 0.9;
+}
+
+.owner-chip.tone-keepalive svg {
+  color: var(--violet);
+  opacity: 0.9;
+}
+
+.owner-chip-count {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 选中：底色与文字换成这一档的归属色，边框跟着实起来 */
+.owner-chip.on {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  color: var(--accent);
+}
+
+.owner-chip.on .owner-chip-count {
+  background: color-mix(in srgb, currentColor 16%, transparent);
+  color: inherit;
+}
+
+.owner-chip.tone-free.on {
+  background: var(--panel-soft);
+  border-color: var(--line-strong);
+  color: var(--ink);
+}
+
+.owner-chip.tone-shift.on {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  color: var(--accent);
+}
+
+.owner-chip.tone-balance.on {
+  background: var(--blue-soft);
+  border-color: color-mix(in srgb, var(--blue) 26%, transparent);
+  color: var(--blue);
+}
+
+.owner-chip.tone-keepalive.on {
+  background: var(--violet-soft);
+  border-color: color-mix(in srgb, var(--violet) 28%, transparent);
+  color: var(--violet);
 }
 
 .foot-actions {
@@ -2117,11 +2316,14 @@ input[type='number']::-webkit-inner-spin-button {
 .inst-owner-line .duty-tag {
   display: inline-flex;
   align-items: center;
-  padding: 1px 8px;
+  padding: 1px 7px;
   border-radius: 999px;
-  font-size: 12px;
-  font-weight: 650;
-  letter-spacing: 0.02em;
+  /* 比归属正文（12px）小一号：它只是「这台此刻在当班」的注脚，
+     字号和正文齐平时，实心绿/蓝底会把旁边的组名压下去，整行显脏 */
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 1.5;
   color: #fff;
   background: var(--accent-grad);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.26);
@@ -2132,6 +2334,16 @@ input[type='number']::-webkit-inner-spin-button {
 :root[data-theme='dark'] .slot-side .duty-tag,
 :root[data-theme='dark'] .inst-owner-line .duty-tag {
   color: #04241b;
+}
+
+/* 流量均衡的「当班」用蓝色：换班是绿的，两套逻辑同时开着时，
+   扫一眼就知道这台是被排班表点了名，还是因为流量最少被指派 */
+.duty-tag.duty-tag-balance {
+  background: linear-gradient(135deg, #3b82f6 0%, #2563b8 100%);
+}
+
+:root[data-theme='dark'] .duty-tag.duty-tag-balance {
+  color: #f2f7ff;
 }
 
 /* 槽位主体：左信息 / 右 IP+流量。列宽写在样式里而不是内联，
@@ -2438,7 +2650,7 @@ input[type='number']::-webkit-inner-spin-button {
 
 .inst-owner-line .duty-tag {
   flex: none;
-  padding: 1px 7px;
+  padding: 1px 6px;
 }
 
 .inst-owner {
@@ -2714,6 +2926,10 @@ input[type='number']::-webkit-inner-spin-button {
 .events {
   display: flex;
   flex-direction: column;
+  /* 首尾行原本靠少给 8px 内边距来贴齐卡片，悬停底色就比中间行矮一截。
+     改成所有行内边距一致、整块用负边距收回那 8px：内容位置分毫不动，
+     每行悬停高亮都是同一个完整矩形。 */
+  margin: -8px 0;
 }
 
 /* 事件列表底部「显示更多事件」：整行宽、居中、低调，别抢事件本身的注意力 */
@@ -2759,14 +2975,6 @@ input[type='number']::-webkit-inner-spin-button {
   .event-main:hover {
     background: var(--panel-inset);
   }
-}
-
-.event:first-child .event-main {
-  padding-top: 2px;
-}
-
-.event:last-child .event-main {
-  padding-bottom: 2px;
 }
 
 .event.is-open .event-main {
@@ -3628,6 +3836,31 @@ input[type='number']::-webkit-inner-spin-button {
   color: var(--muted-soft);
 }
 
+/* 均衡组成员行的「下班后」：和换班行的时刻 / 工时同高，不额外撑高整行 */
+.member-off {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  height: 32px;
+}
+
+.member-off > span {
+  font-size: 12px;
+  color: var(--muted-soft);
+  white-space: nowrap;
+}
+
+.segmented.mini {
+  padding: 2px;
+  gap: 1px;
+}
+
+.segmented.mini button {
+  padding: 4px 9px;
+  font-size: 12px;
+}
+
 /* 成员行里的「选择服务器」：长得像下拉框，点开是带归属状态的列表 */
 .member-pick {
   flex: 1 1 150px;
@@ -4173,5 +4406,22 @@ input[type='number']::-webkit-inner-spin-button {
 
   .settings-actions .foot-note {
     display: none;
+  }
+}
+
+/* -------------------------------------------------------------- 小屏：分段控件 */
+/* 均衡组弹窗的「评估周期」有五个选项，390px 下每颗只剩 56–63px，
+   加上默认的 15px 左右内边距，文字会被挤成两行（「1 小 / 时」）。
+   小屏收一档内边距让它仍然是一行；再窄的机器（≤400）连字号也收半号。 */
+@media (max-width: 700px) {
+  .segmented button {
+    padding: 5px 10px;
+  }
+}
+
+@media (max-width: 400px) {
+  .segmented button {
+    padding: 5px 8px;
+    font-size: 11.5px;
   }
 }

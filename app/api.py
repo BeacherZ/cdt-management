@@ -15,7 +15,7 @@ from typing import Any
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from . import aliyun, billing, ddns, dns, messages, notify, repo, security, settings
+from . import aliyun, balance, billing, ddns, dns, messages, notify, owners, repo, security, settings
 from .shift import (
     PHASE_BREAKER,
     PHASE_ERROR,
@@ -134,7 +134,9 @@ SETTING_LABELS = {
     "reconcile_offset": "巡检起始秒",
     "daily_report_enabled": "每日汇总",
     "daily_report_time": "汇总时间",
-    "notify_on_shift": "换班通知",
+    "notify_on_shift": "联合换班通知",
+    "notify_on_balance": "流量均衡通知",
+    "notify_on_balance_error": "流量均衡异常通知",
     "notify_on_failover": "故障转移通知",
     "notify_on_recovery": "抢占恢复通知",
     "notify_on_breaker": "全局熔断通知（全部成员）",
@@ -212,6 +214,7 @@ def _config_from_draft(payload: dict[str, Any]) -> dict[str, str]:
     for key in (
         "notify_on_shift",
         "notify_on_failover",
+        "notify_on_balance",
         "notify_on_recovery",
         "notify_on_breaker",
         "notify_on_limit_stop",
@@ -487,31 +490,44 @@ def _keepalive_window(payload: dict[str, Any]) -> tuple[str, str, int, int]:
 def _managed_map() -> dict[int, dict[str, Any]]:
     """哪台服务器被哪个自动化流程接管。
 
-    换班组优先于单机保活：同一台机器同时在两处时，单机保活本来就会让位，
-    这里保持一致，免得界面给出两套互相矛盾的说明。
+    单机保活 / 联合换班 / 流量均衡三者互斥，判定统一放在 owners 里，
+    界面和入组校验读的是同一份结果。
     """
-    managed: dict[int, dict[str, Any]] = {}
-    for group in repo.list_groups():
-        for member in group.get("members") or []:
-            if not member.get("enabled"):
-                continue
-            managed[int(member["server_id"])] = {
-                "kind": "group",
-                "group_id": int(group["id"]),
-                "name": group.get("name") or "",
-                "active": bool(group.get("enabled")),
-            }
-    for item in repo.list_keepalives():
-        server_id = int(item["server_id"])
-        if server_id in managed:
-            continue
-        managed[server_id] = {
-            "kind": "keepalive",
-            "keepalive_id": int(item["id"]),
-            "name": item.get("label") or "",
-            "active": bool(item.get("enabled")),
-        }
-    return managed
+    return owners.managed_map()
+
+
+def _server_labels() -> dict[int, str]:
+    return {int(s["id"]): str(s.get("label") or f"#{s['id']}") for s in repo.list_servers()}
+
+
+def _check_ddns(kind: str, target_id: int, record: Any) -> str:
+    """只校验不改库：写组配置之前先把记录占用冲突挡掉。"""
+    name = str(record or "").strip()
+    if not name:
+        return ""
+    row = repo.get_dns_record(name)
+    if row is None:
+        raise ValueError(f"{name} 还没在 DNS 页登记，先去 DNS 页添加")
+    owner_kind = str(row.get("target_kind") or "")
+    owner_id = int(row.get("target_id") or 0)
+    if owner_kind and not (owner_kind == kind and owner_id == int(target_id)):
+        raise ValueError(f"{name} 已被其他目标绑定，先解绑再选它")
+    return name
+
+
+def _bind_ddns(kind: str, target_id: int, record: Any) -> None:
+    """把组绑到一条记录上（组设置里的下拉）。
+
+    只接受「还没被别的目标占用的记录」：一条域名同时归两个组，两边每轮都会
+    把解析改成自己的当班机，来回抢，界面上看不出谁是对的。当前组自己已经
+    占着的那条要放行，否则编辑已有组会一直报错。
+    """
+    name = _check_ddns(kind, target_id, record)
+    for current in repo.dns_records_of(kind, target_id):
+        if current != name:
+            repo.unbind_dns_record(current)
+    if name:
+        repo.bind_dns_record(name, kind, target_id)
 
 
 def _finite_gb(value: Any, fallback: float = 0.0) -> float:
@@ -773,6 +789,9 @@ def register(app: FastAPI) -> None:
                 _group_payload(g, config, now.timestamp(), managed, books)
                 for g in repo.list_groups()
             ],
+            # 流量均衡组：界面节奏与换班组一致（10 秒轮询一次概览），
+            # 单独开接口会让两张页面的「当班」在不同时刻刷新
+            "balances": balance.snapshot(),
             # DNS 页的全部数据：记录名 + 绑定目标 + 上次同步结果
             "dns": dns.snapshot(config, now.timestamp()),
             "notifications": {
@@ -792,6 +811,13 @@ def register(app: FastAPI) -> None:
         if results is None:
             # 上一轮还没跑完（后台正忙）：这轮根本没执行，别让前端提示「已触发」。
             return {"results": [], "busy": True, "dns": []}
+        # 流量均衡是另一套引擎，手动这轮也要过一遍：否则用户点了「立即对账」，
+        # 均衡组还得等下一次定时巡检才动（间隔可到几十分钟），看起来像按钮没生效。
+        # 单独 try 住：均衡出错不能把换班结果和下面的 DNS 对账一起挡掉。
+        try:
+            balance.reconcile_all(repo.get_settings())
+        except Exception:  # noqa: BLE001
+            log.exception("手动对账时流量均衡失败")
         # 手动对账时顺手把 DNS 也过一遍，免得「点了立即对账但域名没跟上」
         return {"results": results, "busy": False, "dns": dns.reconcile(repo.get_settings())}
 
@@ -872,6 +898,9 @@ def register(app: FastAPI) -> None:
         server_id = int(payload.get("server_id") or 0)
         if not server_id:
             raise ValueError("请选择服务器")
+        # 三选一：已在换班组 / 均衡组里的机器不能再加单机保活。
+        # 反方向（换班组、均衡组入组时）各自也有 ensure_free，这里补齐才闭环。
+        owners.ensure_free([server_id], owners.KEEPALIVE, labels=_server_labels())
         start_time, end_time, start_day, end_day = _keepalive_window(payload)
         return {
             "id": repo.add_keepalive(
@@ -937,8 +966,18 @@ def register(app: FastAPI) -> None:
         # 一月一轮按天排，没有小时边界，时刻表校验（盖满一天）不适用
         if str(payload.get("cycle") or "day") != "month":
             _validate_group_timetable(payload)
-        is_new = not int(payload.get("id") or 0)
+        group_id = int(payload.get("id") or 0)
+        member_ids = [
+            int(item.get("server_id") or 0)
+            for item in payload.get("members") or []
+            if int(item.get("server_id") or 0)
+        ]
+        # 一台实例只能归一个流程：已在保活或均衡组里的机器不许再进换班组
+        owners.ensure_free(member_ids, owners.SHIFT, group_id, _server_labels())
+        _check_ddns(dns.TARGET_GROUP, group_id, payload.get("ddns_record"))
+        is_new = not group_id
         group_id = repo.upsert_group(payload)
+        _bind_ddns(dns.TARGET_GROUP, group_id, payload.get("ddns_record"))
         if not is_new:
             return {"id": group_id}
         # 新建后立刻按排班表对一次组员状态：该当班的开机、该休班的节省停机，
@@ -962,6 +1001,61 @@ def register(app: FastAPI) -> None:
     def switch_group(request: Request, group_id: int, user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
         require_csrf(request)
         return {"result": engine.manual_switch(group_id)}
+
+    # -- 流量均衡组 -----------------------------------------------------
+    @app.get("/api/v1/balances")
+    def balances(user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
+        return {"items": balance.snapshot()}
+
+    @app.post("/api/v1/balances")
+    def save_balance(request: Request, payload: dict[str, Any], user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
+        require_csrf(request)
+        group_id = int(payload.get("id") or 0)
+        member_ids = [
+            int(item.get("server_id") or 0)
+            for item in payload.get("members") or []
+            if int(item.get("server_id") or 0)
+        ]
+        owners.ensure_free(member_ids, owners.BALANCE, group_id, _server_labels())
+        _check_ddns(dns.TARGET_BALANCE, group_id, payload.get("ddns_record"))
+        is_new = not group_id
+        group_id = repo.upsert_balance_group(payload)
+        _bind_ddns(dns.TARGET_BALANCE, group_id, payload.get("ddns_record"))
+        result: dict[str, Any] = {}
+        if is_new:
+            # 新建后立刻指一次：选流量最少的，在跑就直接切换，没跑就等它开机
+            try:
+                result = balance.bootstrap_group(group_id)
+            except Exception as exc:  # noqa: BLE001 - 组已经存好，不因首次指派失败丢配置
+                log.exception("新建均衡组后首次指派失败")
+                result = {"error": str(exc)}
+        return {"id": group_id, "bootstrap": result}
+
+    @app.delete("/api/v1/balances/{group_id}")
+    def remove_balance(request: Request, group_id: int, user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
+        require_csrf(request)
+        if repo.get_balance_group(group_id) is None:
+            raise HTTPException(status_code=404, detail="均衡组不存在")
+        return balance.dissolve_group(group_id)
+
+    @app.post("/api/v1/balances/{group_id}/switch")
+    def switch_balance(request: Request, group_id: int, user: str = Depends(require_admin)):  # noqa: ANN202, ARG001
+        require_csrf(request)
+        return {"result": balance.manual_switch(group_id)}
+
+    @app.get("/api/v1/dns/options")
+    def dns_options(
+        kind: str = "",
+        target_id: int = 0,
+        user: str = Depends(require_admin),  # noqa: ANN001, ARG001
+    ):
+        """组设置下拉：还没被占用的记录 + 本组自己已绑的那条。"""
+        items: list[str] = []
+        for row in repo.list_dns_records():
+            owner = str(row.get("target_kind") or "")
+            if not owner or (owner == kind and int(row.get("target_id") or 0) == int(target_id)):
+                items.append(str(row["record"]))
+        return {"items": items}
 
     # -- DNS -----------------------------------------------------------
     @app.get("/api/v1/dns")
@@ -1049,6 +1143,8 @@ def register(app: FastAPI) -> None:
             "daily_report_enabled": config.get("daily_report_enabled") == "1",
             "daily_report_time": config.get("daily_report_time"),
             "notify_on_shift": config.get("notify_on_shift") == "1",
+            "notify_on_balance": config.get("notify_on_balance") == "1",
+            "notify_on_balance_error": config.get("notify_on_balance_error") == "1",
             "notify_on_failover": config.get("notify_on_failover") == "1",
             "notify_on_recovery": config.get("notify_on_recovery") == "1",
             "notify_on_breaker": config.get("notify_on_breaker") == "1",
@@ -1158,6 +1254,8 @@ def register(app: FastAPI) -> None:
             updates["daily_report_time"] = text
         for key in (
             "notify_on_shift",
+            "notify_on_balance",
+            "notify_on_balance_error",
             "notify_on_failover",
             "notify_on_recovery",
             "notify_on_breaker",

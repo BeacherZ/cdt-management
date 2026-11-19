@@ -9,10 +9,11 @@ import {
   Plus,
   RefreshCw,
   Repeat,
+  Scale,
   Server as ServerIcon,
   Trash2,
 } from 'lucide-react'
-import type { DnsRecord, DnsState, Keepalive, Server, ShiftGroup } from '../types'
+import type { BalanceGroup, DnsRecord, DnsState, Keepalive, Server, ShiftGroup } from '../types'
 import { timeAgo } from '../time'
 import { Badge, Empty, type Tone } from './ui'
 
@@ -21,6 +22,7 @@ type Props = {
   servers: Server[]
   keepalives: Keepalive[]
   groups: ShiftGroup[]
+  balances: BalanceGroup[]
   busy: string | null
   syncingAll: boolean
   onBind: (record: string, kind: string, id: number) => void
@@ -63,6 +65,7 @@ export default function DNSView({
   servers,
   keepalives,
   groups,
+  balances,
   busy,
   syncingAll,
   onBind,
@@ -103,11 +106,12 @@ export default function DNSView({
   }
 
   const keepaliveIds = new Set(keepalives.map((item) => item.server_id))
-  // 第一项是「所有实例」全量清单，下面两个大项只是同一批机器的不同视角（快捷入口）：
-  // 换班组会接管机器，所以这些机器不再重复出现在「单机保活」里。
-  const groupedIds = new Set(
-    groups.flatMap((group) => group.members.map((member) => member.server_id)),
-  )
+  // 第一项是「所有实例」全量清单，下面几个大项只是同一批机器的不同视角（快捷入口）：
+  // 换班组 / 均衡组会接管机器，所以这些机器不再重复出现在「单机保活」里。
+  const groupedIds = new Set([
+    ...groups.flatMap((group) => group.members.map((member) => member.server_id)),
+    ...balances.flatMap((group) => group.members.map((member) => member.server_id)),
+  ])
   const keepaliveServers = servers.filter(
     (server) => keepaliveIds.has(server.id) && !groupedIds.has(server.id),
   )
@@ -128,11 +132,11 @@ export default function DNSView({
     <>
       <div className="page-head">
         <div>
-          <h1>DNS</h1>
+          <h1>域名记录</h1>
           <p>
-            一条域名只绑一台机器（或一个换班组），但一台机器、一个换班组都可以挂多条域名。
+            一条域名只绑一台机器（或一个组），但一台机器、一个组都可以挂多条域名。
             没绑的记录一律不动；机器一开机，指向它的所有记录一起更新 —— 不会再出现几台机器抢同一个域名。
-            绑到单台机器就固定指它，不跟随换班组的轮换走。
+            绑到单台机器就固定指它，不跟随换班组 / 均衡组的轮换走。
           </p>
         </div>
         <div className="page-actions">
@@ -313,6 +317,15 @@ export default function DNSView({
                         ))}
                       </optgroup>
                     )}
+                    {balances.length > 0 && (
+                      <optgroup label="均衡组">
+                        {balances.map((group) => (
+                          <option key={`b-${group.id}`} value={`balance:${group.id}`}>
+                            {group.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
                   </select>
                 </div>
 
@@ -321,13 +334,21 @@ export default function DNSView({
                     <span className="dns-target">
                       {target.kind === 'group' ? (
                         <Repeat size={11} />
+                      ) : target.kind === 'balance' ? (
+                        <Scale size={11} />
                       ) : keepaliveIds.has(target.id) ? (
                         <HeartPulse size={11} />
                       ) : (
                         <ServerIcon size={11} />
                       )}
-                      {target.kind === 'group' ? `换班组「${target.label}」` : target.label}
-                      {target.kind === 'group' && target.duty ? ` · 当班 ${target.duty}` : ''}
+                      {target.kind === 'group'
+                        ? `换班组「${target.label}」`
+                        : target.kind === 'balance'
+                          ? `均衡组「${target.label}」`
+                          : target.label}
+                      {(target.kind === 'group' || target.kind === 'balance') && target.duty
+                        ? ` · 当班 ${target.duty}`
+                        : ''}
                       <span className={target.running ? 'dns-run on' : 'dns-run'}>
                         {target.running ? '运行中' : '未运行'}
                       </span>

@@ -93,6 +93,9 @@ class _Base(unittest.TestCase):
             "shift_runs",
             "shift_members",
             "shift_groups",
+            "balance_state",
+            "balance_members",
+            "balance_groups",
             "dns_records",
             "keepalives",
             "servers",
@@ -686,6 +689,62 @@ class StopAlwaysFallsBack(_Base):
 
         self.assertTrue(self.calls, "当班超限应触发超限停机")
         self.assertTrue(all(c["fallback"] for c in self.calls), self.calls)
+
+
+class BalanceMembersOwned(_Base):
+    """均衡组成员也要被 `_grouped_server_ids()` 认领。
+
+    以前这里只数换班组，均衡组成员被当成闲散机器：流量到阈值时由闲散检查停机，
+    推一条「超限停机（闲散手动）」，范围写错、通知也对不上，均衡引擎还蒙在鼓里。
+    和换班组同一条规则：停用、或启用成员不足两台的组，交还闲散检查。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.a = _make_server("均衡甲", "Running", traffic=10.0)
+        self.b = _make_server("均衡乙", "Stopped")
+        self.group_id = repo.upsert_balance_group(
+            {
+                "name": "均衡组",
+                "enabled": True,
+                "failover_enabled": True,
+                "interval_minutes": 60,
+                "diff_gb": 10,
+                "min_duty_minutes": 30,
+                "members": [
+                    {"server_id": self.a, "off_action": "keep"},
+                    {"server_id": self.b, "off_action": "keep"},
+                ],
+            }
+        )
+
+    def _save(self, enabled: bool, second_enabled: bool = True) -> None:
+        repo.upsert_balance_group(
+            {
+                "id": self.group_id,
+                "name": "均衡组",
+                "enabled": enabled,
+                "failover_enabled": True,
+                "interval_minutes": 60,
+                "diff_gb": 10,
+                "min_duty_minutes": 30,
+                "members": [
+                    {"server_id": self.a, "off_action": "keep"},
+                    {"server_id": self.b, "off_action": "keep", "enabled": second_enabled},
+                ],
+            }
+        )
+
+    def test_balance_members_are_claimed(self) -> None:
+        self.assertEqual(shift.engine._grouped_server_ids(), {self.a, self.b})  # noqa: SLF001
+
+    def test_disabled_group_releases_members(self) -> None:
+        self._save(enabled=False)
+        self.assertEqual(shift.engine._grouped_server_ids(), set())  # noqa: SLF001
+
+    def test_single_active_member_releases_members(self) -> None:
+        self._save(enabled=True, second_enabled=False)
+        self.assertEqual(shift.engine._grouped_server_ids(), set())  # noqa: SLF001
 
 
 if __name__ == "__main__":

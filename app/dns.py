@@ -25,6 +25,7 @@ log = logging.getLogger("cdt-management.dns")
 
 TARGET_SERVER = "server"
 TARGET_GROUP = "group"
+TARGET_BALANCE = "balance"
 TARGET_NONE = ""
 
 STATUS_UNBOUND = "⏸ 未绑定"
@@ -218,6 +219,22 @@ def target_info(
         runner = _group_runner(int(target_id), now_ts, servers)
         return {
             "kind": TARGET_GROUP,
+            "id": int(target_id),
+            "label": group.get("name") or f"#{target_id}",
+            "status": (runner or {}).get("instance_status") or "Unknown",
+            "running": bool(runner) and runner.get("instance_status") == "Running",
+            "ip": ((runner or {}).get("public_ip") or "").strip(),
+            "duty": (runner or {}).get("label") or "",
+        }
+
+    if kind == TARGET_BALANCE:
+        group = repo.get_balance_group(int(target_id))
+        if group is None:
+            return None
+        state = repo.get_balance_state(int(target_id)) or {}
+        runner = servers.get(int(state.get("duty_server_id") or 0))
+        return {
+            "kind": TARGET_BALANCE,
             "id": int(target_id),
             "label": group.get("name") or f"#{target_id}",
             "status": (runner or {}).get("instance_status") or "Unknown",
@@ -477,11 +494,19 @@ def _shift_events(kind: str, target_id: int) -> list[dict[str, Any]]:
         return []
     from . import shift  # 延迟导入：shift 反过来要用本模块
 
+    if kind == TARGET_BALANCE:
+        # 均衡组切换时同样要占住解析：结算那一步由 balance 自己同步并写清前因
+        return repo.running_events(int(target_id), ("balance_switch",))
+
+    from . import balance  # 延迟导入：balance 反过来要用本模块
+
     if kind == TARGET_GROUP:
         group_ids = [int(target_id)]
+        balance_ids: list[int] = []
     elif kind == TARGET_SERVER:
-        # 这台机器自己绑的域名，换班时也会被一起指过去
+        # 这台机器自己绑的域名，换班 / 均衡时也会被一起指过去
         group_ids = shift.groups_of_server(int(target_id))
+        balance_ids = balance.groups_of_server(int(target_id))
     else:
         return []
     # failover / shift_failover：当班超限或起不来时，事件 kind 会在转移过程中
@@ -491,6 +516,8 @@ def _shift_events(kind: str, target_id: int) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     for group_id in group_ids:
         events.extend(repo.running_events(group_id, kinds))
+    for group_id in balance_ids:
+        events.extend(repo.running_events(group_id, ("balance_switch",)))
     return events
 
 
@@ -691,9 +718,10 @@ def snapshot(config: dict[str, str], now_ts: float | None = None) -> dict[str, A
 
 
 def record_books() -> dict[str, dict[int, list[str]]]:
-    """每台服务器 / 每个换班组当前占着哪些记录，界面用来显示「已绑定 xxx」。"""
+    """每台服务器 / 每个换班组 / 每个均衡组当前占着哪些记录。"""
     server_map: dict[int, list[str]] = {}
     group_map: dict[int, list[str]] = {}
+    balance_map: dict[int, list[str]] = {}
     for row in repo.list_dns_records():
         kind = row.get("target_kind") or ""
         if not kind:
@@ -702,7 +730,9 @@ def record_books() -> dict[str, dict[int, list[str]]]:
             server_map.setdefault(int(row["target_id"]), []).append(str(row["record"]))
         elif kind == TARGET_GROUP:
             group_map.setdefault(int(row["target_id"]), []).append(str(row["record"]))
-    return {"servers": server_map, "groups": group_map}
+        elif kind == TARGET_BALANCE:
+            balance_map.setdefault(int(row["target_id"]), []).append(str(row["record"]))
+    return {"servers": server_map, "groups": group_map, "balances": balance_map}
 
 
 def books_for_cards(
@@ -720,13 +750,24 @@ def books_for_cards(
         int(server_id): list(names) for server_id, names in books.get("servers", {}).items()
     }
     group_map = books.get("groups") or {}
-    if not group_map:
+    balance_map = books.get("balances") or {}
+    if not group_map and not balance_map:
         return merged
 
     now_ts = time.time() if now_ts is None else now_ts
     servers = _servers()
     for group_id, names in group_map.items():
         runner = _group_runner(int(group_id), now_ts, servers)
+        if runner is None:
+            continue
+        bucket = merged.setdefault(int(runner["id"]), [])
+        for name in names:
+            if name not in bucket:
+                bucket.append(name)
+    # 均衡组的域名只出现在当班那台上，和换班组一个道理
+    for group_id, names in balance_map.items():
+        state = repo.get_balance_state(int(group_id)) or {}
+        runner = servers.get(int(state.get("duty_server_id") or 0))
         if runner is None:
             continue
         bucket = merged.setdefault(int(runner["id"]), [])

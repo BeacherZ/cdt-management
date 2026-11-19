@@ -841,22 +841,28 @@ class Engine:
             self._lock.release()
 
     def _grouped_server_ids(self) -> set[int]:
-        """被换班组接管的机器。
+        """被自动化流程接管的机器：换班组 + 流量均衡组。
 
-        只算**启用的**组：组停用后成员就该回到闲散状态，单机保活要能接手。
-        以前漏了这个判断，停用组 + 组员挂保活 → 保活认为「已被换班组接管」直接
-        让位，结果两边都不管，机器就躺着没人开机。
-
-        还要算**真能排出当班**的组（启用成员 ≥ 2）：只有一台的组排不出当班，
-        `reconcile_group` 会在 `duty_at` 为 None 时直接 return，根本走不到流量
-        判断。如果这里仍把它记成「已被接管」，那台机器既不被换班引擎管、又被
-        保活和闲散检查跳过 —— 在跑且超阈值也没人停。少一台就交还给闲散检查。
+        只算**启用且能排出当班**的组（启用成员 ≥ 2）：组停用 / 只剩一台时，
+        各自的引擎会直接 return，这些机器在这边必须交还给闲散检查，
+        否则「组不管、保活让位、闲散也跳过」，一台在跑又超阈值的机器没人停。
         """
         ids: set[int] = set()
         for group in repo.list_groups():
             if not group.get("enabled"):
                 continue
             members = active_members(group)
+            if len(members) < 2:
+                continue
+            for member in members:
+                ids.add(int(member["server_id"]))
+        # 流量均衡组：以前漏了这一支，均衡组成员会被当成闲散机器，
+        # 超阈值时由这边停机并推一条「超限停机（闲散手动）」，范围写错、通知也对不上。
+        # 均衡组自己的超限处理（换人 / 熔断 / 停休息成员）在 balance.py 里。
+        for group in repo.list_balance_groups():
+            if not group.get("enabled"):
+                continue
+            members = [m for m in group.get("members") or [] if m.get("enabled")]
             if len(members) < 2:
                 continue
             for member in members:

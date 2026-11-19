@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Activity,
   AlertTriangle,
   Gauge,
   Globe2,
@@ -9,12 +8,22 @@ import {
   LogOut,
   RefreshCw,
   Repeat,
+  Scale,
   Server as ServerIcon,
   Settings as SettingsIcon,
   Zap,
 } from 'lucide-react'
 import { APIError, SLOW_TIMEOUT_MS, api, del, post } from './api'
-import type { InitStatus, Keepalive, Managed, Overview, Server, Settings, ShiftGroup } from './types'
+import type {
+  BalanceGroup,
+  InitStatus,
+  Keepalive,
+  Managed,
+  Overview,
+  Server,
+  Settings,
+  ShiftGroup,
+} from './types'
 import Auth from './components/Auth'
 import DashboardView from './components/DashboardView'
 import KeepaliveView from './components/KeepaliveView'
@@ -22,17 +31,26 @@ import KeepaliveDialog from './components/KeepaliveDialog'
 import ServersView from './components/ServersView'
 import ShiftView from './components/ShiftView'
 import ServerDialog from './components/ServerDialog'
+import BalanceDialog from './components/BalanceDialog'
+import BalanceView from './components/BalanceView'
 import GroupDialog from './components/GroupDialog'
 import SettingsView from './components/SettingsView'
 import ConfirmDialog from './components/ConfirmDialog'
 import DNSView from './components/DNSView'
 import { Badge, Modal } from './components/ui'
-import { ownerLabel } from './owners'
+import { ownerLabel, ownerTone } from './owners'
 import { syncClock } from './time'
 import { applyTheme, watchSystemTheme } from './theme'
 
 type Phase = 'loading' | 'setup' | 'login' | 'ready' | 'fatal'
-type View = 'dashboard' | 'keepalive' | 'shift' | 'servers' | 'dns' | 'settings'
+type View =
+  | 'dashboard'
+  | 'keepalive'
+  | 'shift'
+  | 'balance'
+  | 'servers'
+  | 'dns'
+  | 'settings'
 type Toast = { id: number; tone: 'success' | 'error' | 'info'; message: string }
 
 /** 删除这类不可撤销的操作，统一走应用内二次确认（window.confirm 在桌面壳里可能被吞掉） */
@@ -47,53 +65,87 @@ type ConfirmRequest = {
 
 const REFRESH_MS = 10_000
 
-type NavLeaf = { key: View; label: string; icon: typeof Gauge }
-
-/**
- * 侧栏三个总菜单：概览 / 保活 / DNS。
- * 带 key 的总菜单本身就是页面（概览、DNS 可点），不带的只作分组标签（保活）。
- * 子项统一缩进挂在总菜单下面。
- */
-type NavSection = {
-  title: string
-  key?: View
-  icon?: typeof Gauge
-  children: NavLeaf[]
+type NavEntry = {
+  key: View
+  label: string
+  hint: string
+  icon: typeof Gauge
+  /** 归属色只在需要区分的两项上覆盖（保活紫 / 均衡蓝），其余统一品牌绿 */
+  tone?: 'keepalive' | 'balance'
 }
 
-const NAV_SECTIONS: NavSection[] = [
-  {
-    title: '概览',
-    key: 'dashboard',
-    icon: Gauge,
-    children: [{ key: 'servers', label: '实例管理', icon: ServerIcon }],
-  },
-  {
-    title: '保活',
-    icon: Activity,
-    children: [
-      { key: 'keepalive', label: '单机保活', icon: HeartPulse },
-      { key: 'shift', label: '联合换班', icon: Repeat },
-    ],
-  },
-  {
-    title: 'DNS',
-    key: 'dns',
-    icon: Globe2,
-    children: [],
-  },
+/**
+ * 侧栏分两段，中间一条线断开。
+ *
+ * 上段是三个「看数据」的页面，彼此平级、互不隶属 —— 以前把「实例管理」缩进挂在
+ * 「概览」下面，读起来像是概览里的一个标签页，其实它是独立页面。
+ *
+ * 下段是「托管方式」：三种自动化流程，一台实例一次只能归其中一个管。
+ * 没归属的机器不再单开一页 —— 它在「实例管理」里用顶部的归属选择筛出来，
+ * 省得为了看一眼闲散机器就在两页之间来回跳。
+ *
+ * 每行都带一句副标题（鼠标停留可见）。只看「联合换班」四个字，第一次装的人
+ * 判断不出它是按时段轮换几台机器；一句 11px 的说明比排得再整齐都管用。
+ */
+const NAV_PAGES: NavEntry[] = [
+  { key: 'dashboard', label: '运行概览', hint: '运行状态与事件', icon: Gauge },
+  { key: 'servers', label: '实例管理', hint: '全部实例与流量', icon: ServerIcon },
+  { key: 'dns', label: 'DNS解析', hint: '解析记录与绑定', icon: Globe2 },
 ]
 
+const NAV_MODES: NavEntry[] = [
+  { key: 'keepalive', label: '单机保活', hint: '一台常驻在线', icon: HeartPulse, tone: 'keepalive' },
+  { key: 'shift', label: '联合换班', hint: '多台按时段轮换', icon: Repeat },
+  { key: 'balance', label: '流量均衡', hint: '多台按月摊流量', icon: Scale, tone: 'balance' },
+]
+
+/**
+ * 服务器 id → 归属，**含已停用的组员和保活**。
+ *
+ * 不能只看 server.managed：后端 managed_map 只标启用中的组员，停用的换班组 /
+ * 均衡组成员在那里是空的，会被当成闲散机器 —— 既让归属筛选漏人，也会把卡片
+ * 上的归写成「闲散手动」，和换班组成员选择器里的说法对不上。
+ * 优先级照后端：换班 > 均衡 > 保活（正常库里不会两头都占，这里只求一个确定答案）。
+ */
+function ownerMap(overview: Overview): Map<number, Managed> {
+  const owners = new Map<number, Managed>()
+  for (const item of overview.keepalives) {
+    owners.set(item.server_id, {
+      kind: 'keepalive',
+      name: item.label,
+      active: item.enabled,
+      keepalive_id: item.id,
+    })
+  }
+  for (const group of overview.balances ?? []) {
+    for (const member of group.members) {
+      owners.set(member.server_id, {
+        kind: 'balance',
+        name: group.name,
+        active: group.enabled && member.enabled,
+        group_id: group.id,
+      })
+    }
+  }
+  for (const group of overview.groups) {
+    for (const member of group.members) {
+      owners.set(member.server_id, {
+        kind: 'group',
+        name: group.name,
+        active: group.enabled && member.enabled,
+        group_id: group.id,
+      })
+    }
+  }
+  return owners
+}
+
 function navCount(key: View, overview: Overview): number {
+  if (key === 'dns') return overview.dns?.records.length ?? 0
   if (key === 'servers') return overview.servers.length
   if (key === 'keepalive') return overview.keepalives.length
   if (key === 'shift') return overview.groups.length
-  return 0
-}
-
-/** 总菜单那一行右侧的数字（DNS 用它显示记录条数） */
-function sectionCount(section: NavSection, overview: Overview): number {
-  if (section.key === 'dns') return overview.dns?.records.length ?? 0
+  if (key === 'balance') return overview.balances?.length ?? 0
   return 0
 }
 
@@ -118,6 +170,11 @@ export default function App() {
   const [serverDialog, setServerDialog] = useState<{ open: boolean; server: Server | null }>({
     open: false,
     server: null,
+  })
+  const [busyBalance, setBusyBalance] = useState<number | null>(null)
+  const [balanceDialog, setBalanceDialog] = useState<{ open: boolean; group: BalanceGroup | null }>({
+    open: false,
+    group: null,
   })
   const [groupDialog, setGroupDialog] = useState<{ open: boolean; group: ShiftGroup | null }>({
     open: false,
@@ -396,6 +453,34 @@ export default function App() {
     })
   }
 
+  async function switchBalance(group: BalanceGroup) {
+    setBusyBalance(group.id)
+    try {
+      await post(`/api/v1/balances/${group.id}/switch`, undefined, SLOW_TIMEOUT_MS)
+      await loadAll()
+      toast('正在交给流量最少的成员，完成后会推送通知', 'success')
+    } catch (error) {
+      toast(error instanceof Error ? error.message : '均衡失败', 'error')
+    } finally {
+      setBusyBalance(null)
+    }
+  }
+
+  function deleteBalance(group: BalanceGroup) {
+    setConfirmBox({
+      title: '解散均衡组',
+      message: `确定解散「${group.name}」？`,
+      hint: `组内 ${group.members.length} 台实例保持当前状态，不会被停机。解散后它们回到闲散手动，组绑定的域名会一并解除。`,
+      confirmText: '解散均衡组',
+      failText: '解散失败',
+      run: async () => {
+        await del(`/api/v1/balances/${group.id}`)
+        await loadAll()
+        toast('均衡组已解散，组员已回到闲散手动', 'success')
+      },
+    })
+  }
+
   function openKeepaliveDialog(server: Server) {
     // 先关掉选择器，避免两个弹窗叠在一起
     setKeepalivePicker(false)
@@ -652,17 +737,31 @@ export default function App() {
   const groupedIds = new Set(
     overview.groups.flatMap((group) => group.members.map((member) => member.server_id)),
   )
-  // 组名回查：后端 managed 只标「启用的组员」，停用组员 managed 缺失，这里补全
-  // 名字供「加入单机保活」选择器展示归属标签（active 按 组启用 && 成员启用 算）。
-  const groupOwnerOf = new Map<number, Managed>()
-  for (const group of overview.groups) {
-    for (const member of group.members) {
-      groupOwnerOf.set(member.server_id, {
-        kind: 'group',
-        name: group.name,
-        active: group.enabled && member.enabled,
-      })
-    }
+  // 全量归属（含停用的组员）：实例管理顶部的归属筛选、加入保活选择器都用这一份
+  const owners = ownerMap(overview)
+
+  // 侧栏一行：图标 + 名称 +（有东西才显示的）数量胶囊。
+  // 上段页面和下段托管方式共用这一份，避免两处各写一遍、样式慢慢走偏。
+  // 说明不再占一行：七项各带一句小字，一屏全是文字，反而是最挑不出项的那种排法；
+  // 改成 title，鼠标停上去照样能看到它说的是什么。
+  const navRow = (item: NavEntry) => {
+    const Icon = item.icon
+    const count = navCount(item.key, overview)
+    return (
+      <button
+        key={item.key}
+        className={`nav-item${item.tone ? ` nav-tone-${item.tone}` : ''}${
+          view === item.key ? ' on' : ''
+        }`}
+        title={item.hint}
+        aria-current={view === item.key ? 'page' : undefined}
+        onClick={() => goTo(item.key)}
+      >
+        <Icon size={15} />
+        <span className="nav-text">{item.label}</span>
+        {count > 0 && <span className="nav-count">{count}</span>}
+      </button>
+    )
   }
 
   return (
@@ -671,8 +770,8 @@ export default function App() {
         <button
           type="button"
           className="brand"
-          title="回到概览"
-          aria-label="回到概览"
+          title="回到运行概览"
+          aria-label="回到运行概览"
           onClick={() => goTo('dashboard')}
         >
           <div className="brand-mark">
@@ -684,60 +783,11 @@ export default function App() {
         </button>
 
         <nav className="nav-list" aria-label="主视图">
-          {NAV_SECTIONS.map((section) => {
-            const parentKey = section.key
-            const ParentIcon = section.icon
-            const sectionActive =
-              parentKey === view || section.children.some((leaf) => leaf.key === view)
-            return (
-              <div
-                className={`nav-group${sectionActive ? ' is-active' : ''}`}
-                key={section.title}
-              >
-                {parentKey && ParentIcon ? (
-                  <button
-                    className={`nav-parent${view === parentKey ? ' on' : ''}`}
-                    aria-current={view === parentKey ? 'page' : undefined}
-                    onClick={() => goTo(parentKey)}
-                  >
-                    <ParentIcon size={15} />
-                    <span className="nav-text">{section.title}</span>
-                    {sectionCount(section, overview) > 0 && (
-                      <span className="nav-count">{sectionCount(section, overview)}</span>
-                    )}
-                  </button>
-                ) : (
-                  // 纯分组标签（保活）：图标照渲染，和概览 / DNS 的图标落在同一列，
-                  // 否则这行文字会比其余总菜单更靠左，看着像缩进错位
-                  <div className="nav-parent label">
-                    {ParentIcon && <ParentIcon size={15} />}
-                    <span className="nav-text">{section.title}</span>
-                  </div>
-                )}
-
-                {section.children.length > 0 && (
-                  <div className="nav-sub">
-                    {section.children.map((item) => {
-                      const Icon = item.icon
-                      const count = navCount(item.key, overview)
-                      return (
-                        <button
-                          key={item.key}
-                          className={`nav-item${view === item.key ? ' on' : ''}`}
-                          aria-current={view === item.key ? 'page' : undefined}
-                          onClick={() => goTo(item.key)}
-                        >
-                          <Icon size={14} />
-                          <span className="nav-text">{item.label}</span>
-                          {count > 0 && <span className="nav-count">{count}</span>}
-                        </button>
-                      )
-                    })}
-                  </div>
-                )}
-              </div>
-            )
-          })}
+          <div className="nav-group">{NAV_PAGES.map(navRow)}</div>
+          <div className="nav-group">
+            <div className="nav-label">托管方式</div>
+            {NAV_MODES.map(navRow)}
+          </div>
         </nav>
 
         <div className="sidebar-foot">
@@ -750,9 +800,9 @@ export default function App() {
           </button>
           <button className="nav-item" onClick={logout}>
             <LogOut size={15} />
-            <span className="nav-text">退出登录</span>
+            <span className="nav-text">退出</span>
           </button>
-          <div className="meta" style={{ paddingLeft: 11, marginTop: 4 }}>
+          <div className="meta" style={{ paddingLeft: 12, marginTop: 4 }}>
             <Zap size={10} /> v{overview.version}
           </div>
         </div>
@@ -795,9 +845,22 @@ export default function App() {
           />
         )}
 
+        {view === 'balance' && (
+          <BalanceView
+            groups={overview.balances ?? []}
+            serverCount={overview.servers.length}
+            busyId={busyBalance}
+            onAdd={() => setBalanceDialog({ open: true, group: null })}
+            onEdit={(group) => setBalanceDialog({ open: true, group })}
+            onDelete={deleteBalance}
+            onSwitch={switchBalance}
+          />
+        )}
+
         {view === 'servers' && (
           <ServersView
             servers={overview.servers}
+            owners={owners}
             busyId={busyServer}
             billingId={billingServer}
             onAdd={() => setServerDialog({ open: true, server: null })}
@@ -823,6 +886,7 @@ export default function App() {
             servers={overview.servers}
             keepalives={overview.keepalives}
             groups={overview.groups}
+            balances={overview.balances}
             busy={busyDns}
             syncingAll={dnsSyncingAll}
             onBind={bindDns}
@@ -899,6 +963,18 @@ export default function App() {
         />
       )}
 
+      {balanceDialog.open && (
+        <BalanceDialog
+          group={balanceDialog.group}
+          servers={overview.servers}
+          onClose={() => setBalanceDialog({ open: false, group: null })}
+          onSaved={(message) => {
+            setBalanceDialog({ open: false, group: null })
+            void refreshAfterSave(message)
+          }}
+        />
+      )}
+
       {keepalivePicker && (
         <Modal
           title="加入单机保活"
@@ -921,7 +997,6 @@ export default function App() {
           ) : (
             <div className="server-pick-list">
               {overview.servers.map((server) => {
-                const owner = server.managed ?? null
                 const inKeepalive = keepaliveIds.has(server.id)
                 const inGroup = groupedIds.has(server.id)
                 const blocked = inKeepalive || inGroup
@@ -930,8 +1005,8 @@ export default function App() {
                   : inKeepalive
                     ? '已加入单机保活，先移出后再添加'
                     : ''
-                // 归属标签：managed 优先（含名称与启停状态）；停用组员 managed 缺失，用组名回查兜底
-                const display = owner ?? (inGroup ? groupOwnerOf.get(server.id) : undefined)
+                // 归属标签：全量归属表优先（含停用组员），再退回后端 managed
+                const display = owners.get(server.id) ?? server.managed ?? null
                 return (
                   <button
                     type="button"
@@ -946,7 +1021,7 @@ export default function App() {
                       <code className="server-pick-id">{server.instance_id || '未填实例 ID'}</code>
                     </span>
                     <span
-                      className={`owner-tag${display ? (display.active ? ' locked' : ' paused') : ' free'}`}
+                      className={`owner-tag ${ownerTone(display)}${display && !display.active ? ' paused' : ''}`}
                     >
                       {display?.kind === 'group' ? <Repeat size={10} /> : null}
                       {display?.kind === 'keepalive' ? <HeartPulse size={10} /> : null}

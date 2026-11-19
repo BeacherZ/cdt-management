@@ -1,16 +1,19 @@
 # CDT-Management
 
-**Docker 搭建的网页管理面板：阿里云 CDT 抢占式实例的单机保活 + 多机联合换班 + DDNS + 通知。**
+**Docker 搭建的网页管理面板：阿里云 CDT 抢占式实例的单机保活 + 多机联合换班 + 多机流量均衡 + DDNS + 通知。**
 
-三个模块各管一段，互不干扰：
+四个模块各管一段，互不干扰：
 
 | 模块 | 作用 |
 | --- | --- |
 | **单机保活** | 实例掉线就自动拉起来；可自由设定运行窗口 |
 | **联合换班** | 多台实例编成一组，按工时或天数排班后轮流当班 |
-| **DNS** | 域名记录集中管理，一条记录显式绑一台实例或一个换班组 |
+| **流量均衡** | 多台同时在线，按累计用量把域名切给用得最少的那台 |
+| **DNS** | 域名记录集中管理，一条记录显式绑一台实例、一个换班组或一个均衡组 |
 
 没编进任何流程的**闲散实例**照旧可以手动开关机。
+
+这几套流程之上压着一层**流量保护**：每台单独设阈值，超了就停；换班组会先尝试故障转移，全超才熔断。
 
 **实例不限抢占式，按量付费 / 包年包月的实例同样适用，只是用不到「抢占恢复」。**
 
@@ -24,20 +27,35 @@
 浅色 / 深色（`设置 → 常规设置 → 外观` ，点击查看大图）
 
 <p align="center">
-  <a href="docs/screenshots/02-dashboard.png"><img src="docs/screenshots/02-dashboard.png" width="48%" alt="概览（浅色）"></a>
-  <a href="docs/screenshots/03-dashboard-dark.png"><img src="docs/screenshots/03-dashboard-dark.png" width="48%" align="top" alt="概览（深色）"></a>
+  <a href="docs/screenshots/02-dashboard.png"><img src="docs/screenshots/02-dashboard.png" width="48.5%" alt="运行概览（浅色）"></a>
+  <a href="docs/screenshots/03-dashboard-dark.png"><img src="docs/screenshots/03-dashboard-dark.png" width="48.5%" align="top" alt="运行概览（深色）"></a>
 </p>
 
 手机端（自适应布局，点击查看大图）
 
 <p align="center">
-  <a href="docs/screenshots/04-mobile-dashboard.png"><img src="docs/screenshots/04-mobile-dashboard.png" width="23.7%" align="top" alt="手机端概览（浅色）"></a>
-  <a href="docs/screenshots/05-mobile-dashboard-dark.png"><img src="docs/screenshots/05-mobile-dashboard-dark.png" width="23.7%" align="top" alt="手机端概览（深色）"></a>
-  <a href="docs/screenshots/06-mobile-instances.png"><img src="docs/screenshots/06-mobile-instances.png" width="23.7%" align="top" alt="手机端实例管理"></a>
-  <a href="docs/screenshots/07-mobile-instances-dark.png"><img src="docs/screenshots/07-mobile-instances-dark.png" width="23.7%" align="top" alt="手机端实例管理（深色）"></a>
+  <a href="docs/screenshots/04-mobile-dashboard.png"><img src="docs/screenshots/04-mobile-dashboard.png" width="24%" align="top" alt="手机端运行概览（浅色）"></a>
+  <a href="docs/screenshots/05-mobile-dashboard-dark.png"><img src="docs/screenshots/05-mobile-dashboard-dark.png" width="24%" align="top" alt="手机端运行概览（深色）"></a>
+  <a href="docs/screenshots/06-mobile-instances.png"><img src="docs/screenshots/06-mobile-instances.png" width="24%" align="top" alt="手机端实例管理"></a>
+  <a href="docs/screenshots/07-mobile-instances-dark.png"><img src="docs/screenshots/07-mobile-instances-dark.png" width="24%" align="top" alt="手机端实例管理（深色）"></a>
 </p>
 
 ## ✨主要功能
+
+### 流量保护
+
+**说明**：每台单独配阈值，超限自动停机；换班组会先尝试故障转移，全超才熔断。
+
+<details>
+<summary>详细说明</summary>
+
+> 超限停机后不再拉起；流量回落到阈值以下（月初流量包重置，或调高阈值）会清掉超限标记，自动恢复开机并保活。
+> 
+> 故障转移的两种触发情形：当班流量到阈值，或当班被抢占后尝试3次无法拉起。
+
+</details>
+
+**目的**：不让任何一台实例烧穿流量包。
 
 ### 单机保活
 
@@ -71,24 +89,26 @@
 
 **目的**：通过联合换班，降低多台抢占式实例同时在线的成本，并充分利用每台实例各自的 200G CDT 免费流量包。
 
-### 流量保护
+### 流量均衡
 
-**说明**：每台单独配阈值，超限自动停机；换班组会先尝试故障转移，全超才熔断。
+**说明**：组内几台实例同时在线、跑同一套服务，域名同一时刻只指向其中一台。每到一个整点，把组内累计用量比一遍：当班那台比用得最少的那台多出差值阈值，就把域名切过去。不看时钟、不排班，只看谁用得少。
 
 <details>
 <summary>详细说明</summary>
 
-> 超限停机后不再拉起；流量回落到阈值以下（月初流量包重置，或调高阈值）会清掉超限标记，自动恢复开机并保活。
+> **评估周期**：1 / 3 / 6 / 12 / 24 小时，只按整点评估（3 小时就是 00/03/06…，24 小时是每天 0 点）。**差值阈值**：当班比最少的那台多出这么多 GB 才值得切；设太小，域名会每隔一个周期抖一次。
 > 
-> 故障转移的两种触发情形：当班流量到阈值，或当班被抢占后尝试3次无法拉起。
+> **切换顺序**：先确认接替的那台在运行 → 再改 DNS → 最后按各成员自己的「下班后」动作处理上一台（保持运行 / 停机）。成员多数一直开着，所以切换通常只动解析、不下发停机。
+> 
+> **与换班的区别**：换班看时钟、要交接停机；均衡看累计流量、成员可以都不下线，两者不能挂同一台机器。**流量保护优先**：每次切之前再读一遍真实流量，真超限就不切，交给超限停机。
 
 </details>
 
-**目的**：不让任何一台实例烧穿流量包。
+**目的**：多台实例各带一个 200G 免费流量包，又不想按时间排班时，按实际用量轮换 —— 谁用得少，域名就指向谁，省流量也省心。
 
 ### DNS
 
-**说明**：一条记录绑一台实例或一个换班组；目标在跑时，公网 IP 一变（开机换 IP、手动换弹性 IP）下一轮巡检自动指过去。
+**说明**：一条记录绑一台实例、一个换班组或一个均衡组；目标在跑时，公网 IP 一变（开机换 IP、手动换弹性 IP）下一轮巡检自动指过去。
 
 <details>
 <summary>详细说明</summary>
@@ -107,12 +127,12 @@
 <summary>9 种通知的实际推送效果（点击查看大图）</summary>
 
 <p align="center">
-  <a href="docs/screenshots/25-notify-overview.png"><img src="docs/screenshots/25-notify-overview.png" width="96%" alt="9 种通知推送效果：换班完成、故障转移、全局熔断、超限停机（换班组 / 单机保活 / 闲散）、抢占恢复、换班异常、每日报告"></a>
+  <a href="docs/screenshots/25-notify-overview.png"><img src="docs/screenshots/25-notify-overview.png" width="96%" alt="9 种通知推送效果：换班完成、故障转移、全局熔断、超限停机（单机保活 / 闲散）、均衡完成、抢占恢复、换班异常、每日报告"></a>
 </p>
 
 </details>
 
-**目的**：换班、故障转移、熔断、超限停机、抢占恢复、换班异常、每日报告都主动推给你，不用盯面板。
+**目的**：换班、故障转移、熔断、超限停机、均衡切换、抢占恢复、换班异常、每日报告都主动推给你，不用盯面板。
 
 ## 🚀快速开始
 
@@ -220,19 +240,20 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 ## 🧭配一遍的流程
 
 1. **实例管理** → 添加实例：填别名、Region、AccessKey ID/Secret、实例 ID、配额与限流阈值，按需选停机模式（默认节省停机）
-2. 二选一（或都要，但**同一台不要同时挂两边**）：
+2. 三选一（或都要，但**同一台不要同时挂两边**）：
    - **单机保活** → 添加保活，勾上这台；要限定运行时段/日期就在同一个设置页里填
    - **联合换班** → 新建换班组，选排班周期（一天一轮按工时，一月一轮按天数），按顺序添加成员
+   - **流量均衡** → 新建均衡组，选评估周期与差值阈值，按顺序加成员（每台的「下班后」动作单独设）
 3. **设置 → DDNS**：填 Cloudflare Token（或 Global API Key）、TTL，开启
-4. **DNS**：加域名记录，再把它绑到某台实例或某个换班组（不绑就谁也不会去动它）
+4. **DNS**：加域名记录，再把它绑到某台实例、某个换班组或某个均衡组（不绑就谁也不会去动它）
 5. **设置 → 通知**：填 Telegram Bot Token + Chat ID，点「发送测试」确认能收到
-6. 回概览点「立即同步」，看第一轮结果
+6. 回「运行概览」点「立即同步」，看第一轮结果
 
 ## 💾数据放在哪
 
 | 路径 | 内容 |
 | --- | --- |
-| `cdt-management.db` | SQLite：实例、换班组、换班进度、事件、流量采样 |
+| `cdt-management.db` | SQLite：实例、保活、换班组、均衡组、换班进度、事件、流量采样 |
 | `master.key` | 加密主密钥，**必须与 db 一起备份**，丢了 AccessKey Secret 无法解密 |
 
 备份就把整个目录拷走；换宿主机时两个文件一起搬。
@@ -243,7 +264,7 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 
 ## ❓常见问题
 
-**换班了但没收到通知？** 先看「设置 → 通知」里渠道是否启用、点测试能不能发出去；再看概览的「最近事件」有没有对应记录。通知失败只记事件，不会阻塞换班。
+**换班了但没收到通知？** 先看「设置 → 通知」里渠道是否启用、点测试能不能发出去；再看「运行概览」的「最近事件」有没有对应记录。通知失败只记事件，不会阻塞换班。
 
 **DDNS 显示「IP 无效跳过」？** 实例还没拿到公网 IP，或者不是公网 IPv4。等下一轮同步，或手动刷新那台实例。
 

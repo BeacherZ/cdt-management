@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 APP_NAME = "cdt-management"
-VERSION = "1.6.8"
+VERSION = "1.8.0"
 
 DATA_DIR = Path(os.environ.get("CDT_DATA_DIR", "./data")).resolve()
 DB_PATH = DATA_DIR / "cdt-management.db"
@@ -82,8 +82,7 @@ DUTY_START_RETRY_SECONDS = max(30, int(os.environ.get("CDT_DUTY_START_RETRY_SECO
 
 # 换班加速：下发开机/停机指令之后、预期状态还没到位的这段窗口，单独加密读取。
 # 只读「这一组」的实例状态，不查流量，**不改变日常巡检间隔**。
-SHIFT_AWAIT_INTERVAL = max(5, int(os.environ.get("CDT_SHIFT_AWAIT_INTERVAL", "10")))
-# 单个等待窗口最长持续多久（秒）。卡死时到点自动退出，不会把加速变成常态。
+SHIFT_AWAIT_INTERVAL = max(5, int(os.environ.get("CDT_SHIFT_AWAIT_INTERVAL", "10")))# 单个等待窗口最长持续多久（秒）。卡死时到点自动退出，不会把加速变成常态。
 # 取 300（5 分钟）：正常换班几十秒就走完，Windows 慢启动 3–4 分钟也够；
 # 再长就跟换班超时（默认 10 分钟）比肩，超时通知发出后还在加速读，没有意义。
 SHIFT_AWAIT_TTL = max(60, int(os.environ.get("CDT_SHIFT_AWAIT_TTL", "300")))
@@ -95,6 +94,12 @@ SHIFT_AWAIT_BUDGET = max(60, int(os.environ.get("CDT_SHIFT_AWAIT_BUDGET", "600")
 # 同一台机器两次下发停机指令的最小间隔（秒），只在加速轮生效：停机接口成功但
 # 实例没停（被锁定 / 被立即拉起）时，10 秒一轮会变成 10 秒砸一次 StopInstance。
 SHIFT_STOP_RETRY_SECONDS = max(30, int(os.environ.get("CDT_SHIFT_STOP_RETRY_SECONDS", "60")))
+
+# 流量均衡的加速通道：只推进「开机 / 切换进行中」的组，和换班那条同构。
+# 均衡没有班次表，一切都在等「接替那台什么时候 Running」：没有这条通道，
+# 下发开机后要等下一轮巡检（默认 60 秒）才结算，评估周期 24 小时的组更久。
+# 同样只读状态、不查流量，日常巡检间隔不受影响。
+BALANCE_AWAIT_INTERVAL = max(5, int(os.environ.get("CDT_BALANCE_AWAIT_INTERVAL", "10")))
 
 # dry-run：不调真实阿里云接口，用于本地 UI 调试
 DRY_RUN = os.environ.get("CDT_DRY_RUN", "0") == "1"

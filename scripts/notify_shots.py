@@ -3,14 +3,15 @@
 不手写文案，改 messages.py 之后重跑一遍，图就跟着变，不会和代码脱节。
 
 第一步（本脚本）：
-    .venv/Scripts/python.exe scripts/notify_shots.py
+    ./.venv/bin/python scripts/notify_shots.py
     → 写出 test-data/notify/*.html（该目录已在 .gitignore 里）
 
 第二步：
     node scripts/notify_shots.cjs
-    → 截成 docs/screenshots/16~24-notify-*.png
+    → 截成 docs/screenshots/16~24-notify-*.png，外加 25-notify-overview.png 总览
 
-编号顺序 = README「通知」一节里那张表的顺序，9 张正好凑三行（README 里一行排 3 张）。
+README 只用到总览那一张：3×3 排九条，四种归属各占一条
+（换班组 / 单机保活 / 流量均衡 / 闲散手动），每日报告必在其中。
 """
 
 from __future__ import annotations
@@ -29,13 +30,9 @@ from app import messages  # noqa: E402
 
 OUT = ROOT / "test-data" / "notify"
 
-CARD = """<!doctype html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<title>{name}</title>
-<style>
-  * {{ box-sizing: border-box; }}
+# 模板里的 CSS 用双花括号，因为整段会经过一次 str.format（{time} / {html}），
+# 塞回模板时先 STYLE.format() 把双括号还原成单括号，否则样式整段失效。
+STYLE = """  * {{ box-sizing: border-box; }}
   html, body {{ margin: 0; padding: 0; background: #eef1f6; }}
   body {{
     padding: 26px;
@@ -74,21 +71,71 @@ CARD = """<!doctype html>
     font-family: ui-monospace, Consolas, monospace;
     font-size: 12px; background: #f1f4f9; color: #324863;
     padding: 1px 5px; border-radius: 4px;
-  }}
+  }}"""
+
+HEAD = """  <div class="head">
+    <div class="logo">CDT</div>
+    <div class="who"><b>CDT-Management</b><span class="ch">Telegram · 通知机器人</span></div>
+    <div class="time">{time}</div>
+  </div>"""
+
+CARD = """<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>{name}</title>
+<style>
+{style}
 </style>
 </head>
 <body>
 <div class="card">
-  <div class="head">
-    <div class="logo">CDT</div>
-    <div class="who"><b>CDT-Management</b><span class="ch">Telegram · 通知机器人</span></div>
-    <div class="time">{time}</div>
-  </div>
+{head}
   <div class="msg">{html}</div>
 </div>
 </body>
 </html>
 """
+
+# 总览：三列并排，卡片之间 22px，四周 28px —— README 里整张图缩到 96% 宽度，
+# 单张卡片仍能看清标题和状态行
+OVERVIEW = """<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>通知效果总览</title>
+<style>
+{style}
+  body {{ padding: 28px; }}
+  /* 三列「瀑布式」排：九张卡高度差得远（每日报告最长、超限停机最短），
+     用等高行会留下大片空白，按列往下摞才紧凑 */
+  .grid {{
+    column-count: 3;
+    column-gap: 22px;
+    width: 1664px;
+  }}
+  .grid .card {{
+    display: inline-block;
+    width: 100%;
+    margin: 0 0 22px;
+    break-inside: avoid;
+  }}
+</style>
+</head>
+<body>
+<div class="grid">
+{cards}
+</div>
+</body>
+</html>
+"""
+
+
+def card_html(message, clock: str) -> str:
+    return f"""<div class="card">
+{HEAD.format(time=clock)}
+  <div class="msg">{message.html}</div>
+</div>"""
 
 
 def server(
@@ -102,6 +149,9 @@ def server(
     stopped_mode: str = "",
 ) -> dict:
     return {
+        # 均衡通知按服务器 id 去重（messages._member_id 认 id / server_id），
+        # 演示数据里就用实例号末两位
+        "id": int(instance_id[-2:]) if instance_id[-2:].isdigit() else 0,
         "label": label,
         "instance_id": instance_id,
         "public_ip": ip,
@@ -151,6 +201,13 @@ IDLE_OVER = server(
     "Stopped", "StopCharging",
 )
 
+# 流量均衡：组内两台都开着，域名从用得多的那台换到用得最少的那台
+BAL_A = server("新加坡-均衡A", "i-demo00000000000006", "47.243.17.37", "ap-southeast-1", 200, 62.40)
+BAL_B = server(
+    "新加坡-均衡B", "i-demo00000000000007", "47.243.18.38", "ap-southeast-1", 200, 148.62,
+    "Stopped", "KeepCharging",
+)
+
 # 换班异常：当班该运行却超时没运行（Stopped → ⚪），standby 该停却还赖在 Running（→ 🟢）
 ERROR_DUTY = server(
     "香港-主力", "i-demo00000000000001", "47.243.12.32", "cn-hongkong", 200, 148.62,
@@ -164,7 +221,10 @@ ERROR_STANDBY2 = server(
 )
 
 GROUP = "港新联合保活"
+BALANCE = "新加坡均衡"
 
+# 九条 = README 那张总览的 3×3，顺序即阅读顺序：
+# 换班组 → 单机保活 → 流量均衡 → 闲散手动，最后一条固定是每日报告。
 SHOTS = [
     (
         "16-notify-shift",
@@ -197,20 +257,26 @@ SHOTS = [
         "18:31",
     ),
     (
-        "19-notify-limitstop",
-        "全局熔断报告（单台）",
-        messages.limit_stop(MAIN_OVER, group_name=GROUP),
-        "18:33",
-    ),
-    (
-        "20-notify-over-keepalive",
-        "超限停机报告",
+        "19-notify-over-keepalive",
+        "超限停机报告（单机保活）",
         messages.over_limit(KEEPALIVE_OVER, messages.SCOPE_KEEPALIVE),
         "22:10",
     ),
     (
+        "20-notify-balance",
+        "均衡完成报告（流量均衡）",
+        messages.balance_switch(
+            BAL_A,
+            [BAL_A, BAL_B],
+            "✅ 已同步",
+            group_name=BALANCE,
+            prev=BAL_B,
+        ),
+        "20:07",
+    ),
+    (
         "21-notify-over-idle",
-        "超限停机报告",
+        "超限停机报告（闲散手动）",
         messages.over_limit(IDLE_OVER, messages.SCOPE_IDLE),
         "22:12",
     ),
@@ -235,7 +301,7 @@ SHOTS = [
                 {**BACKUP, "site": "china", "monthly_cost": 5.67, "balance_amount": 2345.67, "billing_currency": "CNY"},
                 {**THIRD, "site": "international", "monthly_cost": 3.21, "balance_amount": 0.0, "billing_currency": "USD"},
             ],
-            "2026-10-27 09:00",
+            "2026-11-19 09:00",
         ),
         "09:00",
     ),
@@ -247,10 +313,26 @@ def main() -> None:
     for slug, name, message, clock in SHOTS:
         target = OUT / f"{slug}.html"
         target.write_text(
-            CARD.format(name=name, time=clock, html=message.html),
+            CARD.format(
+                name=name,
+                time=clock,
+                html=message.html,
+                style=STYLE.format(),
+                head=HEAD.format(time=clock),
+            ),
             encoding="utf-8",
         )
         print(f"{target}  ← {name}（{message.title}）")
+
+    overview = OUT / "_overview.html"
+    overview.write_text(
+        OVERVIEW.format(
+            style=STYLE.format(),
+            cards="\n".join(card_html(message, clock) for _, _, message, clock in SHOTS),
+        ),
+        encoding="utf-8",
+    )
+    print(f"{overview}  ← 九条通知总览")
 
 
 if __name__ == "__main__":

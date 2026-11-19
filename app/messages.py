@@ -15,6 +15,12 @@
 唯一在脚本之外统一加的一行是「📍 地域」：跟着 ＩＰ 行的下一行，取 ECS DescribeInstances
 返回的真实 RegionId（如 cn-hongkong），和每日报告字段顺序一致。其余字段位置不动。
 
+账号块（换班 / 流量均衡）在「状态」上面还有一行 `📈 流量：x GB / yGB`：
+这两类报告都要列出整组，没有流量行就没法一眼比出「谁快超限、下一次会切给谁」。
+额度取每台自己的设置，组里的统一值在这里不适用；阈值不写进这一行——一行一台已经够长，
+要解释「为什么切」靠概览那句和事件详情，不在每个账号块里重复。除这一行之外，
+换班报告的每个字段、顺序、图标都保持 v1.6.8 原样。
+
 本模块只做拼装，不查库、不调接口，方便和脚本对着看。
 """
 
@@ -195,6 +201,37 @@ def _used_line(server: dict[str, Any]) -> str:
     return f"{line}（阈值 {threshold} GB）" if threshold else line
 
 
+def _quota_text(server: dict[str, Any]) -> str:
+    """套餐流量额度；没填（0 / 缺失）返回空串，调用方就别写「额度 0 GB」。"""
+    try:
+        value = float(server.get("quota_gb") or 0)
+    except (TypeError, ValueError):
+        return ""
+    if value <= 0:
+        return ""
+    return f"{value:g}"
+
+
+def traffic_line(server: dict[str, Any]) -> str:
+    """账号块里的流量行：`┃ 📈 流量：31.20 GB / 200GB`，固定排在「状态」上面一行。
+
+    报告要列全部组员，一行一台已经够长，所以只留「用了多少 / 套餐多少」两个数，
+    不写阈值——阈值是组里调出来的判据，读报告时看「用了多少」比看阈值更直接。
+    流量还没查过（traffic_used 为 None）时写「—」，不写 0.00 GB —— 那会被读成
+    「这台一点流量都没用」。
+    """
+    raw = server.get("traffic_used")
+    if raw is None or raw == "":
+        used = "—"
+    else:
+        try:
+            used = f"{float(raw):.2f} GB"
+        except (TypeError, ValueError):
+            used = "—"
+    quota = _quota_text(server)
+    return f"┃ 📈 流量：{used} / {quota}GB" if quota else f"┃ 📈 流量：{used}"
+
+
 # --------------------------------------------------------------------------
 # 标题：CDT {事件}报告（{范围}）
 # --------------------------------------------------------------------------
@@ -204,6 +241,7 @@ def _used_line(server: dict[str, Any]) -> str:
 #   闲散手动 → （闲散手动）
 # 统一之后，推送列表里一眼能认出事件归属，不用去点开正文。
 SCOPE_GROUP = "换班组"
+SCOPE_BALANCE = "均衡组"
 SCOPE_KEEPALIVE = "单机保活"
 SCOPE_IDLE = "闲散手动"
 
@@ -214,7 +252,8 @@ def scope_tag(group_name: str = "", scope: str = SCOPE_GROUP, note: str = "") ->
     note 是给同一事件补的修饰（目前只有「延迟恢复」），跟在范围后面共用
     一个括号：`（换班组：X，延迟恢复）`。排两个括号看着像两件事。
     """
-    inner = f"{SCOPE_GROUP}：{group_name}" if group_name else (scope or SCOPE_GROUP)
+    label = SCOPE_GROUP if scope in ("", SCOPE_KEEPALIVE, SCOPE_IDLE) else scope
+    inner = f"{label}：{group_name}" if group_name else (scope or SCOPE_GROUP)
     if note:
         inner = f"{inner}，{note}"
     return f"（{inner}）"
@@ -249,6 +288,10 @@ def obj_server(label: str) -> str:
 
 def obj_group(name: str) -> str:
     return f"{SCOPE_GROUP}：{name or '—'}"
+
+
+def obj_balance(name: str) -> str:
+    return f"{SCOPE_BALANCE}：{name or '—'}"
 
 
 def obj_duty(name: str, label: str) -> str:
@@ -333,7 +376,10 @@ def _region(server: dict[str, Any]) -> str:
 
 
 def running_block(heading: str, server: dict[str, Any], ddns_status: str) -> str:
-    """线上运行的那台。脚本里叫「运行账号 / 接替账号」。"""
+    """线上运行的那台。脚本里叫「运行账号 / 接替账号」。
+
+    与 v1.6.8 逐字一致，只在「状态」行上面多一行流量（`📈 流量：x GB / yGB`）。
+    """
     return "\n".join(
         [
             f"🟢 <b>{heading} </b>",
@@ -342,26 +388,29 @@ def running_block(heading: str, server: dict[str, Any], ddns_status: str) -> str
             f"┃ 🌐 ＩＰ：{_ip(server)}",
             f"┃ 📍 地域：{_region(server)}",
             f"┃ ☁️ DDNS：{ddns_status}",
+            traffic_line(server),
             "┃ 🟢 状态：Running",
         ]
     )
 
 
-def stopped_block(
-    heading: str, server: dict[str, Any], status_text: str, used: float | None = None
-) -> str:
-    """停机的那台。脚本里「停止账号」不带已用，「超限账号」带已用。"""
-    lines = [
-        f"⚪ <b>{heading} </b>",
-        f"┃ 🏷 别名：{_label(server)}",
-        f"┃ 📦 实例：<code>{_instance(server)}</code>",
-        f"┃ 🌐 ＩＰ：{_ip(server)}",
-        f"┃ 📍 地域：{_region(server)}",
-    ]
-    if used is not None:
-        lines.append(f"┃ 📈 已用：{used:.2f} GB")
-    lines.append(f"┃ ⚪ 状态：{status_text}")
-    return "\n".join(lines)
+def stopped_block(heading: str, server: dict[str, Any], status_text: str) -> str:
+    """停机的那台。脚本里「停止账号 / 超限账号 / 离线账号」都用这一块。
+
+    同样是 v1.6.8 原样，只把原来超限账号才有的 `┃ 📈 已用：x GB` 换成
+    所有块统一的一行 `📈 流量：x GB / yGB`（位置不变：状态行上面）。
+    """
+    return "\n".join(
+        [
+            f"⚪ <b>{heading} </b>",
+            f"┃ 🏷 别名：{_label(server)}",
+            f"┃ 📦 实例：<code>{_instance(server)}</code>",
+            f"┃ 🌐 ＩＰ：{_ip(server)}",
+            f"┃ 📍 地域：{_region(server)}",
+            traffic_line(server),
+            f"┃ ⚪ 状态：{status_text}",
+        ]
+    )
 
 
 def _join_blocks(parts: list[str]) -> str:
@@ -425,13 +474,189 @@ def shift_failover(
     cause = "当班实例疑被抢占，保活超时" if stall else "当班实例流量超限"
     taken_label = "离线账号" if stall else "超限账号"
     parts = [running_block("接替账号", duty, ddns_status)]
-    parts += [stopped_block(taken_label, s, _status(s), used=_used(s)) for s in over]
+    parts += [stopped_block(taken_label, s, _status(s)) for s in over]
     parts += [stopped_block("停止账号", s, _status(s)) for s in standby]
     return _titled(
         "shift_failover",
         "⚠️",
         title_of("故障转移", group_name),
         f"📢 <b>故障转移</b>：{cause}，已启用备用实例。\n{SEP}\n" + _join_blocks(parts),
+    )
+
+
+def _member_id(server: dict[str, Any]) -> int:
+    """成员去重用的服务器 id。
+
+    换班那边的成员 dict 是 servers 行（`id`），均衡组是 balance_members 联表
+    （成员行是 `id`，服务器是 `server_id`）—— 这里统一取服务器 id，别拿成员行 id
+    去和服务器 id 比，否则去重永远失效、同一台会列两遍。
+    """
+    for key in ("server_id", "id"):
+        try:
+            value = int(server.get(key) or 0)
+        except (TypeError, ValueError):
+            continue
+        if value:
+            return value
+    return 0
+
+
+def balance_switch(
+    duty: dict[str, Any],
+    members: list[dict[str, Any]],
+    ddns_status: str,
+    group_name: str = "",
+    prev: dict[str, Any] | None = None,
+    manual: bool = False,
+    reason: str = "",
+) -> notify.Message:
+    """✅ 流量均衡完成：域名从用得多的那台换到用得最少的那台。
+
+    **正文照换班完成报告写**（`shift_done`）：只有标题（均衡组）和概览那行不同，
+    下面同样是「运行账号」+ 其余每台一块「停止账号」。以前这里自造了「接替账号 /
+    交班账号 / 待机账号」三套标签，同一件事在两份报告里叫法不一样，读通知的人得
+    先在脑子里对一遍哪个对哪个；统一之后，只有概览那句在说「为什么切」。
+
+    members 是组内全部成员（含当班那台），按服务器 id 去重。prev 是交班那台的
+    停机后副本（可能已停机、也可能按「下班保持运行」还开着），用它替换 members
+    里的旧快照，报告才写得出交班后的真实状态。
+
+    reason 只影响概览那句原因：首次指派不是「用量领先」，把它写成领先会让人
+    以为系统刚做了一次流量判断。
+    """
+    parts = [running_block("运行账号", duty, ddns_status)]
+    seen = {_member_id(duty)}
+    prev_id = _member_id(prev) if prev else 0
+    for member in members:
+        member_id = _member_id(member)
+        if not member_id or member_id in seen:
+            continue
+        seen.add(member_id)
+        row = prev if prev_id and member_id == prev_id else member
+        # 不写死 ⚪：均衡组可以有「下班保持运行」的成员，那台交班后还在跑，
+        # 固定灰点会和下面那行 `🟢 状态：Running` 自相矛盾，按真实状态取。
+        parts.append(stopped_block("停止账号", row, _status(row)))
+    if manual:
+        cause = "手动触发，已切到当前累计流量最少的成员"
+    elif reason in ("first", "new"):
+        cause = "首次指派，已指向累计用量最少的成员"
+    else:
+        cause = "当班成员累计用量领先，已切到流量最少的成员"
+    return _titled(
+        "balance_switch",
+        "✅",
+        title_of("手动均衡完成" if manual else "均衡完成", group_name, scope=SCOPE_BALANCE),
+        f"📊 <b>流量均衡</b>：{cause}。\n{SEP}\n" + _join_blocks(parts),
+    )
+
+
+def balance_failover(
+    duty: dict[str, Any],
+    over: list[dict[str, Any]],
+    members: list[dict[str, Any]],
+    ddns_status: str,
+    group_name: str = "",
+    reason: str = "traffic",
+) -> notify.Message:
+    """⚠️ 流量均衡转移：当班到阈值，或起不来，换成流量最少的成员。
+
+    **正文照故障转移报告写**（`shift_failover`）：接替账号 → 超限账号（起不来时写
+    离线账号）→ 其余每台「停止账号」，只有标题和概览那行不同。
+    """
+    stall = reason == "stall"
+    cause = "当班实例疑被抢占，多次拉起未成功" if stall else "当班实例流量已到阈值"
+    taken_label = "离线账号" if stall else "超限账号"
+    parts = [running_block("接替账号", duty, ddns_status)]
+    seen = {_member_id(duty)}
+    for server in over:
+        server_id = _member_id(server)
+        if server_id in seen:
+            continue
+        seen.add(server_id)
+        parts.append(stopped_block(taken_label, server, _status(server)))
+    for member in members:
+        member_id = _member_id(member)
+        if member_id in seen:
+            continue
+        seen.add(member_id)
+        parts.append(stopped_block("停止账号", member, _status(member)))
+    return _titled(
+        "balance_failover",
+        "⚠️",
+        title_of("均衡转移", group_name, scope=SCOPE_BALANCE),
+        f"📢 <b>流量均衡转移</b>：{cause}，已交给当前用量最少的成员。\n{SEP}\n"
+        + _join_blocks(parts),
+    )
+
+
+def balance_error(
+    duty: dict[str, Any] | None,
+    minutes: int,
+    group_name: str = "",
+    reason: str = "",
+) -> notify.Message:
+    """⚠️ 均衡异常：切换超过预期时间还没就绪。
+
+    与换班异常同一个口径 —— 只报「该在跑的那台现在什么样」和卡了多久，
+    不再罗列全部成员：异常时用户要的是「现在谁在线」，不是整张表。
+    """
+    header = f"⏳ <b>均衡超时：切换指令已执行 {minutes} 分钟，但状态未就绪。</b>"
+    if reason:
+        header += f"\n原因：{reason}"
+    parts: list[str] = []
+    if duty is not None:
+        parts.append(
+            "\n".join(
+                [
+                    "🚩 <b>应当运行账号 </b>",
+                    f"┃ 🏷 别名：{_label(duty)}",
+                    f"┃ 📦 实例：<code>{_instance(duty)}</code>",
+                    f"┃ 🌐 ＩＰ：{_ip(duty)}",
+                    f"┃ 📍 地域：{_region(duty)}",
+                    traffic_line(duty),
+                    f"┃ {_state_icon(duty)} 状态：{_status(duty)}",
+                ]
+            )
+        )
+    body = header + ("\n\n" + _join_blocks(parts) if parts else "")
+    return _titled("balance_error", "⚠️", title_of("均衡异常", group_name, scope=SCOPE_BALANCE), body)
+
+
+def _breaker_block(server: dict[str, Any]) -> str:
+    """熔断报告里的一台机器。换班的「全局熔断」和均衡组的「全局熔断」共用这一块。
+
+    以前均衡那份自己写了一套（少地域、少阈值、多一行不带阈值的流量），同一件事
+    在两份报告里字段不一样，对照着看要来回换口径。字段顺序与账号块保持一致：
+    别名 → 实例 → IP → 地域 → 流量 → 状态。
+    """
+    return "\n".join(
+        [
+            f"🖥 {_label(server)}",
+            f"┃ 📦 实例：<code>{_instance(server)}</code>",
+            f"┃ 🌐 ＩＰ：{_ip(server)}",
+            f"┃ 📍 地域：{_region(server)}",
+            _used_line(server),
+            f"┃ {_state_icon(server)} 状态：{_status(server)}",
+        ]
+    )
+
+
+def balance_exhausted(
+    servers: list[dict[str, Any]], group_name: str = "", note: str = ""
+) -> notify.Message:
+    """🚨 均衡组全员到阈值：没有可以接班的成员，全部停机。"""
+    count = "双实例" if len(servers) == 2 else f"{len(servers)} 台实例"
+    warn = (
+        f"当班流量已到阈值，{note}，按“全局熔断”处理，{stop_tail(servers)}。"
+        if note
+        else f"{count}流量均已到达到阈值，“全局熔断”，{stop_tail(servers)}。"
+    )
+    blocks = [_breaker_block(s) for s in servers]
+    return _titled(
+        "balance_breaker",
+        "🚨",
+        title_of("全局熔断", group_name, scope=SCOPE_BALANCE),
+        f"📢 <b>全局熔断</b>：{warn}\n{SEP}\n" + _join_blocks(blocks),
     )
 
 
@@ -451,19 +676,7 @@ def breaker(
         warn = f"当班流量已到达到阈值，{note}，按“全局熔断”处理，{stop_tail(servers)}。"
     else:
         warn = f"{count}流量均已到达到阈值，“全局熔断”，{stop_tail(servers)}。"
-    blocks = [
-        "\n".join(
-            [
-                f"🖥 {_label(s)}",
-                f"┃ 📦 实例：<code>{_instance(s)}</code>",
-                f"┃ 🌐 ＩＰ：{_ip(s)}",
-                f"┃ 📍 地域：{_region(s)}",
-                _used_line(s),
-                f"┃ {_state_icon(s)} 状态：{_status(s)}",
-            ]
-        )
-        for s in servers
-    ]
+    blocks = [_breaker_block(s) for s in servers]
     return _titled(
         "breaker",
         "🚨",
@@ -592,6 +805,7 @@ def shift_error(
     ]
     if ddns_status:
         duty_lines.append(f"┃ ☁️ DDNS：{ddns_status}")
+    duty_lines.append(traffic_line(duty))
     duty_lines.append(f"┃ {_state_icon(duty)} 状态：{_status(duty)}")
     parts = ["\n".join(duty_lines)]
     for server in stopped:
@@ -603,6 +817,7 @@ def shift_error(
                     f"┃ 📦 实例：<code>{_instance(server)}</code>",
                     f"┃ 🌐 ＩＰ：{_ip(server)}",
                     f"┃ 📍 地域：{_region(server)}",
+                    traffic_line(server),
                     f"┃ {_state_icon(server)} 状态：{_status(server)}",
                 ]
             )

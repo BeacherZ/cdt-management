@@ -22,7 +22,7 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 18px 12px 14px;
+  padding: 18px 14px 14px;
   border-right: 1px solid var(--line);
   /* 玻璃质感：上浓下淡，透出背景的环境光。
      上一行是给不支持 color-mix 的浏览器兜底（Chrome < 111 / Safari < 16.2 /
@@ -113,124 +113,56 @@
   letter-spacing: 0.01em;
 }
 
-/* 桌面端让导航分组继续参与侧栏的纵向 flex 布局 */
+/* 桌面端：导航整体纵向排，两段之间靠间距断开（不再画一条通栏横线，
+   横线会被读成文档里的段落分隔；改为分组标题自己拖一条延长线） */
 .sidebar .nav-list {
-  display: contents;
-}
-
-.sidebar .nav-group {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 14px;
 }
 
-.sidebar .nav-group + .nav-group {
-  margin-top: 12px;
+/* 一组菜单项：项与项之间 2px，组与组之间由 .nav-list 的 gap 拉开 */
+.nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
-/* 总菜单：概览 / 保活。两者同一套字号字重，视觉上并排成两级 */
-.nav-parent {
-  position: relative;
+/* 段标题：11px 小字 + 右侧一条延长线，一眼看出下面几项是一伙的。
+   不放大、不用主色、不可点 —— 它只是分组，不是页面。 */
+.nav-label {
   display: flex;
   align-items: center;
-  gap: 9px;
-  width: 100%;
-  padding: 7px 11px;
-  border: 0;
-  border-radius: 10px;
-  background: transparent;
-  color: var(--ink);
-  font-family: inherit;
-  font-size: 13px;
-  font-weight: 620;
-  letter-spacing: -0.014em;
-  text-align: left;
+  gap: 8px;
+  padding: 0 16px 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
   user-select: none;
-  transition:
-    background var(--t-fast) var(--ease),
-    color var(--t-fast) var(--ease);
 }
 
-button.nav-parent {
-  cursor: pointer;
-}
-
-button.nav-parent:hover {
-  background: var(--panel-inset);
-}
-
-.nav-parent svg {
-  flex-shrink: 0;
-  opacity: 0.78;
-  transition: opacity var(--t-fast) var(--ease);
-}
-
-button.nav-parent:hover svg,
-.nav-parent.on svg {
-  opacity: 1;
-}
-
-.nav-parent.on {
-  color: var(--accent);
-  background: var(--accent-soft);
-}
-
-.nav-parent.on::before {
+.nav-label::after {
   content: '';
-  position: absolute;
-  left: 0;
-  top: 50%;
-  width: 2.5px;
-  height: 16px;
-  margin-top: -8px;
-  border-radius: 0 3px 3px 0;
-  background: var(--accent-grad);
+  flex: 1;
+  height: 1px;
+  background: var(--line);
 }
 
-/* 保活：不是页面，只作标签，没有 hover 反馈，别让人以为能点 */
-.nav-parent.label {
-  color: var(--ink-soft);
-  cursor: default;
-}
-
-/* 子项：缩进挂在总菜单下面，左侧一条导轨把层级画出来 */
-.nav-sub {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  margin: 1px 0 0 26px;
-  padding-left: 12px;
-  border-left: 1px solid var(--line);
-}
-
-.nav-sub .nav-item {
-  padding: 6px 10px;
-  font-size: 12px;
-}
-
-/* 选中时导轨那一小段点亮，而不是在缩进里再飘一根 */
-.nav-sub .nav-item.on::before {
-  left: -13px;
-  width: 2px;
-  height: 14px;
-  margin-top: -7px;
-  border-radius: 2px;
-}
-
-/* 保活分组整组高亮时，标题也跟着变色，方便看出当前在哪个大菜单 */
-.nav-group.is-active > .nav-parent.label {
-  color: var(--ink-soft);
-}
-
+/* 菜单行：大行（11px 内边距 ≈ 42px 高）+ 16px 横向内边距，图标和文字整块
+   从侧栏边缘往里收一档，看着是「一块块」而不是「贴着左边的一串字」。
+   图标列保持固定 x 轴、不逐项居中：菜单是靠这一列扫视的，
+   每一行各自居中会让图标左右游走，反而更乱。
+   字重压在 500：这个字号下 550 以上会明显发胖，中文尤甚。 */
 .nav-item {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 10px;
   width: 100%;
-  padding: 8px 11px;
+  padding: 11px 16px;
   border: 0;
-  border-radius: 10px;
+  border-radius: 12px;
   background: transparent;
   color: var(--ink-soft);
   font-family: inherit;
@@ -247,7 +179,30 @@ button.nav-parent:hover svg,
 .nav-item svg {
   flex-shrink: 0;
   opacity: 0.72;
-  transition: opacity var(--t-fast) var(--ease);
+  transition:
+    opacity var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+
+/* 菜单图标统一上色：上段三个页面和托管方式一样用品牌绿（就是「联合换班」那个绿），
+   托管方式里的保活 / 均衡再各自换归属色。设置与退出在 .nav-list 之外，保持中性灰。 */
+.nav-list .nav-item svg {
+  color: var(--accent);
+  opacity: 0.9;
+}
+
+/* 归属色只在需要区分的两项上覆盖：保活紫、均衡蓝 */
+.nav-item.nav-tone-keepalive svg {
+  color: var(--violet);
+}
+
+.nav-item.nav-tone-balance svg {
+  color: var(--blue);
+}
+
+/* 悬停时只提不亮，颜色还是归属色，鼠标准星扫过去不会一片闪 */
+.nav-item:hover svg {
+  opacity: 1;
 }
 
 .nav-item:hover {
@@ -255,58 +210,58 @@ button.nav-parent:hover svg,
   color: var(--ink);
 }
 
-.nav-item:hover svg {
-  opacity: 1;
-}
-
+/* 选中行是一颗实心品牌绿药丸：底色已经够重，字不再加粗（600 以上在白字上
+   会糊成一团，反而看不清），靠色彩和阴影区分就够了 */
 .nav-item.on {
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-weight: 620;
+  background: var(--accent-grad);
+  color: #fff;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 6px 14px -8px var(--accent-ring);
 }
 
+/* 选中行的底色已经是品牌绿，图标再留自己的色相（紫 / 蓝）会显得脏，
+   跟着文字走 currentColor，整颗药丸只有一个色相 */
 .nav-item.on svg {
+  color: currentColor;
   opacity: 1;
 }
 
-/* 选中态左侧的短竖条 */
-.nav-item.on::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 50%;
-  width: 2.5px;
-  height: 16px;
-  margin-top: -8px;
-  border-radius: 0 3px 3px 0;
-  background: var(--accent-grad);
+/* 深色主题的 --accent-grad 是亮绿，白字压上去只有 1.9:1，
+   和 .btn.primary 一个处理：把文字换成深绿 */
+:root[data-theme='dark'] .nav-item.on {
+  color: #04241b;
 }
 
 .nav-text {
   flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* 数量：只做「这一项里有多少东西」的提示，本身不可点。
+   以前做成灰底小胶囊，一排三个灰圆点反而像脚注；改成右对齐的等宽数字，
+   和表格里的数字同一个口径，扫视时不会把视线从名字上拽走。 */
 .nav-count {
-  font-size: 11px;
+  flex-shrink: 0;
+  color: var(--muted-soft);
+  font-size: 12px;
   font-weight: 600;
-  padding: 0 6px;
-  min-width: 18px;
   text-align: center;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--ink) 8%, transparent);
-  color: var(--muted);
   font-variant-numeric: tabular-nums;
-  transition:
-    background var(--t-fast) var(--ease),
-    color var(--t-fast) var(--ease);
+  transition: color var(--t-fast) var(--ease);
 }
 
 .nav-item.on .nav-count {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  color: var(--accent);
+  color: #fff;
+  opacity: 0.84;
+}
+
+:root[data-theme='dark'] .nav-item.on .nav-count {
+  color: #04241b;
+  opacity: 0.7;
 }
 
 .sidebar-foot {
@@ -435,6 +390,11 @@ button.nav-parent:hover svg,
     min-width: 0;
     max-width: 100vw;
     flex-shrink: 0;
+    /* 桌面端是 align-self:start（靠左贴边、不拉满），收成顶栏后必须改回 stretch：
+       否则顶栏按内容取宽（横屏 844 下只有 762），右边空一截，
+       设置/退出图标也会停在半空中而不是贴到屏幕右边 */
+    align-self: stretch;
+    width: 100%;
   }
 
   .sidebar::after {
@@ -460,10 +420,11 @@ button.nav-parent:hover svg,
   .sidebar .nav-list {
     order: 3;
     display: flex;
+    flex-direction: row;
     width: 100%;
     /* flex 子项的 min-width 默认是 auto，这里不压成 0 会按内容顶宽整页 */
     min-width: 0;
-    gap: 4px;
+    gap: 3px;
     overflow-x: auto;
     padding-top: 6px;
     scrollbar-width: none;
@@ -473,29 +434,13 @@ button.nav-parent:hover svg,
     display: none;
   }
 
-  /* 小屏不画层级：总菜单和子项摊平成同一排横滑的颗粒 */
-  .sidebar .nav-group,
-  .sidebar .nav-sub {
+  /* 窄屏把导航摊成一排横滑的颗粒：分组标题没有位置，藏掉；
+     分组容器改成 display:contents，让六项直接成为横排的 flex 子项 */
+  .sidebar .nav-group {
     display: contents;
   }
 
-  /* 保活只是标签，横排里没有位置，藏掉 */
-  .sidebar .nav-parent.label {
-    display: none;
-  }
-
-  /* 概览本身是页面，必须留着，样式跟普通颗粒一致 */
-  .sidebar .nav-parent {
-    width: auto;
-    flex-shrink: 0;
-    padding: 6px 9px;
-    font-size: 13px;
-    font-weight: 600;
-    gap: 5px;
-    border-radius: 9px;
-  }
-
-  .sidebar .nav-parent.on::before {
+  .sidebar .nav-label {
     display: none;
   }
 
@@ -505,20 +450,26 @@ button.nav-parent:hover svg,
     padding: 7px 10px;
   }
 
-  /* 窄屏把导航颗压紧，四颗勉强一行放下，放不下就横向滚动 */
+  /* 窄屏把导航颗粒压紧：760px 下七项刚好铺满一行，不用横滑；
+     再窄（<720 左右）放不下就交给横向滚动，别硬挤成两行。
+     纵向内边距单独放到 9px：手指点的目标从 29px 抬到 33px，
+     横向仍是 8px，760px 那一行的总宽不变 */
   .sidebar .nav-list .nav-item {
-    padding: 6px 9px;
+    padding: 9px 8px;
     font-size: 13px;
-    gap: 5px;
+    gap: 4px;
     border-radius: 9px;
   }
 
-  .sidebar .nav-list .nav-item.on::before {
-    display: none;
+  .sidebar .nav-list .nav-count {
+    font-size: 11.5px;
   }
 
-  .sidebar .nav-list .nav-count {
-    margin-left: 1px;
+  /* 顶栏的 .nav-list 是 overflow-x:auto（横滑），纵向也被算成 auto，
+     药丸那颗 0 6px 14px 的外阴影正好落在容器边缘上、会被切掉半截。
+     窄屏只留顶部内高光：实心绿底本身已经够醒目，不差这层晕。 */
+  .sidebar .nav-list .nav-item.on {
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
   }
 
   /* 设置 / 退出收成图标留在右侧，不再整块隐藏 */

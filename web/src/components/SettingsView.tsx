@@ -142,6 +142,8 @@ export default function SettingsView({ settings, onSaved, onDirtyChange }: Props
         daily_report_enabled: form.daily_report_enabled,
         daily_report_time: form.daily_report_time,
         notify_on_shift: form.notify_on_shift,
+        notify_on_balance: form.notify_on_balance,
+        notify_on_balance_error: form.notify_on_balance_error,
         notify_on_failover: form.notify_on_failover,
         notify_on_recovery: form.notify_on_recovery,
         notify_on_breaker: form.notify_on_breaker,
@@ -859,45 +861,71 @@ export default function SettingsView({ settings, onSaved, onDirtyChange }: Props
                       </h2>
                       <span className="section-sub">勾选后，对应事件会通过已启用的渠道推送</span>
                     </div>
-                    <Switch
-                      label="换班完成"
-                      checked={form.notify_on_shift}
-                      onChange={(value) => patch((draft) => (draft.notify_on_shift = value))}
-                    />
-                    <Switch
-                      label="故障转移"
-                      hint="当班实例流量超限，或疑被抢占、保活超时，启用备用实例接替时提醒"
-                      checked={form.notify_on_failover}
-                      onChange={(value) => patch((draft) => (draft.notify_on_failover = value))}
-                    />
-                    <Switch
-                      label="实例恢复运行"
-                      hint="实例被停掉后自动拉起成功时提醒（掉线被抢占、手动关机后重新开保活都算）；运行窗口到点的自动开关不提醒"
-                      checked={form.notify_on_recovery || form.notify_on_keepalive}
-                      onChange={(value) =>
-                        patch((draft) => {
-                          draft.notify_on_recovery = value
-                          draft.notify_on_keepalive = value
-                        })
-                      }
-                    />
-                    <Switch
-                      label="超限停机 / 全局熔断"
-                      hint="流量达到阈值被迫停机：换班组无处可换停一台、全员超限全停；单机保活与闲散机器超限也停"
-                      checked={form.notify_on_limit_stop || form.notify_on_breaker}
-                      onChange={(value) =>
-                        patch((draft) => {
-                          draft.notify_on_limit_stop = value
-                          draft.notify_on_breaker = value
-                        })
-                      }
-                    />
-                    <Switch
-                      label="换班异常"
-                      hint="准点换班超过 10 分钟仍未就绪时提醒"
-                      checked={form.notify_on_error}
-                      onChange={(value) => patch((draft) => (draft.notify_on_error = value))}
-                    />
+                    <div className="switch-group">
+                      <span className="switch-group-label">流程完成</span>
+                      <Switch
+                        label="联合换班完成"
+                        hint="按排班表把域名和运行权交给下一位成员后提醒"
+                        checked={form.notify_on_shift}
+                        onChange={(value) => patch((draft) => (draft.notify_on_shift = value))}
+                      />
+                      <Switch
+                        label="流量均衡完成"
+                        hint="域名切到当前累计用得最少的成员后提醒"
+                        checked={form.notify_on_balance}
+                        onChange={(value) => patch((draft) => (draft.notify_on_balance = value))}
+                      />
+                    </div>
+
+                    <div className="switch-group">
+                      <span className="switch-group-label">流程异常</span>
+                      <Switch
+                        label="联合换班异常"
+                        hint="准点换班超过 10 分钟仍未就绪时提醒"
+                        checked={form.notify_on_error}
+                        onChange={(value) => patch((draft) => (draft.notify_on_error = value))}
+                      />
+                      <Switch
+                        label="流量均衡异常"
+                        hint="切换超过 10 分钟仍未就绪时提醒，同一组一小时内只提醒一次"
+                        checked={form.notify_on_balance_error}
+                        onChange={(value) =>
+                          patch((draft) => (draft.notify_on_balance_error = value))
+                        }
+                      />
+                    </div>
+
+                    <div className="switch-group">
+                      <span className="switch-group-label">实例与保护</span>
+                      <Switch
+                        label="故障转移"
+                        hint="当班流量超限、被抢占后多次拉不起来，或保活超时，自动交给备用实例 / 用量最少的成员接替时提醒"
+                        checked={form.notify_on_failover}
+                        onChange={(value) => patch((draft) => (draft.notify_on_failover = value))}
+                      />
+                      <Switch
+                        label="实例恢复运行"
+                        hint="实例被停掉后自动拉起成功时提醒（掉线被抢占、手动关机后重新开保活都算）；运行窗口到点的自动开关不提醒"
+                        checked={form.notify_on_recovery || form.notify_on_keepalive}
+                        onChange={(value) =>
+                          patch((draft) => {
+                            draft.notify_on_recovery = value
+                            draft.notify_on_keepalive = value
+                          })
+                        }
+                      />
+                      <Switch
+                        label="超限停机 / 全局熔断"
+                        hint="流量达到阈值被迫停机：换班组无处可换停一台、均衡组全员到阈值整组停；单机保活与闲散机器超限也停"
+                        checked={form.notify_on_limit_stop || form.notify_on_breaker}
+                        onChange={(value) =>
+                          patch((draft) => {
+                            draft.notify_on_limit_stop = value
+                            draft.notify_on_breaker = value
+                          })
+                        }
+                      />
+                    </div>
                   </>
                 )}
               </>

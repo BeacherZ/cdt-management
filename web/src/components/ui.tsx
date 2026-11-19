@@ -99,7 +99,7 @@ export function Ring({
   percent: number
   size?: number
   stroke?: number
-  tone?: 'accent' | 'amber' | 'red' | 'blue'
+  tone?: 'accent' | 'amber' | 'red' | 'blue' | 'violet'
   children?: ReactNode
   title?: string
 }) {

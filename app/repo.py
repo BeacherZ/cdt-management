@@ -752,6 +752,15 @@ def bind_dns_record(record: str, kind: str, target: int) -> None:
     )
 
 
+def unbind_dns_record(record: str) -> None:
+    """解除绑定，记录本身留在 DNS 页（状态也保留，等下次被别的目标接手）。"""
+    db.execute(
+        "UPDATE dns_records SET target_kind='', target_id=0, last_ip='', last_status='', "
+        "last_at=0, updated_at=? WHERE record=?",
+        (int(time.time()), record),
+    )
+
+
 def dns_records_of(kind: str, target: int) -> list[str]:
     """这个目标当前占着哪些记录（按界面上的显示顺序）；没绑返回空列表。"""
     if not kind or not target:
@@ -1039,6 +1048,205 @@ def delete_group(group_id: int) -> None:
 
 def reset_group_anchor(group_id: int) -> None:
     db.execute("UPDATE shift_groups SET anchor_at=? WHERE id=?", (int(time.time()), group_id))
+
+
+# --------------------------------------------------------------------------
+# 流量均衡组
+# --------------------------------------------------------------------------
+
+BALANCE_INTERVALS = (60, 180, 360, 720, 1440)
+BALANCE_OFF_ACTIONS = ("keep", "stop")
+
+
+def list_balance_groups() -> list[dict[str, Any]]:
+    groups = [dict(row) for row in db.query("SELECT * FROM balance_groups ORDER BY id")]
+    for group in groups:
+        group["members"] = list_balance_members(int(group["id"]))
+    return groups
+
+
+def get_balance_group(group_id: int) -> dict[str, Any] | None:
+    row = db.query_one("SELECT * FROM balance_groups WHERE id=?", (group_id,))
+    if row is None:
+        return None
+    group = dict(row)
+    group["members"] = list_balance_members(group_id)
+    return group
+
+
+def list_balance_members(group_id: int) -> list[dict[str, Any]]:
+    rows = db.query(
+        "SELECT m.id, m.group_id, m.server_id, m.position, m.off_action, m.enabled, "
+        "s.label, s.instance_id, s.region_id, s.site, s.instance_status, s.stop_mode, "
+        "s.stopped_mode, s.public_ip, s.traffic_used, s.quota_gb, s.threshold_gb, "
+        "s.status_checked_at, s.traffic_checked_at "
+        "FROM balance_members m LEFT JOIN servers s ON s.id=m.server_id "
+        "WHERE m.group_id=? ORDER BY m.position",
+        (group_id,),
+    )
+    return [dict(row) for row in rows]
+
+
+def upsert_balance_group(payload: dict[str, Any]) -> int:
+    group_id = int(payload.get("id") or 0)
+    name = str(payload.get("name") or "").strip() or "均衡组"
+    enabled = 1 if payload.get("enabled", True) else 0
+    failover = 1 if payload.get("failover_enabled", True) else 0
+    try:
+        interval = int(payload.get("interval_minutes") or 60)
+    except (TypeError, ValueError):
+        raise ValueError("评估周期必须是一个整数分钟") from None
+    if interval not in BALANCE_INTERVALS:
+        raise ValueError("评估周期只能选 1、3、6、12、24 小时")
+    try:
+        diff_gb = float(payload.get("diff_gb") or 10)
+    except (TypeError, ValueError):
+        raise ValueError("差值阈值必须是数字") from None
+    if not math.isfinite(diff_gb) or diff_gb < 1 or diff_gb > 200:
+        raise ValueError("差值阈值应在 1–200 GB 之间")
+    try:
+        min_duty = int(payload.get("min_duty_minutes") or 30)
+    except (TypeError, ValueError):
+        raise ValueError("最短当班必须是整数分钟") from None
+    if min_duty < 5 or min_duty > 1440:
+        raise ValueError("最短当班应在 5–1440 分钟之间")
+
+    raw_members = payload.get("members") or []
+    members: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for index, item in enumerate(raw_members):
+        server_id = int(item.get("server_id") or 0)
+        if not server_id:
+            continue
+        if server_id in seen:
+            raise ValueError("同一台服务器不能在组里出现两次")
+        seen.add(server_id)
+        action = str(item.get("off_action") or "keep").strip()
+        if action not in BALANCE_OFF_ACTIONS:
+            raise ValueError("下班动作只能是「保持运行」或「停机」")
+        members.append(
+            {
+                "server_id": server_id,
+                "position": index,
+                "off_action": action,
+                "enabled": 1 if item.get("enabled", True) else 0,
+            }
+        )
+    if len(members) < 2:
+        raise ValueError("流量均衡组至少要有 2 台实例")
+
+    conn = db.connect()
+    conn.execute("BEGIN")
+    try:
+        if group_id:
+            conn.execute(
+                "UPDATE balance_groups SET name=?, enabled=?, failover_enabled=?, "
+                "interval_minutes=?, diff_gb=?, min_duty_minutes=? WHERE id=?",
+                (name, enabled, failover, interval, diff_gb, min_duty, group_id),
+            )
+        else:
+            cur = conn.execute(
+                "INSERT INTO balance_groups(name, enabled, failover_enabled, interval_minutes, "
+                "diff_gb, min_duty_minutes, created_at) VALUES(?,?,?,?,?,?,?)",
+                (name, enabled, failover, interval, diff_gb, min_duty, int(time.time())),
+            )
+            group_id = int(cur.lastrowid)
+        conn.execute("DELETE FROM balance_members WHERE group_id=?", (group_id,))
+        for member in members:
+            conn.execute(
+                "INSERT INTO balance_members(group_id, server_id, position, off_action, enabled) "
+                "VALUES(?,?,?,?,?)",
+                (group_id, member["server_id"], member["position"], member["off_action"],
+                 member["enabled"]),
+            )
+        conn.execute("COMMIT")
+        return group_id
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+
+def delete_balance_group(group_id: int) -> None:
+    conn = db.connect()
+    conn.execute("BEGIN")
+    try:
+        conn.execute("DELETE FROM balance_members WHERE group_id=?", (group_id,))
+        conn.execute("DELETE FROM balance_state WHERE group_id=?", (group_id,))
+        conn.execute("DELETE FROM balance_groups WHERE id=?", (group_id,))
+        conn.execute(
+            "UPDATE dns_records SET target_kind='', target_id=0, last_ip='', "
+            "last_status='', last_at=0, updated_at=? "
+            "WHERE target_kind='balance' AND target_id=?",
+            (int(time.time()), group_id),
+        )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+
+def get_balance_state(group_id: int) -> dict[str, Any] | None:
+    row = db.query_one("SELECT * FROM balance_state WHERE group_id=?", (group_id,))
+    return dict(row) if row else None
+
+
+def balance_awaiting_ids() -> list[int]:
+    """正处于「开机 / 切换进行中」的均衡组。
+
+    加速通道每 10 秒问一次，只靠这条查询判断要不要动 —— 不把整张组表连成员
+    一起读出来，空闲时开销就是一个主键索引上的小查询。
+    """
+    rows = db.query(
+        "SELECT group_id FROM balance_state WHERE phase IN ('starting','switching')"
+    )
+    return [int(row["group_id"]) for row in rows]
+
+
+def upsert_balance_state(group_id: int, **fields: Any) -> dict[str, Any]:
+    current = get_balance_state(group_id) or {
+        "group_id": group_id,
+        "duty_server_id": 0,
+        "prev_duty_id": 0,
+        "phase": "idle",
+        "stage": "",
+        "slot_base_gb": 0.0,
+        "cycle_key": "",
+        "event_id": 0,
+        "last_switch_at": 0,
+        "next_eval_at": 0,
+        "attempts": 0,
+        "note": "",
+        "updated_at": 0,
+    }
+    current.update({key: value for key, value in fields.items() if value is not None})
+    current["updated_at"] = int(time.time())
+    db.execute(
+        "INSERT INTO balance_state(group_id, duty_server_id, prev_duty_id, phase, stage, "
+        "slot_base_gb, cycle_key, event_id, last_switch_at, next_eval_at, attempts, note, "
+        "updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(group_id) DO UPDATE SET duty_server_id=excluded.duty_server_id, "
+        "prev_duty_id=excluded.prev_duty_id, phase=excluded.phase, stage=excluded.stage, "
+        "slot_base_gb=excluded.slot_base_gb, cycle_key=excluded.cycle_key, "
+        "event_id=excluded.event_id, last_switch_at=excluded.last_switch_at, "
+        "next_eval_at=excluded.next_eval_at, attempts=excluded.attempts, "
+        "note=excluded.note, updated_at=excluded.updated_at",
+        (
+            group_id,
+            int(current.get("duty_server_id") or 0),
+            int(current.get("prev_duty_id") or 0),
+            str(current.get("phase") or "idle"),
+            str(current.get("stage") or ""),
+            float(current.get("slot_base_gb") or 0),
+            str(current.get("cycle_key") or ""),
+            int(current.get("event_id") or 0),
+            int(current.get("last_switch_at") or 0),
+            int(current.get("next_eval_at") or 0),
+            int(current.get("attempts") or 0),
+            str(current.get("note") or ""),
+            int(current.get("updated_at") or 0),
+        ),
+    )
+    return current
 
 
 # --------------------------------------------------------------------------

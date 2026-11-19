@@ -57,44 +57,46 @@ SERVER_SPECS = [
         "instance_id": "i-demo00000000000001",
         "quota_gb": 200,
         "threshold_gb": 188,
-        "remark": "白天班，带宽优先",
+        "remark": "联合换班 10 小时",
     },
     {
         "label": "香港-备用",
         "region_id": "cn-hongkong",
+        "site": "china",
         "instance_id": "i-demo00000000000002",
         "quota_gb": 200,
         "threshold_gb": 188,
-        "remark": "夜间班",
+        "remark": "联合换班 8 小时",
     },
     {
-        "label": "新加坡-二线",
+        "label": "新加坡-均衡A",
         "region_id": "ap-southeast-1",
         "site": "international",
         "instance_id": "i-demo00000000000003",
         "quota_gb": 200,
-        "threshold_gb": 180,
-        "remark": "联合换班第三顺位",
+        "threshold_gb": 185,
+        "remark": "均衡组，保持运行",
     },
     {
-        "label": "日本-临时",
-        "region_id": "ap-northeast-1",
+        "label": "新加坡-均衡B",
+        "region_id": "ap-southeast-1",
         "site": "international",
         "instance_id": "i-demo00000000000004",
+        "quota_gb": 200,
+        "threshold_gb": 185,
+        "remark": "均衡组，当班",
+    },
+    {
+        "label": "东京-保活",
+        "region_id": "ap-northeast-1",
+        "site": "international",
+        "instance_id": "i-demo00000000000005",
         "quota_gb": 100,
         "threshold_gb": 92,
         "remark": "单机保活，不进换班组",
     },
     {
-        "label": "泰国-灾备",
-        "region_id": "ap-southeast-7",
-        "instance_id": "i-demo00000000000005",
-        "quota_gb": 100,
-        "threshold_gb": 90,
-        "remark": "单机保活，长期待命",
-    },
-    {
-        "label": "德国-闲置",
+        "label": "法兰克福-闲散",
         "region_id": "eu-central-1",
         "site": "international",
         "instance_id": "i-demo00000000000006",
@@ -117,15 +119,15 @@ print(f"服务器 -> {len(server_ids)} 台")
 # -- 3. 单机保活 ------------------------------------------------------------
 existing = call("GET", "/api/v1/keepalives")[1].get("items", [])
 known = {item["server_id"] for item in existing}
-for label in ("日本-临时", "泰国-灾备"):
+for label in ("东京-保活",):
     server_id = server_ids.get(label)
     if server_id and server_id not in known:
         call("POST", "/api/v1/keepalives", {"server_id": server_id})
 print(f"单机保活 -> {len(call('GET', '/api/v1/keepalives')[1].get('items', []))} 条")
 
-# -- 4. 换班组（3 台：10h / 8h / 6h，一个周期 24 小时）---------------------
+# -- 4. 换班组（2 台：10h / 8h，两台轮着来）--------------------------------
 members = []
-for label, hours in (("香港-主力", 10), ("香港-备用", 8), ("新加坡-二线", 6)):
+for label, hours in (("香港-主力", 10), ("香港-备用", 8)):
     if label in server_ids:
         members.append({"server_id": server_ids[label], "hours": hours, "enabled": True})
 
@@ -171,6 +173,7 @@ code, _ = call(
                 "cdt-demo.example.com",
                 "cdt-demo-2.example.com",
                 "cdt-demo-3.example.com",
+                "cdt-balance.example.com",
             ],
             "ttl": "120",
             "proxied": False,
@@ -195,12 +198,34 @@ code, _ = call(
 )
 print(f"配置项 -> {code}")
 
+# -- 5.2 流量均衡组（2 台，都保持运行，靠域名指向 + 流量差值轮换）---------
+bal_members = [
+    {"server_id": server_ids[label], "off_action": "keep", "enabled": True}
+    for label in ("新加坡-均衡A", "新加坡-均衡B")
+    if label in server_ids
+]
+if len(bal_members) >= 2:
+    code, body = call(
+        "POST",
+        "/api/v1/balances",
+        {
+            "name": "新加坡均衡",
+            "enabled": True,
+            "failover_enabled": True,
+            "interval_minutes": 60,
+            "diff_gb": 10,
+            "members": bal_members,
+            "ddns_record": "cdt-balance.example.com",
+        },
+    )
+    print(f"均衡组 -> {code} id={body.get('id')} bootstrap={body.get('bootstrap')}")
+
 # -- 5.5 DNS 绑定：一条域名只归一个目标 ----------------------------------
-# 演示三条不同形态的绑定：换班组 / 单机保活 / 闲散实例
+# 演示三条不同形态的绑定：换班组 / 单机保活 / 闲散实例（均衡组建组时就绑好了）
 DNS_BINDINGS = [
     ("cdt-demo.example.com", "group", group_id, "换班组"),
-    ("cdt-demo-2.example.com", "server", server_ids.get("日本-临时", 0), "单机保活"),
-    ("cdt-demo-3.example.com", "server", server_ids.get("德国-闲置", 0), "闲散实例"),
+    ("cdt-demo-2.example.com", "server", server_ids.get("东京-保活", 0), "单机保活"),
+    ("cdt-demo-3.example.com", "server", server_ids.get("法兰克福-闲散", 0), "闲散实例"),
 ]
 for record, kind, target_id, label in DNS_BINDINGS:
     if not target_id:
@@ -221,11 +246,12 @@ for server in servers.get("items", []):
 
 _, overview = call("GET", "/api/v1/overview")
 print(
-    "总览 -> 服务器 %s 台 / 保活 %s 条 / 换班组 %s 个 / 事件 %s 条"
+    "总览 -> 服务器 %s 台 / 保活 %s 条 / 换班组 %s 个 / 均衡组 %s 个 / 事件 %s 条"
     % (
         len(overview.get("servers", [])),
         len(overview.get("keepalives", [])),
         len(overview.get("groups", [])),
+        len(overview.get("balances", [])),
         len(overview.get("events", [])),
     )
 )

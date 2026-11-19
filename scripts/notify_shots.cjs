@@ -134,9 +134,10 @@ class Cdp {
   }
   fs.mkdirSync(OUT, { recursive: true })
 
+  // 下划线开头的是给总览用的中间页，单独处理
   const pages = fs
     .readdirSync(SRC)
-    .filter((name) => name.endsWith('.html'))
+    .filter((name) => name.endsWith('.html') && !name.startsWith('_'))
     .sort()
   if (!pages.length) throw new Error(`${SRC} 里没有 html`)
 
@@ -187,6 +188,26 @@ class Cdp {
       const png = name.replace(/\.html$/, '.png')
       await cdp.shot(png)
       console.log(`  ✓ ${png}  (${WIDTH}×${height})`)
+    }
+
+    // README 用的总览：九张卡片 3×3，按整页高度截，比例交给 README 的 width 控制
+    const overview = path.join(SRC, '_overview.html')
+    if (fs.existsSync(overview)) {
+      await cdp.goto('file:///' + overview.replace(/\\/g, '/'))
+      await sleep(600)
+      const size = await cdp.evaluate(`(() => {
+        const d = document.documentElement
+        return { w: d.scrollWidth, h: d.scrollHeight }
+      })()`)
+      await cdp.viewport(size.w, size.h + 4, 1.5)
+      await sleep(500)
+      const { data } = await cdp.send('Page.captureScreenshot', {
+        format: 'png',
+        fromSurface: true,
+        captureBeyondViewport: true,
+      })
+      fs.writeFileSync(path.join(OUT, '25-notify-overview.png'), Buffer.from(data, 'base64'))
+      console.log(`  ✓ 25-notify-overview.png  (${size.w}×${size.h} @1.5x)`)
     }
   } finally {
     if (cdp) cdp.socket.close()

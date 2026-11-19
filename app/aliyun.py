@@ -408,6 +408,17 @@ def _mock(account: dict) -> dict[str, Any]:
             # 用实例 ID 散列出一个稳定的偏移，演示数据里每台费用不同但不会每轮跳变
             seed = sum(ord(char) for char in key)
             quota = float(account.get("quota_gb") or 200)
+            # 币种跟站点走：中国站人民币、国际站美元（真实 BSS 的 QueryAccountBalance
+            # 返回的就是站点本币）。金额也按各自量级给 —— 国际站要是照人民币那套数字
+            # 报上去，就成了「$1287.43」这种一眼假、截图也扎眼的数。
+            if str(account.get("site") or "china") == "international":
+                cost = quota * 0.011 + 1.2 + (seed % 90) / 100
+                balance = 120 + seed % 480 + ((seed * 7) % 100) / 100
+                currency = "USD"
+            else:
+                cost = quota * 0.072 + 9 + (seed % 420) / 100
+                balance = 800 + seed % 1600 + ((seed * 7) % 100) / 100
+                currency = "CNY"
             state = {
                 "status": "Stopped",
                 "stopped_mode": "StopCharging",
@@ -415,9 +426,9 @@ def _mock(account: dict) -> dict[str, Any]:
                 # 这里只是内存桩，dry-run 下不会真的往 Cloudflare 写解析
                 "public_ip": f"47.243.{index}.{20 + index}",
                 "traffic": f"{quota * 0.42:.2f}",
-                "cost": f"{quota * 0.072 + 9 + (seed % 420) / 100:.2f}",
-                "balance": f"{800 + seed % 1600}.{(seed * 7) % 100:02d}",
-                "currency": "CNY",
+                "cost": f"{cost:.2f}",
+                "balance": f"{balance:.2f}",
+                "currency": currency,
                 # 异步流转辅助字段：目标状态 + 到位时刻（0 表示无进行中的操作）
                 "pending_until": 0.0,
                 "target_status": "",

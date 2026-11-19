@@ -12,6 +12,7 @@ import {
   Loader2,
   MapPin,
   Repeat,
+  Scale,
   Server as ServerIcon,
   ShieldAlert,
   UserMinus,
@@ -40,6 +41,17 @@ const EVENT_ICON: Record<string, typeof Info> = {
   daily_report: Gauge,
   stop: CloudOff,
   start: Cloud,
+  // 流量均衡的四类结论：正常轮换用天平，转移/异常/熔断沿用换班同族的告警形状
+  balance_switch: Scale,
+  balance_done: Scale,
+  balance_manual: Scale,
+  balance_new: UserPlus,
+  balance_recover: Activity,
+  balance_limit: ShieldAlert,
+  balance_failover: AlertTriangle,
+  balance_error: AlertTriangle,
+  balance_breaker: ShieldAlert,
+  balance_dissolve: UserMinus,
   // 单机保活的窗口相关事件：暂停 / 恢复 / 计划内拉起，图标要与「抢占恢复」区分开
   keepalive_pause: CloudOff,
   keepalive_resume: Cloud,
@@ -58,20 +70,17 @@ export default function DashboardView({
   onNavigate,
 }: {
   overview: Overview
-  onNavigate: (view: 'servers' | 'keepalive' | 'shift') => void
+  onNavigate: (view: 'servers' | 'keepalive' | 'shift' | 'balance') => void
 }) {
   // 后端一次给最近 20 条，先露 8 条，剩下的点「显示更多事件」再展开
   const [eventCount, setEventCount] = useState(RECENT_EVENT_PAGE)
   const running = overview.servers.filter((server) => server.instance_status === 'Running').length
-  const totalTraffic = overview.servers.reduce((sum, server) => sum + (server.traffic_used || 0), 0)
-  // 百分比的分母永远是「总配额」（每台默认 200GB，N 台就是 200×N），和后端通知、
-  // 实例列表里的流量条同一个口径。阈值只决定什么时候换班，不参与百分比计算——
-  // 阈值 188/200 会让同一份用量在概览显示 100%、在通知里显示 94%，对不上。
-  const totalQuota = overview.servers.reduce((sum, server) => sum + (server.quota_gb || 200), 0)
-  const trafficPercent = totalQuota > 0 ? (totalTraffic / totalQuota) * 100 : 0
+  const balanceGroups = overview.balances ?? []
+  const activeBalances = balanceGroups.filter((group) => group.enabled)
+  const activeShifts = overview.groups.filter((group) => group.enabled).length
+  // 阈值告警数：和后端 shift._over_threshold 同一口径，阈值没配（0）的机器不算超限。
+  // 少了 threshold_gb > 0，0 >= 0 永远成立，概览会报「N 台超阈值」而引擎根本不动作。
   const alarms = overview.servers.filter(
-    // 和后端 shift._over_threshold 同一口径：阈值没配（0）的机器不算超限。
-    // 少了 threshold_gb > 0，0 >= 0 永远成立，概览会报「N 台超阈值」而引擎根本不动作。
     (server) => server.threshold_gb > 0 && (server.traffic_used || 0) >= server.threshold_gb,
   ).length
   const recentEvents = overview.events.slice(0, eventCount)
@@ -81,7 +90,7 @@ export default function DashboardView({
     <>
       <div className="page-head">
         <div>
-          <h1>概览</h1>
+          <h1>运行概览</h1>
           <p>
             当前 {overview.timezone} · {overview.now_label}
           </p>
@@ -137,7 +146,7 @@ export default function DashboardView({
           onClick={() => onNavigate('keepalive')}
         >
           <div className="stat-main">
-            <span className="label">
+            <span className="label violet">
               <HeartPulse size={11} /> 单机保活
             </span>
             <span className="value">{overview.keepalives.length}</span>
@@ -153,7 +162,7 @@ export default function DashboardView({
                   100
                 : 0
             }
-            tone="accent"
+            tone="violet"
           />
         </button>
         <button
@@ -167,40 +176,37 @@ export default function DashboardView({
               <Repeat size={11} /> 联合换班
             </span>
             <span className="value">{overview.groups.length}</span>
-            <span className="sub">
-              {overview.groups.filter((group) => group.enabled).length} 个启用
-            </span>
+            <span className="sub">{activeShifts} 组启用</span>
           </div>
           <Ring
             percent={
-              overview.groups.length
-                ? (overview.groups.filter((group) => group.enabled).length / overview.groups.length) *
-                  100
-                : 0
+              overview.groups.length ? (activeShifts / overview.groups.length) * 100 : 0
+            }
+            tone="accent"
+          />
+        </button>
+        {/* 第 4 张：流量均衡。和前三张一样是「一个模块一张卡」的入口，
+            和联合换班卡保持同一套文案（N 组启用），不要一张说当班、一张说个数。 */}
+        <button
+          type="button"
+          className="stat stat-link"
+          title="查看流量均衡"
+          onClick={() => onNavigate('balance')}
+        >
+          <div className="stat-main">
+            <span className="label blue">
+              <Scale size={11} /> 流量均衡
+            </span>
+            <span className="value">{balanceGroups.length}</span>
+            <span className="sub">{activeBalances.length} 组启用</span>
+          </div>
+          <Ring
+            percent={
+              balanceGroups.length ? (activeBalances.length / balanceGroups.length) * 100 : 0
             }
             tone="blue"
           />
         </button>
-        <div className="stat">
-          <div className="stat-main">
-            <span className="label">
-              <Gauge size={11} /> 月累计流量
-            </span>
-            <span className="value">
-              {totalTraffic.toFixed(1)}
-              <em>GB</em>
-            </span>
-            <span className="sub">{alarms > 0 ? `${alarms} 台超阈值` : '全部低于阈值'}</span>
-          </div>
-          <Ring
-            percent={trafficPercent}
-            tone={alarms > 0 ? 'red' : 'accent'}
-            size={46}
-            title={`已用 ${totalTraffic.toFixed(1)} GB / 总配额 ${totalQuota} GB`}
-          >
-            {`${Math.round(trafficPercent)}%`}
-          </Ring>
-        </div>
       </div>
 
       {/* 实例状态：一台实例一行（列表形态），横向把 状态/名称/地域/IP/归属/费用/流量
@@ -209,7 +215,7 @@ export default function DashboardView({
       <div className="section">
         <div className="section-head">
           <h2>实例状态</h2>
-          <span className="section-desc">全部实例的在线状态、流量与归属</span>
+          <span className="section-desc">全部实例的在线状态、归属、费用与流量</span>
           <div className="section-actions">
             <Badge tone={alarms > 0 ? 'amber' : 'gray'}>
               {overview.servers.length} 台 · {running} 台运行中
@@ -252,8 +258,12 @@ export default function DashboardView({
                 {overview.servers.map((server) => {
                   const running = server.instance_status === 'Running'
                   const owner = server.managed ?? null
-                  // 换班组里此刻当班的那台，保留一个「当班」标记 —— 这是老卡片里唯一有信息量的部分
+                  // 换班组 / 均衡组里此刻当班的那台，保留一个「当班」标记。
+                  // 两者用不同颜色：换班是绿的，均衡是蓝的，扫一眼就知道归哪套逻辑管
                   const dutyOf = overview.groups.find(
+                    (group) => group.duty_server_id === server.id,
+                  )
+                  const dutyBalance = (overview.balances ?? []).find(
                     (group) => group.duty_server_id === server.id,
                   )
                   return (
@@ -300,6 +310,7 @@ export default function DashboardView({
                             {owner && !owner.active && <i> · 已暂停</i>}
                           </span>
                           {dutyOf && <span className="duty-tag">当班</span>}
+                          {dutyBalance && <span className="duty-tag duty-tag-balance">当班</span>}
                         </div>
                       </td>
                       <td data-label="费用">
