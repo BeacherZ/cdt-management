@@ -930,5 +930,50 @@ class BootstrapAudit(_Base):
         self.assertTrue(any("均衡C" in t and "已按设置开机" in t for t in texts), joined)
 
 
+class EvalAudit(_Base):
+    def test_eval_stops_idle_member_set_to_stop(self) -> None:
+        """评估点按「下班后」设置摆正：设停机的待机成员停掉，keep 的不拉起。"""
+        self._traffic(self.a, 20.0)  # A 最少 → 当班，且不会触发切换
+        self._traffic(self.b, 50.0)
+        self._traffic(self.c, 80.0)
+        repo.upsert_balance_group(
+            {
+                "id": self.group_id,
+                "name": "均衡组",
+                "enabled": True,
+                "failover_enabled": True,
+                "interval_minutes": 60,
+                "diff_gb": 10,
+                "min_duty_minutes": 30,
+                "members": [
+                    {"server_id": self.a, "off_action": "keep"},
+                    {"server_id": self.b, "off_action": "stop"},
+                    {"server_id": self.c, "off_action": "keep"},
+                ],
+            }
+        )
+        self._settle_on(self.a)
+        self._set_status(self.b, "Running")
+        self._set_status(self.c, "Stopped")
+        repo.upsert_balance_state(self.group_id, next_eval_at=0)
+
+        self._tick()
+
+        self.assertIn(self.b, self.stopped, "设停机的待机成员应在评估点被停掉")
+        self.assertEqual(self.started, [], "保持运行的成员停着，日常评估点不该主动拉起")
+        events = repo.list_events(limit=5, kind="balance_off")
+        self.assertEqual(len(events), 1)
+        self.assertIn("待机成员按设置停机", str(events[0]["title"]))
+
+    def test_eval_writes_nothing_when_states_match(self) -> None:
+        """状态本来就对：评估点不产生任何停机事件（避免每小时刷一条）。"""
+        self._settle_on(self.a)
+        self._set_status(self.b, "Stopped")
+        self._set_status(self.c, "Stopped")
+        repo.upsert_balance_state(self.group_id, next_eval_at=0)
+        self._tick()
+        self.assertEqual(repo.list_events(limit=5, kind="balance_off"), [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

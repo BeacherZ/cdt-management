@@ -414,10 +414,17 @@ def _reconcile(
         for row in rows:
             if int(row["id"]) != int(duty["id"]):
                 shift._refresh(row, with_traffic=not fast)
-        # 休息中的成员到阈值照样停机：它们不接域名，但流量是实打实在烧
+        # 休息中的成员：到阈值照样停机（它们不接域名，但流量实打实在烧）；
+        # 设了「下班后停机」的也一并停掉 —— 这一轮本来就逐台读过状态和流量，
+        # 不额外增加 API 调用。设了「保持运行」的不主动拉起：用户手动关掉的
+        # 机器不该在每个评估点被反复开机。状态本来就对时不写任何事件。
         for row in rows:
-            if int(row["id"]) != int(duty["id"]) and over_limit(row) and _is_running(row):
+            if int(row["id"]) == int(duty["id"]) or not _is_running(row):
+                continue
+            if over_limit(row):
                 _stop_member(group, row, config)
+            elif str(row.get("off_action") or "keep") == "stop":
+                _stop_member(group, row, config, reason="off")
         pick = _least(rows, exclude={int(duty["id"])})
         if pick is None:
             status = _candidate_status(rows, {int(duty["id"])})
@@ -870,21 +877,47 @@ def _stop_duty(
     return {"group": group_id, "state": "exhausted"}
 
 
-def _stop_member(group: dict[str, Any], row: dict[str, Any], config: dict[str, str]) -> None:
-    """休息中的成员也到阈值了：它不接域名，但流量是实打实在烧，照样停。
+def _stop_member(
+    group: dict[str, Any],
+    row: dict[str, Any],
+    config: dict[str, str],
+    *,
+    reason: str = "limit",
+) -> None:
+    """休息中的成员停机。reason=limit 是流量到阈值，off 是「下班后」设了停机。
 
     只在评估点做（那一轮本来就会读全员流量），不额外增加 API 调用。
+    off 不是异常：不发超限通知、事件级别用 info；两种都只在**真的下发停机**
+    时写一条事件，状态本来就对时不产生任何记录。
     """
     group_id = int(group["id"])
     mode = ""
     try:
         mode = shift.stop_server_by_pref(dict(row))
     except Exception as exc:  # noqa: BLE001
-        log.warning("流量均衡停超限成员失败 group=%s server=%s: %s", group_id, row.get("id"), exc)
+        log.warning(
+            "流量均衡停机失败 group=%s server=%s reason=%s: %s",
+            group_id, row.get("id"), reason, exc,
+        )
         return
-    stopped = dict(row)
-    stopped["instance_status"] = "Stopped"
-    stopped["stopped_mode"] = mode or stopped.get("stopped_mode") or ""
+    if reason == "off":
+        label = str(row.get("label") or f"#{row['id']}")
+        event_id = repo.add_event(
+            "balance_off",
+            messages.ev(
+                "待机成员按设置停机",
+                messages.obj_balance(str(group.get("name") or "")),
+            ),
+            f"等待停机到位 / {label}：下班后设为停机",
+            group_id=group_id,
+            server_id=int(row["id"]),
+            status="running",
+            pending_status="Stopped",
+            # 与超限停机共用收尾口径：摘掉「等待停机到位」前缀、补真实停机模式
+            pending_kind="limit_stop",
+        )
+        repo.add_event_progress(event_id, f"{label}：已下发{messages.stop_phrase(mode)}")
+        return
     event_id = repo.add_event(
         "balance_limit",
         messages.ev(
