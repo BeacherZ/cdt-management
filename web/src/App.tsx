@@ -462,9 +462,18 @@ export default function App() {
   async function switchBalance(group: BalanceGroup) {
     setBusyBalance(group.id)
     try {
-      await post(`/api/v1/balances/${group.id}/switch`, undefined, SLOW_TIMEOUT_MS)
+      const res = await post<{ result?: { state?: string; note?: string } }>(
+        `/api/v1/balances/${group.id}/switch`,
+        undefined,
+        SLOW_TIMEOUT_MS,
+      )
       await loadAll()
-      toast('正在交给流量最少的成员，完成后会推送通知', 'success')
+      // 当班自己就是全组最少时后端什么都不做，别提示「正在交给…」让人以为切了
+      if (res?.result?.state === 'best') {
+        toast(res.result.note || '当班已是用量最少的成员，无需切换', 'info')
+      } else {
+        toast('正在交给流量最少的成员，完成后会推送通知', 'success')
+      }
     } catch (error) {
       toast(error instanceof Error ? error.message : '均衡失败', 'error')
     } finally {

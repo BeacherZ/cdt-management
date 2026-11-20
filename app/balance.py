@@ -1028,6 +1028,9 @@ def manual_switch(
 ) -> dict[str, Any]:
     """用户点「立即均衡」：不管差值、不管冷却，直接交给用得最少的那台。
 
+    前提是「确实有更少的成员」：当班自己就是全组最少时什么也不做，返回
+    state="best"，否则 2 台组会为了「点了要有反应」把域名切给更满的那台。
+
     reason 只区分「谁触发的」：用户点按钮是 manual，建组后的首次指派是 first。
     两者走同一条流程，但事件标题和通知文案要分开 —— 刚保存完组就收到
     「手动均衡完成」会让人以为自己点错了什么。
@@ -1055,9 +1058,18 @@ def manual_switch(
         if len(rows) < 2:
             raise ValueError("均衡组至少要有 2 台可用实例")
         duty_id = int(state.get("duty_server_id") or 0)
-        pick = _least(rows, exclude={duty_id})
+        # 全组一起比，不把当班排除在外：以前只在「非当班」里挑最少，2 台组就只剩
+        # 唯一一台，哪怕它比当班更满也会被切过去 —— 手动均衡反而把流量搬到了更满
+        # 的机器上。当班自己就是全组最少时不做无意义的切换，直接把结论告诉用户。
+        pick = _least(rows)
         if pick is None:
             raise ValueError("没有可接班的成员（全部到阈值或流量未读到）")
+        if duty_id and int(pick["id"]) == duty_id:
+            return {
+                "group": group_id,
+                "state": "best",
+                "note": "当班已是用量最少的成员，无需切换",
+            }
         # 冷却时间置零，让 _begin 立刻生效
         repo.upsert_balance_state(group_id, last_switch_at=0)
         state = repo.get_balance_state(group_id) or {}

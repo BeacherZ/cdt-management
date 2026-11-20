@@ -880,6 +880,15 @@ class Manual(_Base):
         result = balance.manual_switch(self.group_id, CONFIG)
         self.assertEqual(result.get("duty"), self.b)
 
+    def test_manual_switch_keeps_duty_when_it_is_least(self) -> None:
+        """当班自己就是全组最少：手动均衡不该为了「有反应」切给更满的那台。"""
+        self._settle_on(self.a)
+        self._traffic(self.a, 40.0)
+        self._traffic(self.b, 80.0)
+        result = balance.manual_switch(self.group_id, CONFIG)
+        self.assertEqual(result.get("state"), "best")
+        self.assertEqual(self._duty(), self.a)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
