@@ -400,12 +400,16 @@ a:hover {
 /* 深色主题下 --accent-grad 换成亮绿（见 :root[data-theme='dark']），白字压上去
    只有 1.9:1，远低于 4.5:1 ——「添加实例 / 保存 / 立即换班」在这种底色上几乎是虚的。
    只换文字颜色，渐变、内高光、hover 扫光都不动。登录页 .auth 特意把渐变调回深绿，
-   那里继续保持白字。 */
-:root[data-theme='dark'] .btn.primary {
+   那里继续保持白字。
+
+   必须带 :not(:disabled)：这两条带了 :root[data-theme] 前缀，优先级比
+   .btn.primary:disabled 高一级，不加就会把禁用态的中性灰字盖回深绿 —— 深绿压
+   --fill-subtle 只有 1.1:1，卡片里的「开机」就是这么看不见的。 */
+:root[data-theme='dark'] .btn.primary:not(:disabled) {
   color: #04241b;
 }
 
-:root[data-theme='dark'] .auth .btn.primary {
+:root[data-theme='dark'] .auth .btn.primary:not(:disabled) {
   color: #fff;
 }
 
