@@ -351,12 +351,19 @@ class BalanceReports(unittest.TestCase):
         self.assertIn("⚪ <b>待机账号 </b>", message.html)
         self.assertNotIn("上一台", message.html)
 
-    def test_keep_running_standby_keeps_green(self):
-        """待机成员设了「下班后保持运行」：那块照样 🟢 + Running，不刷成停机。"""
+    def test_keep_running_standby_uses_blue_ball(self):
+        """待机成员设了「下班后保持运行」：状态照实写 Running，但用蓝球不用绿球。
+
+        绿色只留给当班那台 —— 报告里只有一个绿球，谁在服务不用读标签就看得出来。
+        """
         alive = {**self.REST, "instance_status": "Running", "stopped_mode": ""}
         html = messages.balance_switch(self.DUTY, [self.DUTY, alive], "✅ 已同步").html
-        self.assertIn("🟢 <b>待机账号 </b>", html)
-        self.assertIn("┃ 🟢 状态：Running", html)
+        self.assertIn("🔵 <b>待机账号 </b>", html)
+        self.assertIn("┃ 🔵 状态：Running", html)
+        # 绿球仍在，但只属于当班那台
+        self.assertEqual(html.count("🟢 <b>"), 1)
+        self.assertIn("🟢 <b>当班账号 </b>", html)
+        self.assertNotIn("🟢 <b>待机账号 </b>", html)
 
     def test_switch_block_heads_match_shift_done(self):
         """块标题换成了角色（当班/待机），字段顺序仍与换班完成报告一致。"""

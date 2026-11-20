@@ -171,8 +171,21 @@ def _state_icon(server: dict[str, Any]) -> str:
 
     换班异常报告里当班「应当运行」却超时未就绪，停机的那台该 ⚪；
     应当停止的那台若还赖在 Running，该 🟢。写死 🚧 会让图标和状态文字打架。
+
+    均衡组里非当班的成员走 `standby_icon`：它们即便在跑也不该和当班同色。
     """
     return "🟢" if str(server.get("instance_status") or "") == "Running" else "⚪"
+
+
+def standby_icon(server: dict[str, Any]) -> str:
+    """非当班成员的状态图标：真在跑用蓝球 🔵，其余同 `_state_icon`（⚪）。
+
+    绿色只留给当班那台（此刻在服务的实例）。待机成员即便设了「下班后保持运行」
+    确实开着，也不该和当班共用一个绿球：扫一眼报告时绿球应当只有一个，
+    「谁在承载流量」不用读标签就能看出来。状态文字仍是真实的 Running，
+    蓝球表达的是「在跑，但不在这班」，不是另一种状态。
+    """
+    return "🔵" if str(server.get("instance_status") or "") == "Running" else "⚪"
 
 
 def _used(server: dict[str, Any]) -> float:
@@ -557,9 +570,10 @@ def balance_switch(
             continue
         seen.add(member_id)
         row = prev if prev_id and member_id == prev_id else member
-        # 均衡组的非当班成员可以设「下班后保持运行」，真在跑就写 🟢 Running；
-        # 写成「停止账号 ⚪ 状态：Running」既自相矛盾，也让人以为系统没按设置执行。
-        parts.append(stopped_block("待机账号", row, _status(row), icon=_state_icon(row)))
+        # 均衡组的非当班成员可以设「下班后保持运行」，真在跑就写 🔵 Running：
+        # 绿球只留给当班那台。写成「待机账号 ⚪ 状态：Running」既自相矛盾，
+        # 也和当班撞色，一眼看不出谁在承载流量。
+        parts.append(stopped_block("待机账号", row, _status(row), icon=standby_icon(row)))
     if manual:
         cause = "手动触发，已切到当前累计流量最少的成员"
     elif reason in ("first", "new"):
@@ -599,13 +613,16 @@ def balance_failover(
         if server_id in seen:
             continue
         seen.add(server_id)
-        parts.append(stopped_block(taken_label, server, _status(server), icon=_state_icon(server)))
+        # 超限 / 离线那台也不算当班：还赖在 Running 时用蓝球，别和当班撞色。
+        parts.append(
+            stopped_block(taken_label, server, _status(server), icon=standby_icon(server))
+        )
     for member in members:
         member_id = _member_id(member)
         if member_id in seen:
             continue
         seen.add(member_id)
-        parts.append(stopped_block("待机账号", member, _status(member), icon=_state_icon(member)))
+        parts.append(stopped_block("待机账号", member, _status(member), icon=standby_icon(member)))
     return _titled(
         "balance_failover",
         "⚠️",

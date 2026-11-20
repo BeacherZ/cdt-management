@@ -701,7 +701,7 @@ def _advance(
         )
         # 只清 phase，保留 duty_server_id：_begin 会把它写进 prev_duty_id，
         # 结算通知里「超限/离线账号」才指得准。以前这里连 duty 一起清零，
-        # 换人结算后 prev 变成 0，故障转移通知只剩「接替账号」一段。
+        # 换人结算后 prev 变成 0，故障转移通知只剩「当班账号」一段。
         _clear_wait(group_id, target_id)
         repo.upsert_balance_state(group_id, phase="idle")
         fresh = repo.get_balance_state(group_id) or {}
