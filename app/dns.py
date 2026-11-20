@@ -639,12 +639,14 @@ def bind(record: str, kind: str, target_id: int, config: dict[str, str] | None =
         repo.set_dns_state(record, "", "")
         return {"record": record, "target": None}
 
-    if kind not in (TARGET_SERVER, TARGET_GROUP):
-        raise ValueError("只能绑定到服务器或换班组")
+    if kind not in (TARGET_SERVER, TARGET_GROUP, TARGET_BALANCE):
+        raise ValueError("只能绑定到服务器、换班组或均衡组")
     if kind == TARGET_SERVER and repo.get_server(int(target_id)) is None:
         raise ValueError("服务器不存在")
     if kind == TARGET_GROUP and repo.get_group(int(target_id)) is None:
         raise ValueError("换班组不存在")
+    if kind == TARGET_BALANCE and repo.get_balance_group(int(target_id)) is None:
+        raise ValueError("均衡组不存在")
 
     # 一条记录只属于一个目标；但一个目标可以挂多条记录 —— 换机器只是把这一条挪走，
     # 目标身上其它域名原样留着（以前这里会把同目标的另一条松掉）。

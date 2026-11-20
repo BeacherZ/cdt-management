@@ -83,6 +83,9 @@ class Base(unittest.TestCase):
             "keepalives",
             "shift_groups",
             "shift_members",
+            "balance_groups",
+            "balance_members",
+            "balance_state",
             "events",
             # 失败冷却标记存在 flags 里，跨用例不清会把后面的同步一起冻住
             "flags",
@@ -123,6 +126,24 @@ class Base(unittest.TestCase):
                 ],
             }
         )
+
+    def add_balance_group(self, name: str, server_ids: list[int], duty: int) -> int:
+        group_id = repo.upsert_balance_group(
+            {
+                "name": name,
+                "enabled": True,
+                "failover_enabled": True,
+                "interval_minutes": 60,
+                "diff_gb": 10,
+                "min_duty_minutes": 30,
+                "members": [
+                    {"server_id": sid, "off_action": "keep", "enabled": True}
+                    for sid in server_ids
+                ],
+            }
+        )
+        repo.upsert_balance_state(group_id, duty_server_id=duty, phase="idle")
+        return group_id
 
     def config(self) -> dict[str, str]:
         return repo.get_settings()
@@ -307,6 +328,21 @@ class Binding(Base):
         self.assertEqual(row["target"]["kind"], "group")
         self.assertTrue(row["target"]["running"])
         self.assertEqual(row["desired_ip"], "47.243.10.21")
+
+    def test_balance_group_binding_follows_duty(self):
+        """DNS 页也能直接绑均衡组：域名跟着当班机走，和换班组同一套规则。"""
+        a = self.add_server("香港-A", ip="47.243.10.31")
+        b = self.add_server("香港-B", status="Stopped", ip="47.243.10.32")
+        group_id = self.add_balance_group("均衡组", [a, b], a)
+        dns.bind("a.example.com", dns.TARGET_BALANCE, group_id)
+        row = repo.get_dns_record("a.example.com")
+        self.assertEqual(row["target_kind"], "balance")
+        snapshot = dns.snapshot(self.config())
+        item = next(entry for entry in snapshot["records"] if entry["record"] == "a.example.com")
+        self.assertEqual(item["target"]["kind"], "balance")
+        self.assertTrue(item["target"]["running"])
+        self.assertEqual(item["target"]["duty"], "香港-A")
+        self.assertEqual(item["desired_ip"], "47.243.10.31")
 
     def test_deleting_group_releases_binding(self):
         a = self.add_server("香港-A")
