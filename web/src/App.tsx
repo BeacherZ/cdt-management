@@ -266,6 +266,12 @@ export default function App() {
     if (view !== 'settings') setSettingsDirty(false)
   }, [view])
 
+  // 切页回到顶部。单页应用换视图不换文档，浏览器不会自己重置滚动位置：
+  // 在运行概览滚到底、点侧栏切走，新页会直接停在中段，还得手动滚回去。
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
+  }, [view])
+
   useEffect(() => {
     void (async () => {
       try {
@@ -667,7 +673,11 @@ export default function App() {
 
   /** 站内跳转统一入口：离开设置页时才有拦截，进设置页不拦 */
   function goTo(next: View) {
-    if (next === view) return
+    if (next === view) {
+      // 已经在这一页：再点一次当「回到顶部」，长页面滑到底不用手动滚回去
+      window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
+      return
+    }
     if (next === 'settings') {
       setView(next)
       return
@@ -895,7 +905,7 @@ export default function App() {
             onAddRecord={addDnsRecord}
             onRemoveRecord={removeDnsRecord}
             onReorder={reorderDns}
-            onOpenSettings={() => setView('settings')}
+            onOpenSettings={() => goTo('settings')}
           />
         )}
 
