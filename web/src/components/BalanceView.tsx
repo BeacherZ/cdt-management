@@ -43,6 +43,9 @@ function phaseBadge(group: BalanceGroup): { text: string; tone: 'blue' | 'green'
   if (!group.enabled) return { text: '已停用', tone: 'gray', pulse: false }
   if (group.phase === 'starting' || group.phase === 'switching')
     return { text: '均衡中', tone: 'blue', pulse: true }
+  if (group.phase === 'settling')
+    // 域名已经切完，正在等成员停机到位：这段时间不发报告，界面上说清楚在等什么
+    return { text: '等待到位', tone: 'blue', pulse: true }
   if (group.phase === 'exhausted')
     // 熔断有两种来路：全员到阈值（停了整组），或关着故障转移时只停了当班。
     // 一律写「全员到阈值」会和下面那行原因自相矛盾，按开关分开说。

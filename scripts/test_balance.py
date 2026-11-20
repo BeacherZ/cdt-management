@@ -1102,5 +1102,65 @@ class SwitchStopsOthers(_Base):
         self.assertTrue(any("均衡A" in t and "已到位" in t for t in texts), joined)
 
 
+class SettleFastChannel(_Base):
+    """等成员到位这一段必须走 10 秒加速通道，不能等下一轮日常巡检。
+
+    以前结算时把 phase 拨回 idle，加速通道只认 starting / switching，
+    于是「等待 N 台到位」要等满一个巡检间隔（默认 60 秒）才收尾发报告。
+    """
+
+    def _to_settling(self) -> None:
+        repo.upsert_balance_group(
+            {
+                "id": self.group_id,
+                "name": "均衡组",
+                "enabled": True,
+                "failover_enabled": True,
+                "interval_minutes": 1440,
+                "diff_gb": 10,
+                "min_duty_minutes": 30,
+                "members": [
+                    {"server_id": self.a, "off_action": "stop"},
+                    {"server_id": self.b, "off_action": "stop"},
+                    {"server_id": self.c, "off_action": "stop"},
+                ],
+            }
+        )
+        self._settle_on(self.a)
+        self._traffic(self.a, 120.0)
+        repo.upsert_balance_state(self.group_id, next_eval_at=0)
+        self._tick()
+
+    def test_settling_is_picked_by_fast_channel(self) -> None:
+        self._to_settling()
+
+        state = self._state()
+        self.assertEqual(state.get("phase"), "settling", "还在等成员到位，阶段不能拨回 idle")
+        self.assertIn(self.group_id, repo.balance_awaiting_ids(), "加速通道必须能捞到这一组")
+
+        pending = repo.list_events(limit=5, kind="balance_switch")[0]
+        self.assertEqual(str(pending["status"]), "running", "成员没到位前不发报告")
+
+        # 只走加速通道：不调 reconcile_all，事件也要能收尾
+        balance.reconcile_awaiting(CONFIG, time.time() + 10)
+
+        event = repo.list_events(limit=5, kind="balance_done")[0]
+        self.assertEqual(int(event["id"]), int(pending["id"]), "同一个事件收尾，不另开一条")
+        self.assertEqual(str(event["status"]), "done")
+        texts = [str(step.get("text") or "") for step in repo.get_event(int(event["id"]))["progress"]]
+        joined = " / ".join(texts)
+        self.assertTrue(any("均衡A" in t and "已到位" in t for t in texts), joined)
+        self.assertTrue(any("均衡C" in t and "已到位" in t for t in texts), joined)
+        self.assertEqual(self._state().get("phase"), "idle", "收尾后要回 idle，别再占加速通道")
+        self.assertEqual(repo.balance_awaiting_ids(), [], "收尾后不该再被捞出来")
+
+    def test_settling_without_items_does_not_stick(self) -> None:
+        """阶段挂着 settling 但等待清单空了：不能让这组一直占着加速通道。"""
+        repo.upsert_balance_state(self.group_id, phase="settling", settle="", duty_server_id=self.a)
+        self._tick()
+        self.assertEqual(self._state().get("phase"), "idle")
+        self.assertEqual(repo.balance_awaiting_ids(), [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

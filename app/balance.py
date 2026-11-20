@@ -42,9 +42,14 @@ EXHAUSTED_RECHECK = 3600
 # 同一组的异常提醒最小间隔，避免每轮对账都推一条
 ERROR_NOTIFY_INTERVAL = 3600
 
-# 切换进行中的两种阶段。加速通道只认这两个 —— 其余阶段没有指令在飞，
-# 10 秒一读纯属白烧阿里云接口。
-AWAITING_PHASES = ("starting", "switching")
+# 有指令在飞的三个阶段，加速通道（10 秒一轮）只推进这三种：
+#   starting  —— 接替的那台正在开机
+#   switching —— 域名已切、正在确认接替那台真的在跑
+#   settling  —— 域名已切、正在等成员停机到位（报告还没发）
+# 其余阶段没有指令在飞，10 秒一读纯属白烧阿里云接口。
+# settling 必须算进来：漏了它，这边写着「等待 2 台到位」，实际却要等下一轮
+# 日常巡检（默认 60 秒、最长可到几十分钟）才去读状态，和换班的加速对不上。
+AWAITING_PHASES = ("starting", "switching", "settling")
 
 # 还没结算的均衡事件 kind。结算时会被改写成 balance_done / balance_failover 等结论，
 # 所以这里只列「开着的」三种。DNS 巡检靠这份清单判断「此刻别动解析」：
@@ -282,7 +287,7 @@ def reconcile_all(config: dict[str, str] | None = None, now: float | None = None
 
 
 def reconcile_awaiting(config: dict[str, str] | None = None, now: float | None = None) -> list[dict[str, Any]]:
-    """加速通道：只推进「开机 / 切换进行中」的那几组，每 10 秒一次。
+    """加速通道：只推进「开机 / 切换 / 等成员到位」的那几组，每 10 秒一次。
 
     和换班的那条通道同构：走的是同一段 _reconcile，判断逻辑一行没改，
     只是把这组的闹钟从「巡检间隔」换成 10 秒，并且只读状态、不查流量。
@@ -290,6 +295,7 @@ def reconcile_awaiting(config: dict[str, str] | None = None, now: float | None =
 
     没有这个通道时，均衡下发开机后要等下一轮巡检（默认 60 秒、最长可到几十分钟）
     才结算，用户看到的是「域名半天不切」。成员数越多、开机越慢，这段空窗越明显。
+    关掉成员的停机指令同理：等它落地这件事也不该拖到下一个整点。
     """
     config = config or repo.get_settings()
     now = float(now if now is not None else time.time())
@@ -382,6 +388,11 @@ def _reconcile(
     # 本轮不做新的评估 —— 报告都还没发出去，接着动下一轮只会更乱。
     if _load_settle(state):
         return _advance_settle(group, rows, config, now, state)
+    if phase == "settling":
+        # 阶段还挂着 settling 但等待清单空了（事件被删 / 老库升上来没这列）：
+        # 没有可等的对象，直接回到空闲，别让它一直占着加速通道
+        state = repo.upsert_balance_state(group_id, phase="idle", settle="")
+        phase = "idle"
     if phase in AWAITING_PHASES:
         return _advance(group, state, rows, config, now, fast)
     if phase == "exhausted":
@@ -770,7 +781,9 @@ def _settle(
     }
     repo.upsert_balance_state(
         group_id,
-        phase="idle",
+        # 还有成员没到位就停在 settling：加速通道只认 AWAITING_PHASES，
+        # 这里写回 idle 的话，事件就只能等下一轮日常巡检（默认 60 秒）才推进。
+        phase="settling" if items else "idle",
         stage="",
         attempts=0,
         prev_duty_id=0,
@@ -863,6 +876,9 @@ def _finish_switch(
         detail = f"{detail}（部分成员未确认到位）"
     repo.update_event(event_id, title=title, detail=detail, kind=kind)
     repo.finish_event(event_id, "error" if timeout else "done", detail)
+    # 收尾了才回到空闲：settling 期间这条组还挂在加速通道上，每 10 秒读一次
+    # 待到位的那几台；不收干净的话，加速通道会一直把它捞出来空转。
+    repo.upsert_balance_state(group_id, phase="idle", settle="")
 
     # 故障转移沿用换班的开关口径（notify_on_failover），正常轮换用流量均衡自己的开关。
     # 两条都默认开，用户关掉某一个时语义清楚：关「流量均衡完成」不该把故障转移也静音。
@@ -1416,7 +1432,7 @@ def manual_switch(
     now = time.time()
     with _lock:
         state = repo.get_balance_state(group_id) or {}
-        if str(state.get("phase") or "") in ("starting", "switching"):
+        if str(state.get("phase") or "") in ("starting", "switching", "settling"):
             raise ValueError("正在均衡中，请稍后再试")
         if _load_settle(state):
             # 上一轮的停机还没落地，这时候再切会把「刚停的」又拉起来

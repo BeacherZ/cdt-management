@@ -1191,13 +1191,18 @@ def get_balance_state(group_id: int) -> dict[str, Any] | None:
 
 
 def balance_awaiting_ids() -> list[int]:
-    """正处于「开机 / 切换进行中」的均衡组。
+    """正处于「开机 / 切换 / 等成员到位」的均衡组。
 
     加速通道每 10 秒问一次，只靠这条查询判断要不要动 —— 不把整张组表连成员
     一起读出来，空闲时开销就是一个主键索引上的小查询。
+
+    settling 也要算：域名已经切完、正在等成员停机到位，报告还没发。漏了它，
+    「等待 N 台到位」就只能等下一轮日常巡检（默认 60 秒）才推进。
+    清单要和 balance.AWAITING_PHASES 保持一致（那边反过来不能 import 本模块）。
     """
     rows = db.query(
-        "SELECT group_id FROM balance_state WHERE phase IN ('starting','switching')"
+        "SELECT group_id FROM balance_state "
+        "WHERE phase IN ('starting','switching','settling')"
     )
     return [int(row["group_id"]) for row in rows]
 

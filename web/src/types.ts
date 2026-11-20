@@ -194,7 +194,7 @@ export type BalanceGroup = {
   ddns_record: string
   members: BalanceMember[]
   duty_server_id: number
-  phase: 'idle' | 'starting' | 'switching' | 'exhausted' | 'error'
+  phase: 'idle' | 'starting' | 'switching' | 'settling' | 'exhausted' | 'error'
   note: string
   last_switch_at: number
   next_eval_at: number
