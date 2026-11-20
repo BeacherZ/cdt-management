@@ -216,6 +216,9 @@ CREATE TABLE IF NOT EXISTS balance_state (
     -- 当班连续开机尝试次数，判「被抢占起不来」用
     attempts       INTEGER NOT NULL DEFAULT 0,
     note           TEXT    NOT NULL DEFAULT '',
+    -- 已结算但成员状态还没到位：JSON，记在等哪几台、事件 id、截止时间。
+    -- 空串表示没有在等 —— 收尾（结束事件 + 发报告）在这一步之后才做。
+    settle         TEXT    NOT NULL DEFAULT '',
     updated_at     INTEGER NOT NULL DEFAULT 0
 );
 
@@ -374,6 +377,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
             "start_time": "TEXT NOT NULL DEFAULT ''",
             "end_time": "TEXT NOT NULL DEFAULT ''",
             "days": "INTEGER NOT NULL DEFAULT 0",
+        },
+        "balance_state": {
+            "settle": "TEXT NOT NULL DEFAULT ''",
         },
         "shift_groups": {
             "cycle": "TEXT NOT NULL DEFAULT 'day'",

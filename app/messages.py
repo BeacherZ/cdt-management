@@ -384,40 +384,52 @@ def _region(server: dict[str, Any]) -> str:
     return REGION_LABELS.get(raw, raw)
 
 
-def running_block(heading: str, server: dict[str, Any], ddns_status: str) -> str:
+def running_block(
+    heading: str,
+    server: dict[str, Any],
+    ddns_status: str,
+    status_text: str = "Running",
+    icon: str = "🟢",
+) -> str:
     """线上运行的那台。脚本里叫「运行账号 / 接替账号」。
 
     与 v1.6.8 逐字一致，只在「状态」行上面多一行流量（`📈 流量：x GB / yGB`）。
+    status_text / icon 只给均衡报告用：它还要求状态是回读的真值，不能写死 Running。
     """
     return "\n".join(
         [
-            f"🟢 <b>{heading} </b>",
+            f"{icon} <b>{heading} </b>",
             f"┃ 🏷 别名：{_label(server)}",
             f"┃ 📦 实例：<code>{_instance(server)}</code>",
             f"┃ 🌐 ＩＰ：{_ip(server)}",
             f"┃ 📍 地域：{_region(server)}",
             f"┃ ☁️ DDNS：{ddns_status}",
             traffic_line(server),
-            "┃ 🟢 状态：Running",
+            f"┃ {icon} 状态：{status_text}",
         ]
     )
 
 
-def stopped_block(heading: str, server: dict[str, Any], status_text: str) -> str:
+def stopped_block(
+    heading: str, server: dict[str, Any], status_text: str, icon: str = "⚪"
+) -> str:
     """停机的那台。脚本里「停止账号 / 超限账号 / 离线账号」都用这一块。
 
     同样是 v1.6.8 原样，只把原来超限账号才有的 `┃ 📈 已用：x GB` 换成
     所有块统一的一行 `📈 流量：x GB / yGB`（位置不变：状态行上面）。
+
+    icon 让均衡组的「待机账号」能跟着真实状态走：设了「下班后保持运行」的成员
+    确实在跑，那块就该是 🟢 + Running，不能因为排在待机里就刷成 ⚪。
     """
     return "\n".join(
         [
-            f"⚪ <b>{heading} </b>",
+            f"{icon} <b>{heading} </b>",
             f"┃ 🏷 别名：{_label(server)}",
             f"┃ 📦 实例：<code>{_instance(server)}</code>",
             f"┃ 🌐 ＩＰ：{_ip(server)}",
             f"┃ 📍 地域：{_region(server)}",
             traffic_line(server),
-            f"┃ ⚪ 状态：{status_text}",
+            f"┃ {icon} 状态：{status_text}",
         ]
     )
 
@@ -522,9 +534,12 @@ def balance_switch(
     """✅ 流量均衡完成：域名从用得多的那台换到用得最少的那台。
 
     **正文照换班完成报告写**（`shift_done`）：只有标题（均衡组）和概览那行不同，
-    下面同样是「运行账号」+ 其余每台一块「停止账号」。以前这里自造了「接替账号 /
+    下面同样是「当班账号」+ 其余每台一块「待机账号」。以前这里自造了「接替账号 /
     交班账号 / 待机账号」三套标签，同一件事在两份报告里叫法不一样，读通知的人得
     先在脑子里对一遍哪个对哪个；统一之后，只有概览那句在说「为什么切」。
+
+    台账用「当班 / 待机」而不是「运行 / 停止」：均衡组的待机成员可以设「下班后
+    保持运行」，真在跑的那台要是写成「停止账号」，标签和状态行当场打架。
 
     members 是组内全部成员（含当班那台），按服务器 id 去重。prev 是交班那台的
     停机后副本（可能已停机、也可能按「下班保持运行」还开着），用它替换 members
@@ -533,7 +548,7 @@ def balance_switch(
     reason 只影响概览那句原因：首次指派不是「用量领先」，把它写成领先会让人
     以为系统刚做了一次流量判断。
     """
-    parts = [running_block("运行账号", duty, ddns_status)]
+    parts = [running_block("当班账号", duty, ddns_status, _status(duty), _state_icon(duty))]
     seen = {_member_id(duty)}
     prev_id = _member_id(prev) if prev else 0
     for member in members:
@@ -542,9 +557,9 @@ def balance_switch(
             continue
         seen.add(member_id)
         row = prev if prev_id and member_id == prev_id else member
-        # 不写死 ⚪：均衡组可以有「下班保持运行」的成员，那台交班后还在跑，
-        # 固定灰点会和下面那行 `🟢 状态：Running` 自相矛盾，按真实状态取。
-        parts.append(stopped_block("停止账号", row, _status(row)))
+        # 均衡组的非当班成员可以设「下班后保持运行」，真在跑就写 🟢 Running；
+        # 写成「停止账号 ⚪ 状态：Running」既自相矛盾，也让人以为系统没按设置执行。
+        parts.append(stopped_block("待机账号", row, _status(row), icon=_state_icon(row)))
     if manual:
         cause = "手动触发，已切到当前累计流量最少的成员"
     elif reason in ("first", "new"):
@@ -569,28 +584,28 @@ def balance_failover(
 ) -> notify.Message:
     """⚠️ 故障转移（均衡组）：当班超限，或起不来，换成流量最少的成员。
 
-    **正文照故障转移报告写**（`shift_failover`）：接替账号 → 超限账号（起不来时写
-    离线账号）→ 其余每台「停止账号」，只有标题和概览那行不同。
+    **正文照故障转移报告写**（`shift_failover`）：当班账号 → 超限账号（起不来时写
+    离线账号）→ 其余每台「待机账号」，只有标题和概览那行不同。
     """
     stall = reason == "stall"
     # 起因措辞与换班的故障转移逐字对齐：同一类事故在两份报告里该说同一句话，
     # 只有「已交给谁」不同（均衡组没有时刻表，交的是用量最少的成员）。
     cause = "当班实例疑被抢占，多次拉起未成功" if stall else "当班实例流量超限"
     taken_label = "离线账号" if stall else "超限账号"
-    parts = [running_block("接替账号", duty, ddns_status)]
+    parts = [running_block("当班账号", duty, ddns_status, _status(duty), _state_icon(duty))]
     seen = {_member_id(duty)}
     for server in over:
         server_id = _member_id(server)
         if server_id in seen:
             continue
         seen.add(server_id)
-        parts.append(stopped_block(taken_label, server, _status(server)))
+        parts.append(stopped_block(taken_label, server, _status(server), icon=_state_icon(server)))
     for member in members:
         member_id = _member_id(member)
         if member_id in seen:
             continue
         seen.add(member_id)
-        parts.append(stopped_block("停止账号", member, _status(member)))
+        parts.append(stopped_block("待机账号", member, _status(member), icon=_state_icon(member)))
     return _titled(
         "balance_failover",
         "⚠️",

@@ -313,13 +313,15 @@ class BalanceReports(unittest.TestCase):
         )
         html = message.html
         self.assertEqual(message.title, "CDT 手动均衡完成报告（均衡组：新加坡）")
-        # 和换班完成报告同一套块标题：运行账号 1 块 + 停止账号 2 块
-        self.assertIn("🟢 <b>运行账号 </b>", html)
-        self.assertEqual(html.count("<b>运行账号 </b>"), 1)
-        self.assertEqual(html.count("<b>停止账号 </b>"), 2)
+        # 台账用角色不用状态：当班 1 块 + 待机 2 块
+        self.assertIn("🟢 <b>当班账号 </b>", html)
+        self.assertEqual(html.count("<b>当班账号 </b>"), 1)
+        self.assertEqual(html.count("<b>待机账号 </b>"), 2)
         self.assertNotIn("接替账号", html)
         self.assertNotIn("交班账号", html)
-        self.assertNotIn("待机账号", html)
+        # 均衡组的待机成员可以设「下班后保持运行」，所以不能再叫「运行/停止账号」
+        self.assertNotIn("<b>运行账号 </b>", html)
+        self.assertNotIn("<b>停止账号 </b>", html)
         # 每块都带流量行，且在三块里各出现一次
         self.assertEqual(html.count("┃ 📈 流量："), 3)
         self.assertIn("┃ 📈 流量：12.00 GB / 200GB", html)
@@ -332,18 +334,27 @@ class BalanceReports(unittest.TestCase):
             self.DUTY, [self.DUTY, self.PREV], "✅ 已同步", group_name="新加坡", prev=self.PREV
         )
         self.assertEqual(message.title, "CDT 均衡完成报告（均衡组：新加坡）")
-        self.assertIn("🟢 <b>运行账号 </b>", message.html)
-        self.assertIn("⚪ <b>停止账号 </b>", message.html)
+        self.assertIn("🟢 <b>当班账号 </b>", message.html)
+        self.assertIn("⚪ <b>待机账号 </b>", message.html)
         self.assertNotIn("上一台", message.html)
 
+    def test_keep_running_standby_keeps_green(self):
+        """待机成员设了「下班后保持运行」：那块照样 🟢 + Running，不刷成停机。"""
+        alive = {**self.REST, "instance_status": "Running", "stopped_mode": ""}
+        html = messages.balance_switch(self.DUTY, [self.DUTY, alive], "✅ 已同步").html
+        self.assertIn("🟢 <b>待机账号 </b>", html)
+        self.assertIn("┃ 🟢 状态：Running", html)
+
     def test_switch_block_heads_match_shift_done(self):
-        """换班完成报告有哪些块标题，均衡完成就有哪些（只允许标题和概览不同）。"""
+        """块标题换成了角色（当班/待机），字段顺序仍与换班完成报告一致。"""
         shift = messages.shift_done(A, [B], "AM", "✅ 已同步").html
         balance = messages.balance_switch(
             self.DUTY, [self.DUTY, self.PREV], "✅ 已同步", prev=self.PREV
         ).html
+        # 换班没有「保持运行」这个选项，仍是运行/停止；均衡按角色写
         for head in ("运行账号", "停止账号"):
             self.assertIn(f"<b>{head} </b>", shift)
+        for head in ("当班账号", "待机账号"):
             self.assertIn(f"<b>{head} </b>", balance)
         # 概览：换班写班次，均衡写为什么切
         self.assertIn("🕒 <b>当前班次</b>", shift)
@@ -375,10 +386,10 @@ class BalanceReports(unittest.TestCase):
         html = message.html
         self.assertEqual(message.title, "CDT 故障转移报告（均衡组：新加坡）")
         self.assertIn("⚪ <b>超限账号 </b>", html)
-        # 剩下的第三台也要出现，标成「停止账号」（与故障转移报告一致）
-        self.assertIn("⚪ <b>停止账号 </b>", html)
+        # 剩下的第三台也要出现，按角色标成「待机账号」
+        self.assertIn("⚪ <b>待机账号 </b>", html)
         self.assertIn("新加坡-均衡C", html)
-        self.assertNotIn("待机账号", html)
+        self.assertNotIn("<b>停止账号 </b>", html)
         self.assertEqual(html.count("┃ 📈 流量："), 3)
 
     def test_stall_says_offline(self):

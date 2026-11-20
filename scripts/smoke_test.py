@@ -147,6 +147,8 @@ check(
 )
 
 print("\n== 5. 创建换班组（3 台，8h/8h/8h）==")
+# 建组时挂域名要求该记录已在 DNS 页登记（后端会拦「还没登记」），先补上
+call("POST", "/api/v1/dns/records", {"record": "cdt.example.com"})
 status, body = call(
     "POST",
     "/api/v1/groups",

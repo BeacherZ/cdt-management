@@ -960,8 +960,21 @@ class BootstrapAudit(_Base):
         texts = [str(step.get("text") or "") for step in repo.get_event(int(event["id"]))["progress"]]
         joined = " / ".join(texts)
         self.assertIn("按组员设置核对状态", joined)
-        self.assertTrue(any("均衡B" in t and "已按设置停机" in t for t in texts), joined)
-        self.assertTrue(any("均衡C" in t and "已按设置开机" in t for t in texts), joined)
+        # 只写「已下发指令」：实例还在停机/开机过程中，写成「已按设置停机」就是假结论
+        self.assertTrue(any("均衡B" in t and "已下发停机指令" in t for t in texts), joined)
+        self.assertTrue(any("均衡C" in t and "已下发开机指令" in t for t in texts), joined)
+        self.assertFalse(any("已按设置停机" in t for t in texts), joined)
+        self.assertEqual(str(event["status"]), "running", "成员状态没到位，事件不能结束")
+        self.assertIn("等待", str(event["detail"]))
+
+        # 下一轮读到真实状态后才收尾
+        self._tick(offset=5)
+        event = repo.list_events(limit=5, kind="balance_new")[0]
+        self.assertEqual(str(event["status"]), "done")
+        texts = [str(step.get("text") or "") for step in repo.get_event(int(event["id"]))["progress"]]
+        joined = " / ".join(texts)
+        self.assertTrue(any("均衡B" in t and "Stopped（节省停机）" in t for t in texts), joined)
+        self.assertTrue(any("均衡C" in t and "Running（运行中）" in t for t in texts), joined)
 
 
 class EvalAudit(_Base):
@@ -1075,10 +1088,18 @@ class SwitchStopsOthers(_Base):
         self.assertIn(self.a, self.stopped, "被换下来的那台设了停机，要停")
         self.assertNotIn(self.c, self.started, "只停不拉：不主动开机")
         self.assertNotIn(self.c, self.stopped, "设了保持运行的不停")
+        # 刚下发停机指令，事件还在等状态落地
+        pending = repo.list_events(limit=5, kind="balance_switch")[0]
+        self.assertEqual(str(pending["status"]), "running")
+        texts = [str(step.get("text") or "") for step in repo.get_event(int(pending["id"]))["progress"]]
+        joined = " / ".join(texts)
+        self.assertTrue(any("已下发停机指令（均衡A" in t for t in texts), joined)
+
+        self._tick(offset=5)
         event = repo.list_events(limit=5, kind="balance_done")[0]
         texts = [str(step.get("text") or "") for step in repo.get_event(int(event["id"]))["progress"]]
         joined = " / ".join(texts)
-        self.assertTrue(any("已下发停机指令（均衡A" in t for t in texts), joined)
+        self.assertTrue(any("均衡A" in t and "已到位" in t for t in texts), joined)
 
 
 if __name__ == "__main__":

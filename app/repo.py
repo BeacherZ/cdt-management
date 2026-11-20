@@ -1216,6 +1216,7 @@ def upsert_balance_state(group_id: int, **fields: Any) -> dict[str, Any]:
         "next_eval_at": 0,
         "attempts": 0,
         "note": "",
+        "settle": "",
         "updated_at": 0,
     }
     current.update({key: value for key, value in fields.items() if value is not None})
@@ -1223,13 +1224,13 @@ def upsert_balance_state(group_id: int, **fields: Any) -> dict[str, Any]:
     db.execute(
         "INSERT INTO balance_state(group_id, duty_server_id, prev_duty_id, phase, stage, "
         "slot_base_gb, cycle_key, event_id, last_switch_at, next_eval_at, attempts, note, "
-        "updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) "
+        "settle, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
         "ON CONFLICT(group_id) DO UPDATE SET duty_server_id=excluded.duty_server_id, "
         "prev_duty_id=excluded.prev_duty_id, phase=excluded.phase, stage=excluded.stage, "
         "slot_base_gb=excluded.slot_base_gb, cycle_key=excluded.cycle_key, "
         "event_id=excluded.event_id, last_switch_at=excluded.last_switch_at, "
         "next_eval_at=excluded.next_eval_at, attempts=excluded.attempts, "
-        "note=excluded.note, updated_at=excluded.updated_at",
+        "note=excluded.note, settle=excluded.settle, updated_at=excluded.updated_at",
         (
             group_id,
             int(current.get("duty_server_id") or 0),
@@ -1243,6 +1244,7 @@ def upsert_balance_state(group_id: int, **fields: Any) -> dict[str, Any]:
             int(current.get("next_eval_at") or 0),
             int(current.get("attempts") or 0),
             str(current.get("note") or ""),
+            str(current.get("settle") or ""),
             int(current.get("updated_at") or 0),
         ),
     )
