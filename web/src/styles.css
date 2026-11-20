@@ -3318,7 +3318,10 @@ input[type='number']::-webkit-inner-spin-button {
   gap: 9px;
   padding: 15px 18px;
   border-bottom: 1px solid var(--line);
-  background: linear-gradient(180deg, color-mix(in srgb, var(--ink) 2.5%, transparent), transparent);
+  /* 这里原来叠了一层 2.5% --ink 的渐变（模拟顶光）。差异只有 6 个色阶，
+     但在冷灰页面旁边，这点暗度会被读成「米黄/脏」，尤其 OLED 手机和窄色域屏。
+     标题栏本来靠底边那条分割线就能立住，底色不如直接留白。 */
+  background: transparent;
 }
 
 .modal-head h3 {

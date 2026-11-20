@@ -759,16 +759,17 @@ def recovery(
     headline: str = "当班实例疑被抢占，已自动恢复运行。",
     kind: str = "recovery",
     group_name: str = "",
+    scope: str = SCOPE_GROUP,
 ) -> notify.Message:
     """🟢 抢占恢复。单机保活拉起也用这套版式（脚本里没有单独的保活通知）。
 
-    范围靠标题括号区分：单机保活「（单机保活）」、换班组「（换班组：组名）」。
-    之前联合换班把组名塞在事件名前面、单机保活没有前缀，两个标题长得太像，不好认。
+    范围靠标题括号区分：单机保活「（单机保活）」、换班组「（换班组：组名）」、
+    均衡组「（均衡组：组名）」。
     """
     if kind == "keepalive":
         title = title_of("抢占恢复", scope=SCOPE_KEEPALIVE)
     else:
-        title = title_of("抢占恢复", group_name)
+        title = title_of("抢占恢复", group_name, scope)
     lines = [
         headline,
         "",

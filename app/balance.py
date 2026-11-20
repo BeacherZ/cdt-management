@@ -690,9 +690,21 @@ def _settle(
 
     # 故障转移沿用换班的开关口径（notify_on_failover），正常轮换用流量均衡自己的开关。
     # 两条都默认开，用户关掉某一个时语义清楚：关「流量均衡完成」不该把故障转移也静音。
-    # 掉线恢复、新建组都不发报告：恢复是系统自己把班补回来（事件里能查到全过程，
-    # 真拉起不来会走「均衡转移」，那条才需要推送）；新建组是用户自己刚点完保存。
+    # 掉线恢复、新建组都不发轮换报告：恢复不是一次新的均衡，新建组是用户刚点完保存。
+    # 但恢复本身要提醒 —— 设置页「实例恢复运行」写的是「实例被停掉后自动拉起成功时
+    # 提醒」，没限定归属，换班组和单机保活都发，均衡组漏发等于文案没兑现。
     if recover or new_group:
+        if recover and config.get("notify_on_recovery") == "1":
+            results = notify.send_all(
+                config,
+                messages.recovery(
+                    target,
+                    report.status,
+                    group_name=str(group.get("name") or ""),
+                    scope=messages.SCOPE_BALANCE,
+                ),
+            )
+            notify.note_notify(event_id, results)
         return {"group": group_id, "state": "idle", "duty": int(target["id"])}
 
     enabled_key = "notify_on_failover" if failover else "notify_on_balance"
