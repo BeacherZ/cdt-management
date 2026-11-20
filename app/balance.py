@@ -5,10 +5,10 @@
 
 与联合换班的区别只有两点：
   - 选人规则是「谁用得最少」，不是按排班表轮；
-  - 评估点只比流量差值，不动任何人的开关机；真要换人时才按「下班动作」处理
-    上一台、并把接替的那台拉起来。
+  - 评估点只比流量差值，不动任何人的开关机；真要换人时才动：接替的那台拉起来，
+    其余成员只停不拉（按各自的「下班动作」处理）。
 
-共同点：先确认接替的那台在跑，再改域名，最后才按「下班动作」处理上一台。
+共同点：先确认接替的那台在跑，再改域名，最后才按「下班动作」处理其余成员。
 顺序错了会出现「域名指向一台没起来的机器」或者「停完机才想起来域名还挂着」。
 """
 
@@ -395,6 +395,23 @@ def _reconcile(
 
     shift._refresh(duty, with_traffic=not fast)
 
+    # 刚在换人时按设置停掉的待机成员：补读一次真实状态。
+    # 待机成员的日常状态只在评估点读（最长的组是 24 小时），不补的话卡片会一直
+    # 挂着「运行中」，和事件里那句「已下发停机指令」对不上。读到终态就清标志，
+    # 平时没有停机在飞，这里零额外调用。
+    for row in rows:
+        if int(row["id"]) == int(duty["id"]):
+            continue
+        flag = f"balance_stop:{group_id}:{int(row['id'])}"
+        if not repo.get_flag(flag):
+            continue
+        try:
+            shift._refresh(row, with_traffic=False)
+        except Exception:  # noqa: BLE001 - 读不到就下一轮再试
+            continue
+        if str(row.get("instance_status") or "") not in ("Starting", "Pending", "Stopping"):
+            repo.clear_flag(flag)
+
     # ① 流量保护第一：当班到阈值，不等评估点
     if over_limit(duty):
         if not group.get("failover_enabled"):
@@ -639,7 +656,7 @@ def _settle(
     now: float,
     reason: str,
 ) -> dict[str, Any]:
-    """接替的那台已经 Running：先改域名，再按下班动作处理上一台。"""
+    """接替的那台已经 Running：先改域名，再按「下班后」设置处理其余成员（只停不拉）。"""
     group_id = int(group["id"])
     target = _find(rows, int(state.get("duty_server_id") or 0))
     if target is None:
@@ -657,27 +674,40 @@ def _settle(
     # 必须留在事件里，否则事后只剩一句「均衡完成」，看不出是差值到了还是被抢占。
     repo.add_event_progress(event_id, _settle_note(group, target, prev, reason))
 
-    # 交班那台写进报告时要用**停机之后**的状态：不下班（off_action=keep）就还是
-    # Running，按设置停掉了就是 Stopped。拿停机前的 rows 副本会写成 Running，
-    # 和同一份报告里「已停机」的进度对不上。
+    # 结算这一步按「只停不拉」处理**其余成员**（可能是被换下来的那台，也可能是
+    # 组里第 3、第 4 台待机）：设了「下班后停机」的就停掉 —— 它们不接域名，开着只是
+    # 白烧流量；设了保持运行的不去开机 —— 用户手动关掉的机器不该被系统顺手拉起来。
+    # 唯一的「拉」是接替的那台，由 _begin 负责，否则域名没人接。
+    # 停机后必须把状态写回 rows：同一份 rows 还要拿去做报告，不改的话「停止账号」
+    # 那一块会写 Running，和同一份报告里「已下发停机指令」自相矛盾。
+    # 掉线恢复（restart）不走这一步：那不是一次换人，别在恢复事件里顺手停别人的机器。
     prev_report = prev
-    if prev is not None and int(prev["id"]) != int(target["id"]):
-        if str(prev.get("off_action") or "keep") == "stop" and _is_running(prev):
+    if reason != "restart":
+        for row in rows:
+            if int(row["id"]) == int(target["id"]):
+                continue
+            if str(row.get("off_action") or "keep") != "stop" or not _is_running(row):
+                continue
+            label = row.get("label") or f"#{row['id']}"
             try:
-                prev_copy = dict(prev)
-                mode = shift.stop_server_by_pref(prev_copy)
-                prev_copy["instance_status"] = "Stopped"
-                # 写实际生效的模式（不支持节省停机会退化成普通停机），
-                # 与换班休班那条进度同一个说法。
-                prev_copy["stopped_mode"] = mode or prev_copy.get("stopped_mode") or ""
-                prev_report = prev_copy
-                repo.add_event_progress(
-                    event_id,
-                    f"已下发停机指令（{prev.get('label') or '上一台'}，{messages.mode_label(mode) or '停机'}）",
-                )
+                mode = shift.stop_server_by_pref(dict(row))
             except Exception as exc:  # noqa: BLE001 - 停不掉不影响域名已经切走
-                log.warning("流量均衡停旧当班失败 group=%s server=%s: %s", group_id, prev.get("id"), exc)
-                repo.add_event_progress(event_id, f"{prev.get('label') or '上一台'} 停机失败：{exc}")
+                log.warning(
+                    "流量均衡停机失败 group=%s server=%s: %s", group_id, row.get("id"), exc
+                )
+                repo.add_event_progress(event_id, f"{label} 停机失败：{exc}")
+                continue
+            # 写实际生效的模式（不支持节省停机会退化成普通停机），
+            # 与换班休班那条进度同一个说法。
+            row["instance_status"] = "Stopped"
+            row["stopped_mode"] = mode or row.get("stopped_mode") or ""
+            # 待机成员的状态只在评估点读，这里留个标志让下一轮补读，
+            # 别让卡片挂着「运行中」等到下一个整点（最长 24 小时）
+            repo.set_flag(f"balance_stop:{group_id}:{int(row['id'])}")
+            repo.add_event_progress(
+                event_id,
+                f"已下发停机指令（{label}，{messages.mode_label(mode) or '停机'}）",
+            )
 
     interval = max(60, int(group.get("interval_minutes") or 60)) * 60
     tz = shift._timezone(config.get("timezone") or "Asia/Shanghai")
@@ -1166,6 +1196,9 @@ def _audit_members(
                 # 不更新的话报告里「停止账号」那一块会写 Running，自相矛盾。
                 row["instance_status"] = "Stopped"
                 row["stopped_mode"] = mode or row.get("stopped_mode") or ""
+                # 待机成员平时只在评估点读状态：留个标志让下一轮补读，
+                # 别让卡片挂着「运行中」等下一个整点
+                repo.set_flag(f"balance_stop:{group_id}:{int(row['id'])}")
                 repo.add_event_progress(
                     event_id, f"{label}：{status}{suffix}，已按设置停机"
                 )

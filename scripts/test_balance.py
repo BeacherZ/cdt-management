@@ -1017,5 +1017,69 @@ class EvalAudit(_Base):
         self.assertIn("成员 均衡B", str(event["title"]))
 
 
+class SwitchStopsOthers(_Base):
+    """换人那一刻的处理口径：除接替的那台，其余成员**只停不拉**。
+
+    组员可能不止两台：一次换人只「拉」接替的那台，剩下所有设了「下班后停机」的
+    （被换下来的当班 + 其他待机成员）都停掉，设了保持运行的不去开机。
+    """
+
+    def _group(self, off_a: str, off_b: str, off_c: str) -> None:
+        repo.upsert_balance_group(
+            {
+                "id": self.group_id,
+                "name": "均衡组",
+                "enabled": True,
+                "failover_enabled": True,
+                "interval_minutes": 60,
+                "diff_gb": 10,
+                "min_duty_minutes": 30,
+                "members": [
+                    {"server_id": self.a, "off_action": off_a},
+                    {"server_id": self.b, "off_action": off_b},
+                    {"server_id": self.c, "off_action": off_c},
+                ],
+            }
+        )
+
+    def test_switch_stops_every_member_set_to_stop(self) -> None:
+        self._group("stop", "stop", "stop")
+        self._settle_on(self.a)
+        self._traffic(self.a, 120.0)  # 比 B 多 100 GB，差值达标
+        repo.upsert_balance_state(self.group_id, next_eval_at=0)
+
+        self._tick()
+
+        self.assertEqual(self._duty(), self.b, "交给用得最少的 B")
+        self.assertIn(self.a, self.stopped, "被换下来的当班按它自己的设置停机")
+        self.assertIn(self.c, self.stopped, "其他设了停机的待机成员一起停")
+        self.assertNotIn(self.b, self.stopped, "接替的那台不能被停")
+
+        # 停机后补了个「下一轮补读状态」的标志，别让卡片挂着运行中等到下个整点
+        flag = f"balance_stop:{self.group_id}:{self.a}"
+        self.assertTrue(repo.get_flag(flag))
+        self._tick(offset=5)
+        self.assertFalse(repo.get_flag(flag))
+
+    def test_switch_never_starts_keep_member(self) -> None:
+        """设了保持运行却停着的待机成员：换人不替它开机（只停不拉）。"""
+        self._group("stop", "keep", "keep")
+        self._settle_on(self.a)
+        self._set_status(self.c, "Stopped")
+        self._traffic(self.a, 120.0)
+        repo.upsert_balance_state(self.group_id, next_eval_at=0)
+
+        self._tick()
+
+        self.assertEqual(self._duty(), self.b)
+        self.assertIn(self.a, self.stopped, "被换下来的那台设了停机，要停")
+        self.assertNotIn(self.c, self.started, "只停不拉：不主动开机")
+        self.assertNotIn(self.c, self.stopped, "设了保持运行的不停")
+        event = repo.list_events(limit=5, kind="balance_done")[0]
+        texts = [str(step.get("text") or "") for step in repo.get_event(int(event["id"]))["progress"]]
+        joined = " / ".join(texts)
+        self.assertTrue(any("已下发停机指令（均衡A" in t for t in texts), joined)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
