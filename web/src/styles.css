@@ -35,7 +35,11 @@
      一层方格噪点——域名胶囊、输入框这类小面积填充最明显。下面两个是它合成成实色
      后的取值，像素一致但没有 alpha，专给「大面积填充」用，也就不触发抖动。 */
   --fill-subtle: #f7f8f9;
-  --fill-field: #fcfdfd;
+  /* 与卡片白至少差 8 个色阶。原先取 #fcfdfd（只差 2 阶），肉眼看着一样，
+     但这么小的色差既撑不起层次，又最经不起折腾：截图转 JPG 时这段色阶差
+     会被 DCT 量化掉，在文字边缘晕出一片方块噪点（蚊式噪声）。差 8 阶才是
+     一个「说得清」的灰，压缩后也不会散。 */
+  --fill-field: #f7f8f9;
 
   /* 文字 */
   --ink: #101318;
@@ -102,7 +106,8 @@
   --panel-inset: rgba(255, 255, 255, 0.035);
   /* 同浅色主题：3.5% 白叠在 #14181e 上合成值，深色下抖动更明显（OLED 低亮度） */
   --fill-subtle: #1c2026;
-  --fill-field: #171c22;
+  /* 深色下也和 --panel-solid(#14181e) 拉开 8 阶，理由同浅色主题 */
+  --fill-field: #1c2026;
 
   --ink: #e9eef5;
   --ink-soft: #c2cbd6;
@@ -798,7 +803,9 @@ label {
   color: var(--ink);
   font-size: 13px;
   font-family: inherit;
-  box-shadow: inset 0 1px 2px var(--panel-inset);
+  /* 原本有一条 inset 0 1px 2px 的 2.7% 阴影：太淡，实机上根本看不出「陷下去」，
+     却给整块填充塞进一个低 alpha 图层，压缩后和填充色一起糊成方块（同上一条注释）。 */
+  box-shadow: none;
   transition:
     border-color var(--t-fast) var(--ease),
     box-shadow var(--t-fast) var(--ease),
@@ -840,9 +847,7 @@ label {
   outline: none;
   border-color: var(--accent);
   background: var(--panel-solid);
-  box-shadow:
-    0 0 0 3px var(--accent-ring),
-    inset 0 1px 2px var(--panel-inset);
+  box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
 /* 必填校验没过的那一格：描红 + 红环。聚焦态一并写进来，
@@ -853,9 +858,7 @@ label {
 .field .input[aria-invalid='true']:focus,
 .field .select[aria-invalid='true']:focus {
   border-color: var(--red);
-  box-shadow:
-    0 0 0 3px color-mix(in srgb, var(--red) 14%, transparent),
-    inset 0 1px 2px var(--panel-inset);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--red) 14%, transparent);
 }
 
 .input:disabled,
