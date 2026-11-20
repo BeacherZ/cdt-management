@@ -470,6 +470,16 @@ def _confirm_pending_events(now_ts: float | None = None) -> None:
                     reason = reason.split(" / ", 1)[1].strip() if " / " in reason else ""
                 result = messages.result_label(info.status, info.stopped_mode)
                 summary = f"{result} / {reason}" if reason else result
+                # 标题在指令下发时只能写「等待停机」：那一刻实例还在 Stopping，
+                # 到底按节省还是普通停，要等阿里云回读才知道。现在补上真实结论。
+                old_title = str(event.get("title") or "")
+                if "等待停机" in old_title:
+                    repo.update_event(
+                        event_id,
+                        title=old_title.replace(
+                            "等待停机", messages.stop_phrase(info.stopped_mode), 1
+                        ),
+                    )
             repo.finish_event(event_id, "done", summary)
         else:
             # 单机保活等的是「一直试到起来」，中间态不往进度里刷状态：

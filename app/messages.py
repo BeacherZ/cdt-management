@@ -669,15 +669,53 @@ def _breaker_block(server: dict[str, Any]) -> str:
     )
 
 
+def stop_claim(server: dict[str, Any], mode: str | None = None, prefix: str = "已") -> str:
+    """「停机」这件事该怎么写：只有真读回来是 Stopped 才敢说「已节省停机」。
+
+    下发成功只代表阿里云接受了指令，实例还在 Stopping。这时候写「已停机」，
+    用户去控制台一看还在转圈，报告就失去了可信度。还在停的路上就如实写
+    「已下发停机指令（节省停机）」，等确认器读到真实状态再改成结论。
+    """
+    mode = mode if mode is not None else server.get("stopped_mode")
+    if str(server.get("instance_status") or "") == "Stopped":
+        # 停稳了就以实例回读的 StoppedMode 为准：包年包月 / 本地盘不支持节省停机，
+        # 下发的是 StopCharging、实际按 KeepCharging 执行，这里不能照抄请求值。
+        return stop_phrase(server.get("stopped_mode") or mode, prefix)
+    label = mode_label(mode)
+    return f"已下发{label}指令" if label else "已下发停机指令"
+
+
+def stop_summary(servers: list[dict[str, Any]]) -> str:
+    """一批机器停成什么样：全部真实 Stopped 才敢说「均已节省停机」。
+
+    中间的 Stopping / Pending 写「停机中」，指令失败（还是 Running）写「未停机」——
+    两件事都叫「没停完」，但用户该做的处理不一样。
+    """
+    if not servers:
+        return "已下发停机指令"
+    done = [s for s in servers if str(s.get("instance_status") or "") == "Stopped"]
+    if len(done) == len(servers):
+        return stop_tail(servers)
+    rest = [s for s in servers if str(s.get("instance_status") or "") != "Stopped"]
+    moving = all(
+        str(s.get("instance_status") or "") in ("Stopping", "Pending", "Starting")
+        for s in rest
+    )
+    if not done:
+        return "已下发停机指令，等待停机到位" if moving else "停机未完成"
+    return f"{len(done)} 台已停机，{len(rest)} 台{'停机中' if moving else '未停机'}"
+
+
 def balance_exhausted(
     servers: list[dict[str, Any]], group_name: str = "", note: str = ""
 ) -> notify.Message:
     """🚨 均衡组全员到阈值：没有可以接班的成员，全部停机。"""
     count = "双实例" if len(servers) == 2 else f"{len(servers)} 台实例"
+    tail = stop_summary(servers)
     warn = (
-        f"当班流量已到阈值，{note}，按“全局熔断”处理，{stop_tail(servers)}。"
+        f"当班流量已到阈值，{note}，按“全局熔断”处理，{tail}。"
         if note
-        else f"{count}流量均已到达到阈值，“全局熔断”，{stop_tail(servers)}。"
+        else f"{count}流量均已到达到阈值，“全局熔断”，{tail}。"
     )
     blocks = [_breaker_block(s) for s in servers]
     return _titled(
@@ -700,10 +738,11 @@ def breaker(
     此时我们并不知道别人用了多少流量，不能照抄「N 台流量均已到达到阈值」。
     """
     count = "双实例" if len(servers) == 2 else f"{len(servers)} 台实例"
+    tail = stop_summary(servers)
     if note:
-        warn = f"当班流量已到达到阈值，{note}，按“全局熔断”处理，{stop_tail(servers)}。"
+        warn = f"当班流量已到达到阈值，{note}，按“全局熔断”处理，{tail}。"
     else:
-        warn = f"{count}流量均已到达到阈值，“全局熔断”，{stop_tail(servers)}。"
+        warn = f"{count}流量均已到达到阈值，“全局熔断”，{tail}。"
     blocks = [_breaker_block(s) for s in servers]
     return _titled(
         "breaker",
@@ -730,10 +769,11 @@ def limit_stop(
     话说，只有组名和「点哪个按钮」不同。以前均衡组走的是 over_limit()，标题成了
     「超限停机报告」，正文也没提「没有启用故障转移」，读起来像两回事。
 
-    停机措辞按 mode（缺省取实例自己的 StoppedMode）：不支持节省停机的规格会
-    fallback 成普通停机，照常收规格费，不能一律写「已节省停机」。
+    停机措辞：已经读到 Stopped 的，以实例回读的 StoppedMode 为准（不支持节省停机的
+    规格会 fallback 成普通停机，照常收规格费）；还在停的路上就写「已下发…指令」，
+    结论等确认器读到真实状态再补。
     """
-    stopped = stop_phrase(mode if mode is not None else server.get("stopped_mode"), "已强制")
+    stopped = stop_claim(server, mode, "已强制")
     balance = scope == SCOPE_BALANCE
     who = "该均衡组" if balance else "该换班组"
     action = "立即均衡" if balance else "立即换班"
@@ -768,7 +808,7 @@ def over_limit(server: dict[str, Any], scope: str, mode: str | None = None) -> n
     """
     # 单机保活除了停机还要暂停保活，但停机模式同样必须写出来：只写「已暂停保活」，
     # 用户看不出这台是省钱停了还是照常计费，和事件标题「流量超限，已节省停机」也对不上。
-    stopped = stop_phrase(mode if mode is not None else server.get("stopped_mode"))
+    stopped = stop_claim(server, mode)
     paused = f"{stopped}，并暂停保活" if scope == SCOPE_KEEPALIVE else stopped
     return _titled(
         "limit_stop",

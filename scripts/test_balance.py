@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import os
 import sys
 import tempfile
@@ -1100,6 +1101,258 @@ class SwitchStopsOthers(_Base):
         texts = [str(step.get("text") or "") for step in repo.get_event(int(event["id"]))["progress"]]
         joined = " / ".join(texts)
         self.assertTrue(any("均衡A" in t and "已到位" in t for t in texts), joined)
+
+    def test_stopping_member_is_waited_without_second_command(self) -> None:
+        """已经在 Stopping 的成员：不再下发第二次，但要等它落地才收尾。"""
+        self._group("stop", "stop", "stop")
+        self._settle_on(self.a)
+        self._set_status(self.c, "Stopping")
+        self._traffic(self.a, 120.0)
+        repo.upsert_balance_state(self.group_id, next_eval_at=0)
+
+        self._tick()
+
+        self.assertEqual(self._duty(), self.b)
+        self.assertIn(self.a, self.stopped, "被换下来的当班按设置停机")
+        self.assertNotIn(self.c, self.stopped, "已经在停的路上，不能重复下发")
+        self.assertEqual(self._state().get("phase"), "settling", "C 没落地就不能收尾")
+        pending = repo.list_events(limit=5, kind="balance_switch")[0]
+        self.assertEqual(str(pending["status"]), "running")
+        texts = [str(step.get("text") or "") for step in repo.get_event(int(pending["id"]))["progress"]]
+        self.assertTrue(any("均衡C" in t and "等待停机到位" in t for t in texts), " / ".join(texts))
+
+        self._set_status(self.c, "Stopped")
+        self._tick(offset=10)
+        event = repo.list_events(limit=5, kind="balance_done")[0]
+        self.assertEqual(str(event["status"]), "done")
+        self.assertIn("待机 2 台", str(event["detail"]))
+
+    def test_failed_stop_is_retried_until_settled(self) -> None:
+        """停机指令下发失败的成员：继续等 + 下一轮重试，不能一行失败就收尾。"""
+        self._group("stop", "stop", "stop")
+        self._settle_on(self.a)
+        self._traffic(self.a, 120.0)
+        repo.upsert_balance_state(self.group_id, next_eval_at=0)
+
+        calls = {"n": 0}
+        orig = aliyun.stop_instance
+
+        def flaky(server, mode="StopCharging", fallback=False):  # noqa: ANN001, ARG001
+            if int(server["id"]) == self.c and calls["n"] == 0:
+                calls["n"] += 1
+                raise aliyun.AliyunError("Throttling.User")
+            return self._fake_stop(server, mode, fallback)
+
+        aliyun.stop_instance = flaky
+        try:
+            self._tick()
+            self.assertEqual(self.states[self.c], "Running", "第一次下发失败，C 还在跑")
+            self.assertEqual(self._state().get("phase"), "settling")
+            pending = repo.list_events(limit=5, kind="balance_switch")[0]
+            texts = [
+                str(step.get("text") or "")
+                for step in repo.get_event(int(pending["id"]))["progress"]
+            ]
+            self.assertTrue(
+                any("均衡C" in t and "继续等待到位" in t for t in texts), " / ".join(texts)
+            )
+
+            # 加速轮重试一次就能成功，再下一轮读到真实状态才收尾
+            balance.reconcile_awaiting(CONFIG, time.time() + 10)
+            self.assertEqual(self.states[self.c], "Stopped", "重试应该真的把 C 停掉")
+            balance.reconcile_awaiting(CONFIG, time.time() + 20)
+        finally:
+            aliyun.stop_instance = orig
+
+        event = repo.list_events(limit=5, kind="balance_done")[0]
+        self.assertEqual(str(event["status"]), "done")
+        self.assertEqual(self._state().get("phase"), "idle")
+
+    def test_event_lists_every_member_final_state(self) -> None:
+        """收尾时逐台写回读状态：事件详情要能核对每个人都落在哪。"""
+        self._group("stop", "keep", "stop")
+        self._settle_on(self.a)
+        self._traffic(self.a, 120.0)
+        repo.upsert_balance_state(self.group_id, next_eval_at=0)
+
+        self._tick()
+        self._tick(offset=5)
+
+        event = repo.list_events(limit=5, kind="balance_done")[0]
+        texts = [str(step.get("text") or "") for step in repo.get_event(int(event["id"]))["progress"]]
+        line = next((t for t in texts if t.startswith("成员状态：")), "")
+        self.assertTrue(line, " / ".join(texts))
+        self.assertIn("均衡A：Stopped（节省停机）", line, "被换下来的按设置停机")
+        self.assertIn("均衡B：Running（运行中）", line, "当班必须真实在跑")
+        self.assertIn("均衡C：Stopped（节省停机）", line, "其余设停机的也要停")
+
+    def test_report_uses_real_member_states(self) -> None:
+        """报告里的状态一律用收尾回读值，不能拿缓存或请求值充数。"""
+        self._group("stop", "keep", "stop")
+        self._settle_on(self.a)
+        self._traffic(self.a, 120.0)
+        repo.upsert_balance_state(self.group_id, next_eval_at=0)
+
+        sent: list = []
+        orig_send = notify.send_all
+        notify.send_all = lambda _c, m: (sent.append(m), {"webhook": "ok"})[1]
+        try:
+            self._tick()
+            self._tick(offset=5)
+        finally:
+            notify.send_all = orig_send
+
+        self.assertTrue(sent, "收尾后应该发一份均衡报告")
+        html = sent[-1].html
+        self.assertIn("🟢 <b>当班账号 </b>", html)
+        self.assertIn("Stopped (StopCharging)", html, "停机的待机成员要写真实模式")
+        self.assertIn("🟢 状态：Running", html, "当班那台按真实状态写")
+
+
+class BreakerReportsRealState(_Base):
+    """熔断是事故通知：状态与停机模式必须是回读值，不能拿请求值充结论。"""
+
+    def test_breaker_does_not_claim_stopped_before_it_is(self) -> None:
+        for server_id in (self.a, self.b, self.c):
+            self._traffic(server_id, 200.0)
+        self._settle_on(self.a)
+        repo.upsert_balance_state(self.group_id, next_eval_at=0)
+
+        orig_stop = aliyun.stop_instance
+
+        def slow_stop(server, mode="StopCharging", fallback=False):  # noqa: ANN001, ARG001
+            if int(server["id"]) == self.c:
+                # 指令被接受了，但实例还在 Stopping
+                self.states[self.c] = "Stopping"
+                return mode
+            return self._fake_stop(server, mode, fallback)
+
+        sent: list = []
+        orig_send = notify.send_all
+        aliyun.stop_instance = slow_stop
+        notify.send_all = lambda _c, m: (sent.append(m), {"webhook": "ok"})[1]
+        try:
+            balance.reconcile_all({**CONFIG, "notify_on_breaker": "1"}, time.time())
+        finally:
+            aliyun.stop_instance = orig_stop
+            notify.send_all = orig_send
+
+        event = repo.list_events(limit=5, kind="balance_breaker")[0]
+        texts = [str(step.get("text") or "") for step in repo.get_event(int(event["id"]))["progress"]]
+        joined = " / ".join(texts)
+        self.assertTrue(
+            any("均衡C" in t and "Stopping" in t and "已下发" in t for t in texts), joined
+        )
+        self.assertFalse(any("均衡C" in t and "已节省停机" in t for t in texts), joined)
+        self.assertTrue(sent, "熔断要发通知")
+        self.assertNotIn("均已节省停机", sent[-1].html, "有一台还在停，不能说都已停稳")
+        self.assertIn("台停机中", sent[-1].html)
+
+
+class SettleAbandon(_Base):
+    """组被停用 / 解散：等成员到位的事件必须收尾，不能永远转圈。"""
+
+    def _open_settling(self) -> int:
+        event_id = repo.add_event(
+            "balance_switch",
+            "均衡进行中（均衡组：均衡组）",
+            "等待当班 均衡B 到位",
+            status="running",
+            group_id=self.group_id,
+        )
+        settle = {
+            "event": event_id,
+            "reason": "flow",
+            "duty": self.b,
+            "items": [{"id": self.a, "label": "均衡A", "target": "Stopped"}],
+            "deadline": int(time.time()) + 600,
+        }
+        repo.upsert_balance_state(self.group_id, phase="settling", settle=json.dumps(settle))
+        return event_id
+
+    def test_dissolve_closes_running_event(self) -> None:
+        event_id = self._open_settling()
+        balance.dissolve_group(self.group_id)
+
+        event = repo.get_event(event_id)
+        self.assertEqual(str(event["status"]), "error")
+        texts = [str(step.get("text") or "") for step in event["progress"]]
+        self.assertTrue(any("已解散" in t for t in texts), " / ".join(texts))
+
+    def test_disabled_group_closes_pending_event(self) -> None:
+        event_id = self._open_settling()
+        group = repo.get_balance_group(self.group_id)
+        repo.upsert_balance_group(
+            {
+                "id": self.group_id,
+                "name": str(group["name"]),
+                "enabled": False,
+                "failover_enabled": True,
+                "interval_minutes": 60,
+                "diff_gb": 10,
+                "min_duty_minutes": 30,
+                "members": [
+                    {"server_id": m["server_id"], "off_action": m["off_action"]}
+                    for m in group["members"]
+                ],
+            }
+        )
+
+        balance.reconcile_awaiting(CONFIG, time.time() + 10)
+
+        event = repo.get_event(event_id)
+        self.assertEqual(str(event["status"]), "error")
+        self.assertIn("已停用", str(event["detail"]))
+        self.assertEqual(self._state().get("phase"), "idle")
+        self.assertFalse(self._state().get("settle"), "等待清单要清掉，重新启用时从干净状态开始")
+
+
+class ManualSwitchReadsFreshTraffic(_Base):
+    """手动均衡选人前必须真读全组：拿缓存比会把域名切给更满的那台。"""
+
+    def test_manual_switch_uses_fresh_traffic(self) -> None:
+        self._settle_on(self.a)
+        # 库里缓存：A 50 / B 10，看起来该切给 B
+        self._traffic(self.a, 50.0)
+        self._traffic(self.b, 10.0)
+        # 真读回来：A 10 / B 90 —— 当班自己才是最少的
+        fresh = {self.a: 10.0, self.b: 90.0, self.c: 80.0}
+
+        def refresh(server, with_traffic: bool = True) -> None:
+            self._fake_refresh(server, with_traffic)
+            if with_traffic:
+                server["traffic_used"] = fresh[int(server["id"])]
+
+        orig = shift._refresh  # noqa: SLF001
+        shift._refresh = refresh  # noqa: SLF001
+        try:
+            result = balance.manual_switch(self.group_id, CONFIG, "manual")
+        finally:
+            shift._refresh = orig  # noqa: SLF001
+
+        self.assertEqual(result.get("state"), "best", "按真实用量比，当班已经是最少的")
+        self.assertEqual(self._duty(), self.a)
+        self.assertNotIn(self.b, self.stopped)
+
+
+class ReconcileErrorDoesNotStick(_Base):
+    def test_error_keeps_phase(self) -> None:
+        """一轮对账抛异常：不能把 phase 写成 error 永不恢复。"""
+        self._settle_on(self.a)
+        orig = balance._reconcile
+
+        def boom(*_a, **_k):  # noqa: ANN002, ANN003
+            raise RuntimeError("boom")
+
+        balance._reconcile = boom
+        try:
+            balance.reconcile_all(CONFIG, time.time())
+        finally:
+            balance._reconcile = orig
+
+        state = self._state()
+        self.assertEqual(state.get("phase"), "idle", "阶段要保持可继续推进")
+        self.assertIn("boom", str(state.get("note")), "出错原因要留痕，便于界面显示")
 
 
 class SettleFastChannel(_Base):

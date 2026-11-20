@@ -355,7 +355,13 @@ class StopPhraseFollowsMode(unittest.TestCase):
         self.assertEqual(mode, "StopCharging")
 
     def test_over_limit_text_uses_real_mode(self):
+        # 还在停的路上（状态未知）：只写「已下发…指令」，不假装停稳
         server = {"label": "闲散机", "instance_id": "i-x", "stopped_mode": ""}
+        message = messages.over_limit(server, messages.SCOPE_IDLE, mode="Stop")
+        self.assertIn("已下发普通停机指令", message.text)
+        self.assertNotIn("已节省停机", message.text)
+        # 回读确认 Stopped 之后才下结论，模式取真实 StoppedMode
+        server = {**server, "instance_status": "Stopped", "stopped_mode": "Stop"}
         message = messages.over_limit(server, messages.SCOPE_IDLE, mode="Stop")
         self.assertIn("已普通停机", message.text)
         self.assertNotIn("已节省停机", message.text)
@@ -363,7 +369,18 @@ class StopPhraseFollowsMode(unittest.TestCase):
     def test_limit_stop_text_uses_real_mode(self):
         server = {"label": "当班机", "instance_id": "i-y", "stopped_mode": "Stop"}
         message = messages.limit_stop(server, group_name="组A")
+        self.assertIn("已下发普通停机指令", message.text)
+        # 包年包月 / 本地盘：下发的节省停机被阿里云按普通停机执行，
+        # 回读后要写「普通停机」，不能照抄请求值
+        server = {
+            "label": "当班机",
+            "instance_id": "i-y",
+            "instance_status": "Stopped",
+            "stopped_mode": "KeepCharging",
+        }
+        message = messages.limit_stop(server, group_name="组A", mode="StopCharging")
         self.assertIn("已强制普通停机", message.text)
+        self.assertNotIn("已强制节省停机", message.text)
 
 
 if __name__ == "__main__":

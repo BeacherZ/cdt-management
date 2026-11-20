@@ -37,6 +37,10 @@ START_TIMEOUT = 600
 # 结算后等成员状态落地（停机 / 开机到位的真实回读）的墙钟上限，与开机等待同口径。
 # 超时不再等，事件写「未确认到位」收尾 —— 不能让一条事件转一整天。
 SETTLE_TIMEOUT = 600
+# 等成员到位期间，指令下发失败的成员最多再重试几次。
+# 加速通道 10 秒一轮，不设上限的话一次接口抖动会被重试几十次；三次足够覆盖
+# 限流 / 瞬态错误，还不行就等超时如实写「未确认到位」。
+SETTLE_RETRY_MAX = 3
 # 全员到阈值后，多久再看一眼（等月初重置或用户调高阈值）
 EXHAUSTED_RECHECK = 3600
 # 同一组的异常提醒最小间隔，避免每轮对账都推一条
@@ -280,8 +284,12 @@ def reconcile_all(config: dict[str, str] | None = None, now: float | None = None
                 out.append(result)
         except Exception as exc:  # noqa: BLE001 - 一组出错不能拖垮其他组和巡检
             log.exception("流量均衡组对账失败 group=%s", group.get("id"))
+            # 不要把 phase 改成 error：这个字段没有「自动恢复」的路径，写进去就一直
+            # 显示「切换异常」，之后哪怕轮换恢复正常也不会消失。in-flight 的切换
+            # 保留原阶段，下一轮（加速通道 10 秒）继续推进，超时逻辑自己会兜底；
+            # 出错原因只记进 note（脱敏后），界面能看见，但不影响状态机。
             repo.upsert_balance_state(
-                int(group["id"]), phase="error", note=str(exc)[:200]
+                int(group["id"]), note=f"对账失败：{shift._brief_exc(exc)}"[:200]
             )
     return out
 
@@ -302,7 +310,12 @@ def reconcile_awaiting(config: dict[str, str] | None = None, now: float | None =
     out: list[dict[str, Any]] = []
     for group_id in repo.balance_awaiting_ids():
         group = repo.get_balance_group(group_id)
-        if group is None or not group.get("enabled"):
+        if group is None:
+            continue
+        if not group.get("enabled"):
+            # 组被停用了：这条「等成员到位」再没人推进，事件会一直转圈。
+            # 它没有 pending_status，确认器管不到，只能在这里收尾。
+            _settle_abandon(group_id, "均衡组已停用，停止等待成员到位")
             continue
         try:
             with _lock:
@@ -734,6 +747,9 @@ def _settle(
     # 这里只发指令、不改内存里的状态：真实状态一律以收尾前的回读为准，
     # 否则报告会写出一句「Stopped (某模式)」，而实例其实还在 Stopping。
     # 掉线恢复（restart）不走这一步：那不是一次换人，别在恢复事件里顺手停别人的机器。
+    # 「所有成员状态落位」不是「发过指令的成员」：设了「下班后停机」的，不管
+    # 是刚下发、本来就在 Stopping、还是上一轮下发失败，都要等它真的 Stopped。
+    # 只有已经停稳的才算落位；设了保持运行的不拉（只停不拉），它停在哪儿就是哪儿。
     items: list[dict[str, Any]] = list(pending or [])
     handled = {int(item.get("id") or 0) for item in items}
     if reason != "restart":
@@ -741,16 +757,47 @@ def _settle(
             row_id = int(row["id"])
             if row_id == int(target["id"]) or row_id in handled:
                 continue
-            if str(row.get("off_action") or "keep") != "stop" or not _is_running(row):
+            if str(row.get("off_action") or "keep") != "stop" or _is_stopped(row):
                 continue
             label = row.get("label") or f"#{row_id}"
+            if not _is_running(row):
+                # Stopping / Pending：已经在停的路上，别再下发第二次，
+                # 但必须等它落地 —— 事件不能在这一刻就写「已停机」。
+                repo.add_event_progress(
+                    event_id,
+                    f"{label}：{row.get('instance_status') or '未知'}，等待停机到位",
+                )
+                # 给了重试额度：万一它其实在开机（Starting），起来之后要按设置停掉
+                items.append(
+                    {
+                        "id": row_id,
+                        "label": label,
+                        "target": "Stopped",
+                        "retry": SETTLE_RETRY_MAX,
+                    }
+                )
+                continue
             try:
                 mode = shift.stop_server_by_pref(dict(row))
             except Exception as exc:  # noqa: BLE001 - 停不掉不影响域名已经切走
                 log.warning(
                     "流量均衡停机失败 group=%s server=%s: %s", group_id, row.get("id"), exc
                 )
-                repo.add_event_progress(event_id, f"{label} 停机失败：{exc}")
+                # 指令失败也要继续等：下一轮重试，超时才认「未确认到位」。
+                # 以前这里只写一行失败就 continue，事件当场收尾，报告里那台
+                # 还是 Running —— 用户看到的「停机失败」后面没有下文。
+                repo.add_event_progress(
+                    event_id,
+                    f"{label} 停机指令下发失败（{shift._brief_exc(exc)}），继续等待到位",
+                )
+                items.append(
+                    {
+                        "id": row_id,
+                        "label": label,
+                        "target": "Stopped",
+                        "retry": SETTLE_RETRY_MAX,
+                    }
+                )
                 continue
             # 待机成员的状态只在评估点读，这里留个标志让下一轮补读，
             # 别让卡片挂着「运行中」等到下一个整点（最长 24 小时）
@@ -819,19 +866,61 @@ def _finish_switch(
     """成员状态到位（或等超时）：回读真实状态，写结论、结束事件、发报告。
 
     「运行 / 节省停机 / 普通停机」必须是阿里云此刻的返回值，所以收尾前对全组
-    各读一次 DescribeInstances。读不到的沿用上一轮的值，但不会因此把事件卡住。
+    各读一次 DescribeInstances。读不到的那台如实写「状态读取失败 / Unknown」，
+    不拿上一轮的值冒充，也不会因此把事件卡住。
     """
     group_id = int(group["id"])
     target = _find(rows, duty_id)
     if target is None:
+        # 当班被移出组：这条事件没有别的收尾路径了，就地结束，
+        # 否则会永远挂在 running（它不带 pending_status，确认器管不到）。
+        event = repo.get_event(event_id)
+        if event is not None and str(event.get("status") or "") == "running":
+            repo.add_event_progress(event_id, "当班成员已不在组内，切换中止")
+            repo.finish_event(event_id, "error", "当班成员已不在组内")
         repo.upsert_balance_state(group_id, settle="", phase="idle")
         return {"group": group_id, "state": "idle"}
 
+    fresh: set[int] = set()
     for row in rows:
         try:
             shift._refresh(row, with_traffic=False)
         except Exception:  # noqa: BLE001 - 读不到就用上一轮的值，别卡住收尾
+            # 报告里宁可写 Unknown，也不把上一轮的状态当成此刻的真实值
+            row["instance_status"] = ""
             continue
+        fresh.add(int(row["id"]))
+
+    # 事件详情要能一眼核对「每个人都落在哪」：逐台写阿里云**此刻**的状态。
+    # 这一行是收尾前刚回读的，不是下发指令那一刻的猜测；停机模式也取真实
+    # StoppedMode（不支持节省停机的规格会显示普通停机，账单照收规格费）。
+    # 「只停不拉」：设了停机的必须 Stopped，设了保持运行的不要求它在跑
+    # —— 它停着就是我们的处理结果，不能算「没落位」。
+    states: list[str] = []
+    issues: list[str] = []
+    for row in sorted(rows, key=lambda item: int(item.get("position") or 0)):
+        row_id = int(row["id"])
+        label = str(row.get("label") or f"#{row_id}")
+        if row_id not in fresh:
+            # 这一台没读上来：如实写「读取失败」，不拿旧值冒充真实状态，
+            # 也不据此判「未按设置落位」（读不到 ≠ 没落位）。
+            states.append(f"{label}：状态读取失败")
+            continue
+        status = str(row.get("instance_status") or "Unknown")
+        suffix = messages.status_suffix(status, row.get("stopped_mode"))
+        states.append(f"{label}：{status}{suffix}")
+        if row_id == duty_id:
+            if not _is_running(row):
+                issues.append(f"{label} 未运行")
+        elif (
+            reason != "restart"
+            and str(row.get("off_action") or "keep") == "stop"
+            and not _is_stopped(row)
+        ):
+            issues.append(f"{label} 未停机")
+    repo.add_event_progress(event_id, "成员状态：" + " / ".join(states))
+    if issues:
+        repo.add_event_progress(event_id, "未按设置落位：" + "、".join(issues))
 
     # 三种结论各自一条事件，和换班的「换班完成 / 手动换班完成 / 故障转移」同构。
     # 以前只有一种「均衡完成」，故障转移看起来像正常轮换，事后翻事件分不出区别。
@@ -874,6 +963,8 @@ def _finish_switch(
         detail = f"当班 {target.get('label') or '—'}，待机 {standby} 台，{dns_brief}"
     if timeout:
         detail = f"{detail}（部分成员未确认到位）"
+    elif issues:
+        detail = f"{detail}（{len(issues)} 台未按设置落位）"
     repo.update_event(event_id, title=title, detail=detail, kind=kind)
     repo.finish_event(event_id, "error" if timeout else "done", detail)
     # 收尾了才回到空闲：settling 期间这条组还挂在加速通道上，每 10 秒读一次
@@ -947,7 +1038,13 @@ def _advance_settle(
     event_id = int(data.get("event") or 0)
     duty_id = int(data.get("duty") or 0)
     if not event_id or _find(rows, duty_id) is None:
-        # 事件 id 丢了、当班被移出组：没有可等的对象，清掉标记别卡住评估
+        # 事件 id 丢了、当班被移出组：没有可等的对象，清掉标记别卡住评估。
+        # 事件若还在转，顺手收尾 —— 它没有 pending_status，没人会替它结束。
+        if event_id:
+            event = repo.get_event(event_id)
+            if event is not None and str(event.get("status") or "") == "running":
+                repo.add_event_progress(event_id, "当班成员已不在组内，切换中止")
+                repo.finish_event(event_id, "error", "当班成员已不在组内")
         repo.upsert_balance_state(group_id, settle="")
         return {"group": group_id, "state": "idle"}
 
@@ -968,6 +1065,32 @@ def _advance_settle(
         want = str(item.get("target") or "")
         ok = _is_running(row) if want == "Running" else _is_stopped(row)
         if not ok:
+            # 上一轮指令下发失败（或压根没发出去）的，这里补一次：
+            # 只重试「该动却能动」的情况 —— 已经在 Stopping 的别重复下发。
+            retry = int(item.get("retry") or 0)
+            if retry > 0 and want == "Stopped" and _is_running(row):
+                try:
+                    mode = shift.stop_server_by_pref(dict(row))
+                except Exception as exc:  # noqa: BLE001 - 下一轮再试或超时收尾
+                    repo.add_event_progress(
+                        event_id,
+                        f"{label} 重试停机失败（{shift._brief_exc(exc)}），"
+                        f"还剩 {retry - 1} 次",
+                    )
+                else:
+                    repo.set_flag(f"balance_stop:{group_id}:{int(row['id'])}")
+                    repo.add_event_progress(
+                        event_id,
+                        f"{label} 重试停机：已下发指令"
+                        f"（{messages.mode_label(mode) or '停机'}），继续等待到位",
+                    )
+                item = {**item, "retry": retry - 1}
+            elif retry > 0 and want == "Running" and _is_stopped(row):
+                if _start(group_id, row):
+                    repo.add_event_progress(
+                        event_id, f"{label} 重试开机：已下发指令，继续等待到位"
+                    )
+                item = {**item, "retry": retry - 1}
             remaining.append(item)
             continue
         # 到位了才写结论：这里的「已停机（节省停机）」是阿里云刚返回的值
@@ -1027,14 +1150,26 @@ def _breaker(
         try:
             copy = dict(row)
             mode = shift.stop_server_by_pref(copy)
-            copy["instance_status"] = "Stopped"
-            # 写实际生效的模式：规格不支持节省停机会退化成普通停机，
-            # 摘要照抄「均已节省停机」就是骗人（账单照扣规格费）。
+            # 这里只记「请求生效的模式」，状态要用回读值 —— 见下面的刷新。
             copy["stopped_mode"] = mode or copy.get("stopped_mode") or ""
             stopped.append(copy)
         except Exception as exc:  # noqa: BLE001
             log.warning("流量均衡熔断停机失败 group=%s server=%s: %s", group_id, row.get("id"), exc)
             failed.append(row)
+
+    # 下单成功不等于停稳：熔断报告是事故通知，状态和停机模式必须是阿里云
+    # 此刻的返回值。以前这里直接把内存状态改成 Stopped、拿请求模式当结论，
+    # 不支持节省停机的规格会显示成「已节省停机」，账单却照扣规格费。
+    for copy in stopped:
+        try:
+            shift._refresh(copy, with_traffic=False)
+        except Exception:  # noqa: BLE001 - 读不到就按「未确认」写，不猜
+            repo.set_flag(f"balance_stop:{group_id}:{int(copy['id'])}")
+            copy["instance_status"] = ""
+            continue
+        if not _is_stopped(copy):
+            # 还在 Stopping：留个标志，下一轮巡检补读，卡片不会一直挂着旧状态
+            repo.set_flag(f"balance_stop:{group_id}:{int(copy['id'])}")
 
     repo.upsert_balance_state(
         group_id,
@@ -1048,27 +1183,38 @@ def _breaker(
         note=note or "全员流量到阈值",
     )
     why = note or "全员流量到阈值"
+    # 报告要用「全组每台的最终状态」：已经停着的、这次停掉的、还没停稳的
+    # 都在里面，不能只拿这次下令的几台去拼「均已…」，台数会少。
+    stopped_by_id = {int(item["id"]): item for item in stopped}
+    failed_ids = {int(item["id"]) for item in failed}
+    final = [stopped_by_id.get(int(row["id"]), row) for row in rows]
     # 与换班的全局熔断同构：标题只写结论 + 组名，摘要写「怎么停的：为什么」，
     # 逐台写实际模式，最后一句交代这一轮没再下发指令。level 也用 error ——
     # 整组停机是事故级，不是「注意一下」。
     title = messages.ev("全局熔断", messages.obj_balance(str(group.get("name") or "")))
-    detail = f"{messages.stop_tail(stopped or rows)}：{why}"
+    detail = f"{messages.stop_summary(final)}：{why}"
     event_id = repo.add_event(
         "balance_breaker", title, detail, level="error", group_id=group_id
     )
-    for row in stopped or rows:
-        repo.add_event_progress(
-            event_id,
-            f"{row.get('label') or f'#{row.get('id')}'}：{messages.stop_phrase(row.get('stopped_mode'))}",
-        )
+    for row in final:
+        if int(row["id"]) in failed_ids:
+            continue
+        label = row.get("label") or f"#{row.get('id')}"
+        status = str(row.get("instance_status") or "")
+        if _is_stopped(row):
+            text = messages.stop_phrase(row.get("stopped_mode"))
+        else:
+            # 还在停的路上：把中间态如实写出来，别只写「已下发」让人以为没动
+            text = (f"{status}，" if status else "") + messages.stop_claim(row)
+        repo.add_event_progress(event_id, f"{label}：{text}")
     for row in failed:
         repo.add_event_progress(
             event_id, f"{row.get('label') or f'#{row.get('id')}'}：停机失败，下一轮重试"
         )
-    repo.add_event_progress(event_id, "已确认本轮停机指令下发完毕")
+    repo.add_event_progress(event_id, "本轮停机指令已下发完毕")
     if config.get("notify_on_breaker") == "1":
         notify.send_all(
-            config, messages.balance_exhausted(stopped or rows, str(group.get("name") or ""), note)
+            config, messages.balance_exhausted(final, str(group.get("name") or ""), note)
         )
     return {"group": group_id, "state": "exhausted"}
 
@@ -1113,15 +1259,21 @@ def _stop_duty(
             mode = shift.stop_server_by_pref(dict(duty))
         except Exception as exc:  # noqa: BLE001 - 停不掉也要记，下一轮还会再来
             log.warning("流量均衡超限停机失败 group=%s server=%s: %s", group_id, duty.get("id"), exc)
-            mode = str(duty.get("stopped_mode") or "")
+            mode = ""
+        else:
+            # 回读真实状态：通知里的「状态」行不能是下发前的 Running，
+            # 也不该在实例还在 Stopping 时就写「已停机」。
+            try:
+                shift._refresh(duty, with_traffic=False)
+            except Exception:  # noqa: BLE001 - 读不到就按「已下发」写
+                pass
     stopped = dict(duty)
-    stopped["instance_status"] = "Stopped"
-    stopped["stopped_mode"] = mode or stopped.get("stopped_mode") or ""
+    stopped["stopped_mode"] = str(duty.get("stopped_mode") or mode or "")
 
     event_id = repo.add_event(
         "balance_limit",
         messages.ev(
-            f"当班流量超限，{messages.stop_phrase(mode)}",
+            "当班流量超限，等待停机",
             messages.obj_balance_duty(
                 str(group.get("name") or ""), str(duty.get("label") or "")
             ),
@@ -1135,6 +1287,7 @@ def _stop_duty(
         pending_kind="limit_stop",
     )
     repo.add_event_progress(event_id, shift._limit_usage(duty))  # noqa: SLF001
+    repo.add_event_progress(event_id, messages.stop_claim(stopped, mode) + "，等待到位")
     if config.get("notify_on_limit_stop") == "1":
         # 与换班「当班超限 + 关故障转移」同一份通知：同一件事用同一套话说
         results = notify.send_all(
@@ -1183,10 +1336,16 @@ def _stop_member(
             group_id, row.get("id"), exc,
         )
         return
+    # 回读真实状态：通知里的状态行、停机措辞都要用阿里云此刻的返回值，
+    # 不能拿「刚下发」当「已停机」。
+    try:
+        shift._refresh(row, with_traffic=False)
+    except Exception:  # noqa: BLE001 - 读不到就按「已下发指令」写
+        pass
     event_id = repo.add_event(
         "balance_limit",
         messages.ev(
-            f"流量超限，{messages.stop_phrase(mode)}",
+            "流量超限，等待停机",
             messages.obj_balance_member(str(group.get("name") or ""), str(row.get("label") or "")),
         ),
         f"等待停机到位 / {shift._limit_usage(row)}",  # noqa: SLF001
@@ -1198,6 +1357,7 @@ def _stop_member(
         pending_kind="limit_stop",
     )
     repo.add_event_progress(event_id, shift._limit_usage(row))  # noqa: SLF001
+    repo.add_event_progress(event_id, messages.stop_claim(row, mode) + "，等待到位")
     if config.get("notify_on_limit_stop") == "1":
         results = notify.send_all(
             config, messages.over_limit(row, messages.SCOPE_BALANCE, mode=mode or None)
@@ -1220,6 +1380,25 @@ def _abort_event(state: dict[str, Any], note: str) -> None:
         return
     repo.add_event_progress(event_id, note)
     repo.finish_event(event_id, "error", note)
+
+
+def _settle_abandon(group_id: int, note: str) -> None:
+    """组被停用 / 解散：把「等成员到位」这条事件收尾，别让它永远转圈。
+
+    这种事件没有 pending_status，确认器（scheduler）管不到它，只能靠均衡自己的
+    巡检推进；组一停用，巡检就直接跳过这组了。清掉 settle 的同时把 phase 拨回
+    idle，下一次启用时从干净状态重新开始。
+    """
+    state = repo.get_balance_state(group_id) or {}
+    data = _load_settle(state)
+    event_id = int(data.get("event") or state.get("event_id") or 0)
+    if event_id:
+        event = repo.get_event(event_id)
+        if event is not None and str(event.get("status") or "") == "running":
+            repo.add_event_progress(event_id, note)
+            repo.finish_event(event_id, "error", note)
+    if state:
+        repo.upsert_balance_state(group_id, settle="", phase="idle")
 
 
 def _give_up_switch(group_id: int, state: dict[str, Any], note: str) -> dict[str, Any]:
@@ -1382,9 +1561,20 @@ def _audit_members(
         elif running and not should_run:
             try:
                 mode = shift.stop_server_by_pref(dict(row))
-            except Exception as exc:  # noqa: BLE001 - 停不掉下一轮再试，别卡住建组
+            except Exception as exc:  # noqa: BLE001 - 停不掉继续等，别卡住建组
+                # 不能只写一行「停机失败」就放过：这台还在跑，设的是停机，
+                # 事件得继续等它落位（下一轮重试，超时才认未确认）。
                 repo.add_event_progress(
-                    event_id, f"{label}：停机失败（{shift._brief_exc(exc)}），下一轮重试"
+                    event_id,
+                    f"{label}：停机指令下发失败（{shift._brief_exc(exc)}），继续等待到位",
+                )
+                pending.append(
+                    {
+                        "id": row_id,
+                        "label": label,
+                        "target": "Stopped",
+                        "retry": SETTLE_RETRY_MAX,
+                    }
                 )
                 continue
             # 待机成员平时只在评估点读状态：留个标志让下一轮补读，
@@ -1396,7 +1586,21 @@ def _audit_members(
             )
             pending.append({"id": row_id, "label": label, "target": "Stopped"})
         elif not should_run:
-            repo.add_event_progress(event_id, f"{label}：{status}{suffix}，符合设置")
+            if _is_stopped(row):
+                repo.add_event_progress(event_id, f"{label}：{status}{suffix}，符合设置")
+            else:
+                # Stopping / Pending：已经在停的路上，等它落地，不再下发第二次
+                repo.add_event_progress(
+                    event_id, f"{label}：{status}{suffix}，等待停机到位"
+                )
+                pending.append(
+                    {
+                        "id": row_id,
+                        "label": label,
+                        "target": "Stopped",
+                        "retry": SETTLE_RETRY_MAX,
+                    }
+                )
         elif is_duty:
             repo.add_event_progress(event_id, f"{label}：{status}{suffix}，需要开机")
         elif _start(group_id, row):
@@ -1404,7 +1608,15 @@ def _audit_members(
             pending.append({"id": row_id, "label": label, "target": "Running"})
         else:
             repo.add_event_progress(
-                event_id, f"{label}：{status}{suffix}，开机已下发或仍在节流窗口内，下一轮确认"
+                event_id, f"{label}：{status}{suffix}，开机已下发或仍在节流窗口内，等待到位"
+            )
+            pending.append(
+                {
+                    "id": row_id,
+                    "label": label,
+                    "target": "Running",
+                    "retry": SETTLE_RETRY_MAX,
+                }
             )
     return pending
 
@@ -1450,6 +1662,18 @@ def manual_switch(
             rows.append(row)
         if len(rows) < 2:
             raise ValueError("均衡组至少要有 2 台可用实例")
+        # 选人之前先真读全组用量。不读的话就是拿库里上次的缓存比大小：
+        # 待机成员可能好几小时没刷新过，报告写着「已切到用量最少的成员」，
+        # 实际切过去的那台反而更满（2 台组点一次立即均衡必切，就是这么来的）。
+        # 读不到的成员 traffic 置 None，_least 会把它排除在外，不拿旧值凑数。
+        for row in rows:
+            try:
+                shift._refresh(row, with_traffic=True)
+            except Exception as exc:  # noqa: BLE001 - 单台读不到不挡其他成员
+                log.warning(
+                    "手动均衡读流量失败 group=%s server=%s: %s", group_id, row.get("id"), exc
+                )
+                row["traffic_used"] = None
         duty_id = int(state.get("duty_server_id") or 0)
         # 全组一起比，不把当班排除在外：以前只在「非当班」里挑最少，2 台组就只剩
         # 唯一一台，哪怕它比当班更满也会被切过去 —— 手动均衡反而把流量搬到了更满
@@ -1512,6 +1736,9 @@ def dissolve_group(group_id: int) -> dict[str, Any]:
     group = repo.get_balance_group(group_id)
     if group is None:
         raise ValueError("均衡组不存在")
+    # 先收尾在等成员到位的事件：delete 会把 balance_state 一起删掉，
+    # 留一条永远 running 的事件在列表里转圈，用户点开什么也看不到。
+    _settle_abandon(group_id, "均衡组已解散，停止等待成员到位")
     repo.delete_balance_group(group_id)
     title = messages.ev("已解散", messages.obj_balance(str(group.get("name") or "")))
     repo.add_event("balance_dissolve", title, "组员恢复为闲散手动，未下发启停指令", group_id=group_id)

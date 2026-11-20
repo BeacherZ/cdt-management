@@ -150,6 +150,19 @@ class ShiftDone(unittest.TestCase):
         self.assertIn("均已普通停机", message.html)
         self.assertNotIn("均已节省停机", message.html)
 
+    def test_stop_summary_only_claims_when_all_settled(self):
+        """没全部停稳就不能说「均已…」：停机中 / 未停机要分开写。"""
+        stopped = {**B, "instance_status": "Stopped", "stopped_mode": "StopCharging"}
+        stopping = {**B, "label": "C2", "instance_status": "Stopping", "stopped_mode": ""}
+        running = {**B, "label": "C3", "instance_status": "Running", "stopped_mode": ""}
+
+        self.assertEqual(messages.stop_summary([stopped]), "均已节省停机")
+        self.assertEqual(messages.stop_summary([stopped, stopping]), "1 台已停机，1 台停机中")
+        self.assertEqual(messages.stop_summary([stopping]), "已下发停机指令，等待停机到位")
+        self.assertEqual(messages.stop_summary([stopped, running]), "1 台已停机，1 台未停机")
+        self.assertEqual(messages.stop_summary([running]), "停机未完成")
+        self.assertEqual(messages.stop_summary([]), "已下发停机指令")
+
     def test_stop_tail_unknown_mode_never_prints_dash(self):
         # _mode 读不到模式时给的是「-」，以前会拼出「均已-」这种车祸；
         # 有机器读不到就退成「均已停机」，不能替它猜「节省停机」
