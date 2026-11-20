@@ -1766,12 +1766,16 @@ input[type='number']::-webkit-inner-spin-button {
    换班组绿、均衡组蓝、单机保活紫，闲散手动不上色。
    以前四种状态只有三种颜色，换班组和均衡组都是蓝，扫一眼分不出是哪套逻辑。
 
-   闲散手动刻意留白：颜色只用来标「这台被哪个自动化流程接管」，
-   没人管的机器用中性描边反而最清楚 —— 一排卡片里没颜色的那几台就是可以随便动的。 */
+   闲散手动刻意不上色：颜色只用来标「这台被哪个自动化流程接管」，
+   没人管的机器用中性色反而最清楚 —— 一排卡片里没颜色的那几台就是可以随便动的。
+   但底色不能留空：透明底在深色卡片上只剩一圈极淡的描边，看着像一块被抠掉的黑洞，
+   和旁边带 soft 底的绿 / 蓝 / 紫胶囊完全不在一个层级。用「中性灰块」这套
+   （和禁用按钮同一配方：--fill-subtle 底 + --line-strong 边 + --muted 字），
+   有底色、有边界，仍然不带任何色彩倾向。 */
 .owner-tag.free {
   color: var(--muted);
-  border-color: var(--line);
-  background: transparent;
+  border-color: var(--line-strong);
+  background: var(--fill-subtle);
 }
 
 .owner-tag.kind-shift {
