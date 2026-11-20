@@ -344,10 +344,43 @@ a:hover {
   box-shadow: var(--shadow-1);
 }
 
+/* 禁用态不用整体 opacity：深色主题下 45% 的红字在卡片上只有 2.1:1、绿底深字只有
+   1.7:1，「开机 / 关机」这种按钮等于凭空消失（实例管理页最明显）。改成中性灰块：
+   文字 --muted 压在 --fill-subtle 上，浅色 7.2:1 / 深色 7.8:1 —— 看得见，但没阴影、
+   没 hover 抬升、光标是 not-allowed，仍一眼看出点不动。 */
 .btn:disabled {
-  opacity: 0.45;
+  --btn-bg: var(--fill-subtle);
+  --btn-border: var(--line-strong);
+  opacity: 1;
   cursor: not-allowed;
+  color: var(--muted);
   box-shadow: none;
+}
+
+/* 主按钮禁用了就不该留绿色渐变和扫光，否则看着还像能点 */
+.btn.primary:disabled {
+  --btn-bg: var(--fill-subtle);
+  --btn-border: var(--line-strong);
+  color: var(--muted);
+  box-shadow: none;
+}
+
+.btn.primary:disabled::after {
+  display: none;
+}
+
+.btn.danger:disabled {
+  background: var(--fill-subtle);
+  border-color: var(--line-strong);
+  color: var(--muted);
+  box-shadow: none;
+}
+
+/* 图标按钮（编辑 / 删除 / 刷新）禁用时保持无底色，只把字与图标调成中性灰 */
+.btn.ghost:disabled {
+  --btn-bg: transparent;
+  --btn-border: transparent;
+  color: var(--muted);
 }
 
 .btn.primary {
@@ -828,10 +861,11 @@ label {
   letter-spacing: -0.01em;
 }
 
+/* 占位符不再叠 0.75 透明度：--muted-soft 本身是 4.8:1（深）/ 5.1:1（浅），
+   再打七五折只剩 3.1:1，深色下几乎读不出提示语 */
 .input::placeholder,
 .textarea::placeholder {
   color: var(--muted-soft);
-  opacity: 0.75;
 }
 
 .input:hover:not(:disabled),
@@ -1247,8 +1281,10 @@ input[type='number']::-webkit-inner-spin-button {
   transform: translateX(17px);
 }
 
+/* 开关禁用：0.4 时轨道与底色只差 2.6:1，深色下几乎看不出是开还是关。
+   留 0.55 保「不可用」的观感，同时让开/关两种轨道仍能分辨 */
 .switch:disabled {
-  opacity: 0.4;
+  opacity: 0.55;
   cursor: not-allowed;
 }
 
@@ -1883,20 +1919,11 @@ input[type='number']::-webkit-inner-spin-button {
   font-size: 13px;
 }
 
-/* 托管中的机器按钮直接灰掉：绿色的「开机」即使半透明也像能点，
-   这里统一压成中性灰，一眼看出不可用 */
-.card-foot .btn:disabled,
-.foot-actions .btn:disabled {
-  opacity: 1;
-  background: var(--panel-inset);
-  border-color: var(--line);
-  color: var(--muted-soft);
-  box-shadow: none;
-}
-
+/* 卡片底部的开关机按钮沿用全局禁用态（--muted on --fill-subtle）；图标只退后
+   一点，别像以前那样连字一起虚掉 —— 那正是「开机按钮看不清」的来源 */
 .card-foot .btn:disabled svg,
 .foot-actions .btn:disabled svg {
-  opacity: 0.55;
+  opacity: 0.75;
 }
 
 /* -------------------------------------------------------------- 服务器视图切换 / 拖拽 / 表格 */
