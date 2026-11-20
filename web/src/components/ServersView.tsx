@@ -20,7 +20,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import { regionLabel } from '../regions'
-import { ownerBase, ownerLabel, ownerTone } from '../owners'
+import { ownerActionHint, ownerLabel, ownerManualFree, ownerTagText, ownerTone } from '../owners'
 import { clockText } from '../time'
 import type { Billing, Managed, Server } from '../types'
 import { Badge, Empty, Meter, money, statusLabel, statusTone, stoppedModeLabel } from './ui'
@@ -241,14 +241,9 @@ export default function ServersView({
             const running = server.instance_status === 'Running'
             const owner = ownerOf(server)
             const busy = busyId === server.id
-            const locked = Boolean(owner?.active)
+            const locked = !ownerManualFree(owner)
             const ownerText = owner ? ownerLabel(owner) : ''
-            const lockHint =
-              owner && locked
-                ? `${ownerBase(owner)}托管中，先暂停或移出后再手动启停`
-                : running
-                  ? '关机（优先节省停机，不支持时转普通停机）'
-                  : '开机'
+            const lockHint = ownerActionHint(owner, running)
 
             return (
               <div
@@ -381,7 +376,7 @@ export default function ServersView({
                         ) : (
                           <HeartPulse size={10} />
                         )}
-                        <span className="owner-tag-text">{ownerBase(owner)}</span>
+                        <span className="owner-tag-text">{ownerTagText(owner)}</span>
                       </>
                     ) : (
                       <>闲散手动</>
@@ -467,7 +462,7 @@ function ServerTable({
             const running = server.instance_status === 'Running'
             const owner = owners.get(server.id) ?? server.managed ?? null
             const busy = busyId === server.id
-            const locked = Boolean(owner?.active)
+            const locked = !ownerManualFree(owner)
             const ownerText = ownerLabel(owner)
             return (
               <tr key={server.id}>
@@ -559,7 +554,7 @@ function ServerTable({
                         ) : (
                           <HeartPulse size={10} />
                         )}
-                        <span className="owner-tag-text">{ownerBase(owner)}</span>
+                        <span className="owner-tag-text">{ownerTagText(owner)}</span>
                       </>
                     ) : (
                       <>闲散手动</>
@@ -597,7 +592,7 @@ function ServerTable({
                     </button>
                     <button
                       className={`btn sm ${running ? 'danger' : 'primary'}`}
-                      title={locked ? '托管中，先移出再启停' : running ? '关机' : '开机'}
+                      title={ownerActionHint(owner, running)}
                       disabled={locked || busy}
                       onClick={() => onAction(server, running ? 'stop' : 'start')}
                     >

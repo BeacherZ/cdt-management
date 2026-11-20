@@ -33,6 +33,10 @@ def managed_map() -> dict[int, dict[str, Any]]:
     """
     managed: dict[int, dict[str, Any]] = {}
     for group in repo.list_balance_groups():
+        # 当班是谁要一起带出去：实例卡片靠它区分「非当班可以手动启停」，
+        # 不在这里给的话前端拿不到判断依据，只能一律锁死。
+        # 组没指派过（duty_server_id=0）时全员都算非当班，本来也就都能手动。
+        duty_id = int((repo.get_balance_state(int(group["id"])) or {}).get("duty_server_id") or 0)
         for member in group.get("members") or []:
             if not member.get("enabled"):
                 continue
@@ -41,6 +45,7 @@ def managed_map() -> dict[int, dict[str, Any]]:
                 "group_id": int(group["id"]),
                 "name": group.get("name") or "",
                 "active": bool(group.get("enabled")),
+                "duty": int(member["server_id"]) == duty_id,
             }
     for group in repo.list_groups():
         for member in group.get("members") or []:

@@ -560,7 +560,9 @@ check("暂停时不再提示托管", not body.get("managed_note"), str(body.get(
 # 重新启用后，手动操作要提醒「下一轮对账会纠正」
 call("POST", f"/api/v1/keepalives/{keepalive_id}/toggle", {"enabled": True})
 status, body = call("POST", f"/api/v1/servers/{idle['id']}/actions/stop")
-check("托管中操作会带提示", body.get("managed_note") == "单机保活", str(body.get("managed_note")))
+note = body.get("managed_note") or ""
+check("托管中操作会带提示", "单机保活" in note, note)
+check("提示说明下一轮会被纠正", "按流程纠正" in note, note)
 call("DELETE", f"/api/v1/keepalives/{keepalive_id}")
 
 grouped = [s for s in call("GET", "/api/v1/servers")[1]["items"] if (s.get("managed") or {}).get("kind") == "group"]

@@ -35,7 +35,50 @@ export function ownerTone(owner: Managed | null | undefined): string {
   return 'kind-keepalive'
 }
 
-/** 名字 + 托管状态；没有归属就是闲散手动 */
+/** 名字 + 托管状态；没有归属就是闲散手动。均衡组再带上当班/非当班，
+    否则实例列表里看到按钮能点、不能点，还得再去均衡页找原因。 */
 export function ownerLabel(owner: Managed | null | undefined): string {
-  return owner ? `${ownerBase(owner)}${owner.active ? '托管' : '已暂停'}` : '闲散手动'
+  if (!owner) return '闲散手动'
+  const duty = owner.kind === 'balance' && owner.active ? (owner.duty ? ' · 当班' : ' · 非当班') : ''
+  return `${ownerBase(owner)}${owner.active ? '托管' : '已暂停'}${duty}`
+}
+
+/** 卡片胶囊里的短标签：当班/非当班要露在外面 —— 它是开关机按钮能不能点的唯一依据 */
+export function ownerTagText(owner: Managed): string {
+  if (owner.kind === 'balance' && owner.active) {
+    return `${ownerBase(owner)}${owner.duty ? ' · 当班' : ' · 非当班'}`
+  }
+  return ownerBase(owner)
+}
+
+/**
+ * 卡片上的开关机按钮能不能点。
+ *
+ * 换班组、单机保活托管中一律锁死：这两套流程每轮都对账，手动启停下一轮就被
+ * 打回，点了只会多出两条反向指令（换班组本来就是为了省钱，排班表才是准的）。
+ *
+ * 均衡组的**非当班**成员是唯一豁免：日常巡检只停不拉，手动开机不会被立刻
+ * 打回（它若设了「下班后停机」，到汇总评估点才停），闲置时手动关掉也能省钱。
+ * 当班仍然锁：关机等于中断对外服务，要换人请走「立即均衡」，那条路会先把
+ * 新机器拉起来再切 DNS。
+ */
+export function ownerManualFree(owner: Managed | null | undefined): boolean {
+  if (!owner || !owner.active) return true
+  return owner.kind === 'balance' && !owner.duty
+}
+
+/** 启停按钮的提示语：锁着要说清为什么，放开要说清点下去之后会怎样 */
+export function ownerActionHint(owner: Managed | null | undefined, running: boolean): string {
+  if (!ownerManualFree(owner)) {
+    if (owner?.kind === 'balance') {
+      return `均衡组「${owner.name}」当班中，要换人请用「立即均衡」`
+    }
+    return `${owner ? ownerBase(owner) : ''}托管中，先暂停或移出后再手动启停`
+  }
+  if (owner?.kind === 'balance' && owner.active) {
+    return running
+      ? '关机（非当班成员，不影响对外服务）'
+      : '开机（非当班成员，不会被自动拉起；若设为「下班后停机」，下次评估会再停）'
+  }
+  return running ? '关机（优先节省停机，不支持时转普通停机）' : '开机'
 }

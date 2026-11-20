@@ -11,6 +11,8 @@ export type Managed = {
   /** 换班组或流量均衡组的 id（kind 为 group / balance 时有效） */
   group_id?: number
   keepalive_id?: number
+  /** 均衡组里这一台是不是当班；只有 kind=balance 有意义 */
+  duty?: boolean
 }
 
 /** 费用快照：本月账单 + 账户余额，来自 BSS（慢数据，后台定时刷新） */

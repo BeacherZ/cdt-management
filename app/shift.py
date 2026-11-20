@@ -3103,22 +3103,51 @@ class Engine:
                     return int(group["id"])
         return 0
 
-    def _managed_note(self, server_id: int) -> str:
-        """这台机器是否被自动化流程托管。托管时返回一句说明，闲散机器返回空串。"""
+    def _managed_note(self, server_id: int) -> tuple[str, str, int]:
+        """这台机器归谁管：返回（归属说明, 流程类型, 组 id）。闲散机器返回空串。
+
+        说法按流程分开，因为「下一轮会不会被纠正」并不相同：
+        换班组和保活每轮都对账，手动操作会被拉回；均衡组非当班不会自动拉起
+        （只停不拉），只有到汇总评估点才按「下班后」设置处理。
+        """
         for group in repo.list_groups():
             if not group.get("enabled"):
                 continue
             for member in group.get("members") or []:
                 if member.get("enabled") and int(member["server_id"]) == server_id:
-                    return f"换班组「{group.get('name')}」"
+                    return f"换班组「{group.get('name')}」", "shift", int(group["id"])
         for item in repo.list_keepalives():
             if int(item["server_id"]) == server_id and item.get("enabled"):
-                return "单机保活"
-        return ""
+                return "单机保活", "keepalive", 0
+        for group in repo.list_balance_groups():
+            if not group.get("enabled"):
+                continue
+            hit = any(
+                member.get("enabled") and int(member["server_id"]) == server_id
+                for member in group.get("members") or []
+            )
+            if not hit:
+                continue
+            state = repo.get_balance_state(int(group["id"])) or {}
+            if int(state.get("duty_server_id") or 0) == server_id:
+                return f"均衡组「{group.get('name')}」（当班）", "balance_duty", int(group["id"])
+            return f"均衡组「{group.get('name')}」（非当班）", "balance_off", int(group["id"])
+        return "", "", 0
+
+    def _managed_detail(self, note: str, mode: str) -> str:
+        """把归属说明拼成「由谁托管、之后会怎样」，事件详情和接口提示共用。"""
+        if not note:
+            return ""
+        if mode == "balance_off":
+            # 只停不拉：手动开机不会被下一轮巡检打回，别写成「会被纠正」吓人
+            return f"由{note}托管，汇总评估时按「下班后」设置处理"
+        if mode == "balance_duty":
+            return f"由{note}托管，掉线会触发故障转移"
+        return f"由{note}托管，下一轮同步会按流程纠正"
 
     def manual_action(self, server_id: int, action: str) -> dict[str, Any]:
         """手动开关机。闲散服务器（没编进任何自动化流程）可以随便用；
-        托管中的机器依旧允许操作，但会提示下一轮对账会按流程纠正。
+        托管中的机器也允许操作，返回的提示会说明这一台随后会不会被自动纠正。
 
         流程：下发指令 → 创建 running 事件 → 立即返回。实例状态由后台
         事件确认器每 5 秒轮询，到位后把事件标记为完成。
@@ -3133,7 +3162,15 @@ class Engine:
 
         label = "开机" if action == "start" else "停机"
         target_status = "Running" if action == "start" else "Stopped"
-        note = self._managed_note(server_id)
+        note, managed_mode, managed_group_id = self._managed_note(server_id)
+        hint = self._managed_detail(note, managed_mode)
+
+        # 均衡组正在给新当班开机 / 切 DNS 的窗口里，手动启停会和那条在飞的指令
+        # 打架（一边起一边停，最后状态谁也说不清）。等它这轮走完再操作。
+        if managed_mode.startswith("balance") and managed_group_id:
+            state = repo.get_balance_state(managed_group_id) or {}
+            if str(state.get("phase") or "") in ("starting", "switching"):
+                raise ValueError("该机器所在的均衡组正在切换，请稍后重试")
 
         # 幂等：同一台机器同一目标状态已有进行中的手动事件，直接返回，不再重复
         # 下发指令。否则快速连点会连发两次启停、产生多条转圈事件。
@@ -3142,7 +3179,7 @@ class Engine:
                 "status": "pending",
                 "duplicate": True,
                 "target_status": target_status,
-                "managed_note": note,
+                "managed_note": hint,
                 "instance_status": server.get("instance_status") or "Unknown",
                 "stopped_mode": server.get("stopped_mode") or "",
             }
@@ -3186,8 +3223,8 @@ class Engine:
             # 写实际生效的模式：选了节省停机但规格不支持会退化成普通停机，
             # 事件里再写死「节省停机」就是骗人（账单照扣规格费）。
             detail += f"（{messages.mode_label(stop_mode)}）"
-        if note:
-            detail += f" / 由{note}托管，下一轮同步会按流程纠正"
+        if hint:
+            detail += f" / {hint}"
 
         event_id = repo.add_event(
             "manual",
@@ -3206,7 +3243,7 @@ class Engine:
             "status": "pending",
             "event_id": event_id,
             "target_status": target_status,
-            "managed_note": note,
+            "managed_note": hint,
             "instance_status": server.get("instance_status") or "Unknown",
             "stopped_mode": server.get("stopped_mode") or "",
         }

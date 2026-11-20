@@ -26,7 +26,7 @@ os.environ["CDT_DATA_DIR"] = _TMP
 os.environ["CDT_DRY_RUN"] = "1"
 os.environ["CDT_MOCK_OP_DELAY"] = "0"
 
-from app import db, owners, repo  # noqa: E402
+from app import db, owners, repo, shift  # noqa: E402
 
 
 def _make_server(label: str, instance_id: str) -> int:
@@ -104,6 +104,38 @@ class OwnersTest(unittest.TestCase):
         self.assertEqual(managed[self.bal_a]["kind"], "balance")
         self.assertEqual(managed[self.keep]["kind"], "keepalive")
         self.assertNotIn(self.idle, managed)
+
+    # -- 均衡组当班标记 -------------------------------------------------
+
+    def test_managed_map_marks_balance_duty(self) -> None:
+        """实例卡片靠这个标记决定开关机按钮放不放行，标错就会锁错人。"""
+        repo.upsert_balance_state(self.balance_id, duty_server_id=self.bal_a)
+        managed = owners.managed_map()
+        self.assertTrue(managed[self.bal_a]["duty"])
+        self.assertFalse(managed[self.bal_b]["duty"])
+
+    def test_manual_note_splits_balance_duty_and_off(self) -> None:
+        repo.upsert_balance_state(self.balance_id, duty_server_id=self.bal_a)
+        note, mode, gid = shift.engine._managed_note(self.bal_a)
+        self.assertEqual(mode, "balance_duty")
+        self.assertEqual(gid, self.balance_id)
+        self.assertIn("当班", note)
+        # 当班被手动关机 = 中断对外服务，提示要说清楚后面靠什么兜底
+        self.assertIn("故障转移", shift.engine._managed_detail(note, mode))
+
+        note, mode, _ = shift.engine._managed_note(self.bal_b)
+        self.assertEqual(mode, "balance_off")
+        self.assertIn("非当班", note)
+        # 非当班是唯一允许手动开关机的托管成员：提示不能写成「会被纠正」
+        detail = shift.engine._managed_detail(note, mode)
+        self.assertIn("按「下班后」设置处理", detail)
+        self.assertNotIn("按流程纠正", detail)
+
+    def test_manual_action_refuses_while_balance_switching(self) -> None:
+        repo.upsert_balance_state(self.balance_id, duty_server_id=self.bal_a, phase="switching")
+        with self.assertRaises(ValueError) as ctx:
+            shift.engine.manual_action(self.bal_b, "start")
+        self.assertIn("正在切换", str(ctx.exception))
 
     # -- 四个方向都要拦 -------------------------------------------------
 

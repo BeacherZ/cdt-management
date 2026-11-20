@@ -124,6 +124,7 @@ function ownerMap(overview: Overview): Map<number, Managed> {
         name: group.name,
         active: group.enabled && member.enabled,
         group_id: group.id,
+        duty: member.is_duty,
       })
     }
   }
@@ -360,8 +361,10 @@ export default function App() {
         action === 'start' ? '已下发开机指令，正在确认状态…' : '已下发停机指令，正在确认状态…',
         'success',
       )
+      // 托管中的机器：后端按流程给不同说法（换班组会被下一轮纠正、
+      // 均衡组非当班不会被自动拉起），这里原样展示，不再自己拼一句通用文案。
       if (result?.managed_note) {
-        toast(`${result.managed_note}托管中，下一轮同步会按流程纠正`, 'info')
+        toast(result.managed_note, 'info')
       }
     } catch (error) {
       toast(error instanceof Error ? error.message : '操作失败', 'error')
