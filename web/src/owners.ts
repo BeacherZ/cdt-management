@@ -35,6 +35,18 @@ export function ownerTone(owner: Managed | null | undefined): string {
   return 'kind-keepalive'
 }
 
+/**
+ * 这台机器此刻在组里当不当班；不带归属 / 组已暂停 / 不是组员都返回空串。
+ *
+ * 换班组（按排班表轮）和均衡组（按评估点指派）都有当班概念，**两种组都要说**：
+ * 以前只有均衡组露这一句，同一页里两种胶囊长得不一样；而且换班组非当班成员
+ * 的按钮是锁着的，不写出来就只能靠猜。
+ */
+export function ownerDutyText(owner: Managed | null | undefined): string {
+  if (!owner || !owner.active || owner.duty === undefined) return ''
+  return owner.duty ? '当班' : '非当班'
+}
+
 /** 名字 + 托管状态；没有归属就是闲散手动。均衡组再带上当班/非当班，
     否则实例列表里看到按钮能点、不能点，还得再去均衡页找原因。 */
 export function ownerLabel(owner: Managed | null | undefined): string {
@@ -43,12 +55,11 @@ export function ownerLabel(owner: Managed | null | undefined): string {
   return `${ownerBase(owner)}${owner.active ? '托管' : '已暂停'}${duty}`
 }
 
-/** 卡片胶囊里的短标签：当班/非当班要露在外面 —— 它是开关机按钮能不能点的唯一依据 */
+/** 卡片胶囊里的短标签：当班/非当班要露在外面 —— 它是开关机按钮能不能点的唯一依据。
+    换班组和均衡组共用一套写法（组名 + 「· 当班」），不再一种组有一句、另一种没有。 */
 export function ownerTagText(owner: Managed): string {
-  if (owner.kind === 'balance' && owner.active) {
-    return `${ownerBase(owner)}${owner.duty ? ' · 当班' : ' · 非当班'}`
-  }
-  return ownerBase(owner)
+  const duty = ownerDutyText(owner)
+  return `${ownerBase(owner)}${duty ? ` · ${duty}` : ''}`
 }
 
 /**

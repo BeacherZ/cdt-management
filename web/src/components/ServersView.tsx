@@ -20,10 +20,52 @@ import {
   Trash2,
 } from 'lucide-react'
 import { regionLabel } from '../regions'
-import { ownerActionHint, ownerLabel, ownerManualFree, ownerTagText, ownerTone } from '../owners'
+import {
+  ownerActionHint,
+  ownerBase,
+  ownerDutyText,
+  ownerLabel,
+  ownerManualFree,
+  ownerTone,
+} from '../owners'
 import { clockText } from '../time'
 import type { Billing, Managed, Server } from '../types'
 import { Badge, Empty, Meter, money, statusLabel, statusTone, stoppedModeLabel } from './ui'
+
+/**
+ * 归属胶囊：卡片和列表共用这一份。
+ *
+ * 图标 + 组名 + 「· 当班 / · 非当班」，换班组和均衡组写法完全一样 —— 以前只有
+ * 均衡组带后半句，同一页两种胶囊不一样长，换班组非当班成员的按钮锁着也没理由。
+ *
+ * 当班那截单独成 span、不参与收缩：组名太长时只截组名，当班/非当班必须留着。
+ */
+function OwnerTag({ owner }: { owner: Managed | null }) {
+  if (!owner) {
+    return (
+      <span className="owner-tag free" title="闲散手动">
+        闲散手动
+      </span>
+    )
+  }
+  const duty = ownerDutyText(owner)
+  return (
+    <span
+      className={`owner-tag ${ownerTone(owner)}${owner.active ? '' : ' paused'}`}
+      title={ownerLabel(owner)}
+    >
+      {owner.kind === 'group' ? (
+        <Repeat size={10} />
+      ) : owner.kind === 'balance' ? (
+        <Scale size={10} />
+      ) : (
+        <HeartPulse size={10} />
+      )}
+      <span className="owner-tag-text">{ownerBase(owner)}</span>
+      {duty && <span className="owner-duty">· {duty}</span>}
+    </span>
+  )
+}
 
 type Props = {
   servers: Server[]
@@ -242,7 +284,6 @@ export default function ServersView({
             const owner = ownerOf(server)
             const busy = busyId === server.id
             const locked = !ownerManualFree(owner)
-            const ownerText = owner ? ownerLabel(owner) : ''
             const lockHint = ownerActionHint(owner, running)
 
             return (
@@ -363,25 +404,7 @@ export default function ServersView({
                 )}
 
                 <div className="card-foot">
-                  <span
-                    className={`owner-tag ${ownerTone(owner)}${owner && !owner.active ? ' paused' : ''}`}
-                    title={ownerText || '闲散手动'}
-                  >
-                    {owner ? (
-                      <>
-                        {owner.kind === 'group' ? (
-                          <Repeat size={10} />
-                        ) : owner.kind === 'balance' ? (
-                          <Scale size={10} />
-                        ) : (
-                          <HeartPulse size={10} />
-                        )}
-                        <span className="owner-tag-text">{ownerTagText(owner)}</span>
-                      </>
-                    ) : (
-                      <>闲散手动</>
-                    )}
-                  </span>
+                  <OwnerTag owner={owner} />
 
                   <div className="foot-actions">
                     {!owner && (
@@ -463,7 +486,6 @@ function ServerTable({
             const owner = owners.get(server.id) ?? server.managed ?? null
             const busy = busyId === server.id
             const locked = !ownerManualFree(owner)
-            const ownerText = ownerLabel(owner)
             return (
               <tr key={server.id}>
                 <td data-label="实例">
@@ -541,25 +563,7 @@ function ServerTable({
                   />
                 </td>
                 <td data-label="归属">
-                  <span
-                    className={`owner-tag ${ownerTone(owner)}${owner && !owner.active ? ' paused' : ''}`}
-                    title={ownerText || '闲散手动'}
-                  >
-                    {owner ? (
-                      <>
-                        {owner.kind === 'group' ? (
-                          <Repeat size={10} />
-                        ) : owner.kind === 'balance' ? (
-                          <Scale size={10} />
-                        ) : (
-                          <HeartPulse size={10} />
-                        )}
-                        <span className="owner-tag-text">{ownerTagText(owner)}</span>
-                      </>
-                    ) : (
-                      <>闲散手动</>
-                    )}
-                  </span>
+                  <OwnerTag owner={owner} />
                 </td>
                 <td data-label="操作">
                   <div className="server-table-actions">

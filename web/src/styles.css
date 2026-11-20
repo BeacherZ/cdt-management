@@ -1788,6 +1788,14 @@ input[type='number']::-webkit-inner-spin-button {
   background: var(--violet-soft);
 }
 
+/* 当班 / 非当班：胶囊里独立成段，不参与收缩 —— 组名太长时只截组名，
+   这半句必须留着（它才是按钮锁没锁的原因）。margin-left 把它推回组名边上，
+   靠文本里的空格分隔，和均衡组原来的写法一致。只管排版，不改任何颜色。 */
+.owner-duty {
+  flex: none;
+  margin-left: -4px;
+}
+
 /* 暂停中的自动化流程：颜色还是这套流程的，只加虚线边 —— 一眼看出「还挂着但没在管」 */
 .owner-tag.paused {
   border-style: dashed;

@@ -135,6 +135,9 @@ function ownerMap(overview: Overview): Map<number, Managed> {
         name: group.name,
         active: group.enabled && member.enabled,
         group_id: group.id,
+        // 换班组也有当班：胶囊和均衡组一样写「· 当班 / · 非当班」，
+        // 非当班成员按钮锁着的时候才说得清为什么
+        duty: member.is_duty,
       })
     }
   }
