@@ -208,9 +208,20 @@
     opacity: 1;
   }
 
-  .nav-item:hover {
-    background: var(--fill-subtle);
+  /* 悬停底色用 --panel-inset，和概览页「实例状态」表格行、「最近事件」条目
+     是同一层灰。原来用 --fill-subtle(#f7f8f9)，但侧栏自身的白渐变叠完背景
+     就落在 #f7f8fa 一带——同色，等于没有高亮，看着就是一片白。
+     --panel-inset 是压上去的半透明层，比背景深一档，这才看得见那条。
+     排除 .on：选中行是实心绿药丸，不该被悬停灰盖掉。 */
+  .nav-item:hover:not(.on) {
+    background: var(--panel-inset);
     color: var(--ink);
+  }
+
+  /* 深色主题不长这条：那边 --fill-subtle 是实色深灰，浮在深色侧栏上刚好，
+     换 --panel-inset（3.5% 白）反而更淡 */
+  :root[data-theme='dark'] .nav-item:hover:not(.on) {
+    background: var(--fill-subtle);
   }
 }
 
@@ -245,27 +256,35 @@
   white-space: nowrap;
 }
 
-/* 数量：只做「这一项里有多少东西」的提示，本身不可点。
-   以前做成灰底小胶囊，一排三个灰圆点反而像脚注；改成右对齐的等宽数字，
-   和表格里的数字同一个口径，扫视时不会把视线从名字上拽走。 */
+/* 数量：右侧一颗小胶囊（不可点）。底色用 --ink 的 8% 半透明层：浅色是压深一档
+   的灰、深色是提亮一档的灰，都跟主题走。不用 --fill-subtle —— 它和侧栏白渐变
+   几乎同色，胶囊会隐形。等宽数字 + 最小宽度，2 位和 3 位切换时胶囊不会一抽一抽。 */
 .nav-count {
   flex-shrink: 0;
+  min-width: 24px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
   color: var(--muted-soft);
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 600;
+  line-height: 18px;
   text-align: center;
   font-variant-numeric: tabular-nums;
-  transition: color var(--t-fast) var(--ease);
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
 }
 
+/* 选中行是绿药丸：灰胶囊嵌在绿底上会显脏，换成一层半透明白当底 */
 .nav-item.on .nav-count {
+  background: rgba(255, 255, 255, 0.2);
   color: #fff;
-  opacity: 0.84;
 }
 
 :root[data-theme='dark'] .nav-item.on .nav-count {
+  background: rgba(4, 36, 27, 0.14);
   color: #04241b;
-  opacity: 0.7;
 }
 
 .sidebar-foot {
