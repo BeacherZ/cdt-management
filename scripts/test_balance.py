@@ -890,5 +890,45 @@ class Manual(_Base):
         self.assertEqual(self._duty(), self.a)
 
 
+class BootstrapAudit(_Base):
+    def test_new_group_audits_and_fixes_member_state(self) -> None:
+        """新建组要像换班组一样逐台核对：设停机的停掉，设保持运行的拉起。"""
+        self._traffic(self.a, 10.0)  # A 最少 → 当班
+        self._traffic(self.b, 50.0)
+        self._traffic(self.c, 80.0)
+        repo.upsert_balance_group(
+            {
+                "id": self.group_id,
+                "name": "均衡组",
+                "enabled": True,
+                "failover_enabled": True,
+                "interval_minutes": 60,
+                "diff_gb": 10,
+                "min_duty_minutes": 30,
+                "members": [
+                    {"server_id": self.a, "off_action": "keep"},
+                    {"server_id": self.b, "off_action": "stop"},
+                    {"server_id": self.c, "off_action": "keep"},
+                ],
+            }
+        )
+        self._set_status(self.b, "Running")  # 设了停机却还在跑
+        self._set_status(self.c, "Stopped")  # 设了保持运行却停着
+
+        balance.bootstrap_group(self.group_id, CONFIG)
+
+        self.assertEqual(self._duty(), self.a)
+        self.assertIn(self.b, self.stopped, "设了停机的待机成员应被停掉")
+        self.assertIn(self.c, self.started, "设了保持运行的待机成员应被拉起")
+        self.assertNotIn(self.a, self.started, "当班本来就在跑，不该重复下发开机")
+
+        event = repo.list_events(limit=5, kind="balance_new")[0]
+        texts = [str(step.get("text") or "") for step in repo.get_event(int(event["id"]))["progress"]]
+        joined = " / ".join(texts)
+        self.assertIn("按组员设置核对状态", joined)
+        self.assertTrue(any("均衡B" in t and "已按设置停机" in t for t in texts), joined)
+        self.assertTrue(any("均衡C" in t and "已按设置开机" in t for t in texts), joined)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

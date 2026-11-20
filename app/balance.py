@@ -475,6 +475,10 @@ def _begin(
             }
 
     event_id = _open_event(group, pick, reason)
+    # 新建组不只是「指一次域名」：组员此刻的真实状态往往和「下班后」设置对不上，
+    # 逐台核对并按设置摆正，用户点开事件就能看到每台为什么动/没动。
+    if reason == "new":
+        _audit_members(group, rows, event_id, pick_id)
     # 换人 / 重启都从零开始计次：新目标要享有完整的「试 3 次」额度，
     # 不清的话它一上来就继承上一台的次数，下一轮立刻又被判死。
     _clear_wait(group_id, pick_id)
@@ -1017,6 +1021,57 @@ def _open_event(group: dict[str, Any], pick: dict[str, Any], reason: str) -> int
         f"{head}：当班 {label}；原因：{_reason_text(reason)}",
     )
     return event_id
+
+
+def _audit_members(
+    group: dict[str, Any], rows: list[dict[str, Any]], event_id: int, duty_id: int
+) -> None:
+    """新建组时逐台核对并摆正成员状态，口径与交班新建组一致。
+
+    当班的开机会由 `_begin` 自己下发，这里只报状态，不重复发指令；待机成员按
+    各自的「下班后」设置处理：设了停机的在跑就停掉，设了保持运行的停着就拉起。
+    以前这一步完全没做，事件里只有一句「待机 2 台」，设了停机却还在跑的成员
+    不会被发现，也永远不会被摆正。
+    """
+    group_id = int(group["id"])
+    repo.add_event_progress(event_id, "按组员设置核对状态：当班运行，待机按「下班后」摆正")
+    for row in sorted(rows, key=lambda item: int(item.get("position") or 0)):
+        label = row.get("label") or f"#{row['id']}"
+        is_duty = int(row["id"]) == duty_id
+        should_run = is_duty or str(row.get("off_action") or "keep") == "keep"
+        try:
+            # 只读状态：这一轮不查流量（流量在 _begin 里只对当班查一次）
+            shift._refresh(row, with_traffic=False)
+        except Exception as exc:  # noqa: BLE001 - 单台读不到不能挡住其他成员
+            repo.add_event_progress(
+                event_id, f"{label}：状态读取失败（{shift._brief_exc(exc)}），交给下一轮同步"
+            )
+            continue
+        status = str(row.get("instance_status") or "")
+        suffix = messages.status_suffix(status, row.get("stopped_mode"))
+        running = _is_running(row)
+        if running and should_run:
+            repo.add_event_progress(event_id, f"{label}：{status}{suffix}，符合设置")
+        elif running and not should_run:
+            try:
+                shift.stop_server_by_pref(row)
+                repo.add_event_progress(
+                    event_id, f"{label}：{status}{suffix}，已按设置停机"
+                )
+            except Exception as exc:  # noqa: BLE001 - 停不掉下一轮再试，别卡住建组
+                repo.add_event_progress(
+                    event_id, f"{label}：停机失败（{shift._brief_exc(exc)}），下一轮重试"
+                )
+        elif not should_run:
+            repo.add_event_progress(event_id, f"{label}：{status}{suffix}，符合设置")
+        elif is_duty:
+            repo.add_event_progress(event_id, f"{label}：{status}{suffix}，需要开机")
+        elif _start(group_id, row):
+            repo.add_event_progress(event_id, f"{label}：{status}{suffix}，已按设置开机")
+        else:
+            repo.add_event_progress(
+                event_id, f"{label}：{status}{suffix}，开机已下发或仍在节流窗口内，下一轮确认"
+            )
 
 
 # --------------------------------------------------------------------------
