@@ -1355,6 +1355,29 @@ class ReconcileErrorDoesNotStick(_Base):
         self.assertIn("boom", str(state.get("note")), "出错原因要留痕，便于界面显示")
 
 
+class HeldStopRetry(_Base):
+    """当班超限 + 关故障转移：停机失败后要补停，别让机器把额度烧穿。"""
+
+    def test_retry_stops_running_held_duty(self) -> None:
+        self._settle_on(self.a)
+        self._traffic(self.a, 200.0)
+        repo.upsert_balance_state(
+            self.group_id,
+            phase="exhausted",
+            note=balance.STOP_DUTY_NOTE,
+            duty_server_id=self.a,
+            next_eval_at=0,
+        )
+
+        self._tick()
+        self.assertIn(self.a, self.stopped, "exhausted 期间仍要把它停掉")
+
+        # 5 分钟内不重复下发（flag 节流）
+        count = len(self.stopped)
+        self._tick(offset=60)
+        self.assertEqual(len(self.stopped), count, "补停要走间隔，不能每轮都砸接口")
+
+
 class SettleFastChannel(_Base):
     """等成员到位这一段必须走 10 秒加速通道，不能等下一轮日常巡检。
 

@@ -64,6 +64,9 @@ RUNNING_EVENT_KINDS = ("balance_switch", "balance_new", "balance_recover")
 # 「当班超限、但组里关了故障转移」这条熔断的原因标记。
 # 它和「全员到阈值」共用 phase=exhausted，但解除条件完全不同，靠这句话分辨。
 STOP_DUTY_NOTE = "当班流量超限且未启用故障转移"
+# 「当班超限 + 关故障转移」状态下补停下发的间隔：停机失败大多是限流 / 瞬态，
+# 5 分钟一次足够，既不放过该停的机器，也不会把接口刷爆。
+HELD_STOP_RETRY = 300
 
 _lock = threading.RLock()
 
@@ -420,6 +423,11 @@ def _reconcile(
                 ready = True
             else:
                 ready = _used(held) is not None and not over_limit(held)
+                if not ready:
+                    # 上一轮停机可能失败了（限流 / 瞬态）：按几分钟一次的节奏补停。
+                    # 不补的话这台会把额度烧穿 —— exhausted 之后不会再走正常换人流程，
+                    # 事件里那句「下一轮还会再来」也就成了空话。
+                    _retry_stop_held(group_id, held)
         else:
             # 熔断（能读到的都到阈值）：任一台流量回落就解除，下一轮重新指派
             ready = any(_used(row) is not None and not over_limit(row) for row in rows)
@@ -1208,8 +1216,11 @@ def _breaker(
             text = (f"{status}，" if status else "") + messages.stop_claim(row)
         repo.add_event_progress(event_id, f"{label}：{text}")
     for row in failed:
+        # 不写「下一轮重试」：熔断后整组进 exhausted，巡检不再下发启停指令，
+        # 那句承诺没有兑现的路径。停机失败的机器还在烧流量，需要人来处理。
         repo.add_event_progress(
-            event_id, f"{row.get('label') or f'#{row.get('id')}'}：停机失败，下一轮重试"
+            event_id,
+            f"{row.get('label') or f'#{row.get('id')}'}：停机失败，需手动处理",
         )
     repo.add_event_progress(event_id, "本轮停机指令已下发完毕")
     if config.get("notify_on_breaker") == "1":
@@ -1232,6 +1243,31 @@ def _no_candidate(
         log.info("流量均衡暂不动作：成员流量未读到 group=%s", group.get("id"))
         return {"group": int(group["id"]), "state": "idle", "note": "成员流量未读到"}
     return _breaker(group, rows, config, now, note=note)
+
+
+def _retry_stop_held(group_id: int, row: dict[str, Any]) -> None:
+    """exhausted 期间补停那一台：只在它真还在跑、且距上次尝试超过间隔时下发。
+
+    这条路径不属于「换人」，不动 phase、不写事件，只做一件事：别让一台该停的
+    机器一直烧额度。停机失败大多是限流 / 瞬态，过几分钟自己就好了。
+    """
+    flag = f"balance_stop_retry:{group_id}"
+    age = repo.flag_age(flag)
+    if 0 <= age < HELD_STOP_RETRY:
+        return
+    try:
+        shift._refresh(row, with_traffic=False)
+    except Exception:  # noqa: BLE001 - 读不到状态就别瞎停，下一轮再看
+        return
+    repo.set_flag(flag)
+    if not _is_running(row):
+        return
+    try:
+        shift.stop_server_by_pref(dict(row))
+    except Exception as exc:  # noqa: BLE001 - 过 5 分钟再试
+        log.warning("流量均衡补停失败 group=%s server=%s: %s", group_id, row.get("id"), exc)
+        return
+    repo.set_flag(f"balance_stop:{group_id}:{int(row['id'])}")
 
 
 def _stop_duty(
@@ -1257,7 +1293,7 @@ def _stop_duty(
     if not shift._is_stopped_any_mode(duty):
         try:
             mode = shift.stop_server_by_pref(dict(duty))
-        except Exception as exc:  # noqa: BLE001 - 停不掉也要记，下一轮还会再来
+        except Exception as exc:  # noqa: BLE001 - exhausted 期间会按间隔补停，见 _retry_stop_held
             log.warning("流量均衡超限停机失败 group=%s server=%s: %s", group_id, duty.get("id"), exc)
             mode = ""
         else:
