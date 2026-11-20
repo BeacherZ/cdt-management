@@ -30,6 +30,12 @@
   --panel-solid: #ffffff;
   --panel-soft: rgba(244, 246, 248, 0.9);
   --panel-inset: rgba(16, 24, 40, 0.028);
+  /* --panel-inset 是 2.8% 的极淡填充，叠在白卡上只差 7 个色阶。安卓合成器对这种
+     极小的 alpha 会做 8×8 有序抖动（ordered dithering）防色带，结果浅灰块里浮出
+     一层方格噪点——域名胶囊、输入框这类小面积填充最明显。下面两个是它合成成实色
+     后的取值，像素一致但没有 alpha，专给「大面积填充」用，也就不触发抖动。 */
+  --fill-subtle: #f7f8f9;
+  --fill-field: #fcfdfd;
 
   /* 文字 */
   --ink: #101318;
@@ -94,6 +100,9 @@
   --panel-solid: #14181e;
   --panel-soft: rgba(29, 35, 44, 0.72);
   --panel-inset: rgba(255, 255, 255, 0.035);
+  /* 同浅色主题：3.5% 白叠在 #14181e 上合成值，深色下抖动更明显（OLED 低亮度） */
+  --fill-subtle: #1c2026;
+  --fill-field: #171c22;
 
   --ink: #e9eef5;
   --ink-soft: #c2cbd6;
@@ -164,6 +173,9 @@
 
 * {
   box-sizing: border-box;
+  /* 安卓 Chrome 点按链接/按钮会刷一层半透明蓝块，在深绿药丸上就是一个「方块闪」；
+     页面自己已经有 hover/active 反馈，这层系统高亮纯属干扰 */
+  -webkit-tap-highlight-color: transparent;
 }
 
 html,
@@ -171,6 +183,23 @@ body {
   margin: 0;
   padding: 0;
   min-height: 100%;
+  /* 手机浏览器在横竖屏切换、或系统字号偏大时会把正文放大一档，
+     字形跟着拉扯发虚。锁死 100% 让字号只由我们的档位决定 */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* 触控目标去掉 300ms 双击缩放等待：点菜单立刻响应，不再有「按下去顿一下」 */
+button,
+a,
+label,
+.nav-item,
+.btn,
+.input,
+.select,
+.textarea,
+.tab {
+  touch-action: manipulation;
 }
 
 body {
@@ -649,7 +678,7 @@ label {
   padding: 1px 9px;
   border-radius: 999px;
   border: 1px solid var(--line);
-  background: var(--panel-inset);
+  background: var(--fill-subtle);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -737,7 +766,7 @@ label {
   font-size: 12px;
   padding: 1px 7px;
   border-radius: 999px;
-  background: var(--panel-inset);
+  background: var(--fill-subtle);
   border: 1px solid var(--line);
   color: var(--ink-soft);
   font-family: ui-monospace, Consolas, monospace;
@@ -780,9 +809,10 @@ label {
 .input:not([type='color']):not([type='checkbox']):not([type='radio']),
 .select,
 .textarea {
-  /* 老浏览器不认识 color-mix，整条会失效 → 输入框掉回透明底，和卡片糊在一起 */
+  /* 实色而不是「白 + 2.8% inset」的混色：混色结果仍带 alpha，
+     手机上会触发 dithering（见 --fill-subtle 的说明） */
   background: var(--panel-soft);
-  background: color-mix(in srgb, var(--panel-solid) 82%, var(--panel-inset));
+  background: var(--fill-field);
 }
 
 .input.mono {
@@ -2724,6 +2754,24 @@ input[type='number']::-webkit-inner-spin-button {
    每一行左右两端都咬住同一条边界，8 张卡叠起来是齐的；
    多占一点高度没关系，整齐比省地方重要。 */
 @media (max-width: 820px) {
+  /* 关掉全局颗粒层。它是一张 120×120 的 feTurbulence 噪点图平铺全屏，
+     DPR 2/3 的手机上这张图会被放大成 2×2 / 3×3 的色块——浅灰胶囊、输入框这种
+     低对比度区域一垫底，肉眼看就是一层方格噪点；而且 feTurbulence 每帧重算，
+     是低端安卓滚动和点击掉帧的大头。手机上本来也不需要它防色带（卡片已是实色）。 */
+  body::after {
+    display: none;
+  }
+
+  /* iOS Safari 对字号 <16px 的输入框，聚焦时会强制把整页放大一档，
+     放大后 13px 等宽字形重排、发虚，退出聚焦还留着轻微缩放。
+     16px 是 safari 不触发缩放的下限，只在手机上提，桌面仍按 13px 排版 */
+  .input,
+  .input.mono,
+  .select,
+  .textarea {
+    font-size: 16px;
+  }
+
   /* 手机端卡片统一用实色（--panel-solid），不再走半透明玻璃。
      实例卡拆成独立小卡后是实色白 #fff，而 .card / .stat 还是 rgba(255,255,255,.72)
      加 14px 模糊，叠在 #eceff3 页面上算出来是 #fafbfc——同屏比较时一个更白、

@@ -200,14 +200,18 @@
   color: var(--blue);
 }
 
-/* 悬停时只提不亮，颜色还是归属色，鼠标准星扫过去不会一片闪 */
-.nav-item:hover svg {
-  opacity: 1;
-}
+/* 悬停时只提不亮，颜色还是归属色，鼠标准星扫过去不会一片闪。
+   必须限定真指针：触屏上 :hover 会在 tap 后一直挂着，松手了那层灰底还在，
+   手指划过去就像「方块卡在菜单上」 */
+@media (hover: hover) and (pointer: fine) {
+  .nav-item:hover svg {
+    opacity: 1;
+  }
 
-.nav-item:hover {
-  background: var(--panel-inset);
-  color: var(--ink);
+  .nav-item:hover {
+    background: var(--fill-subtle);
+    color: var(--ink);
+  }
 }
 
 /* 选中行是一颗实心品牌绿药丸：底色已经够重，字不再加粗（600 以上在白字上
@@ -395,6 +399,11 @@
        设置/退出图标也会停在半空中而不是贴到屏幕右边 */
     align-self: stretch;
     width: 100%;
+    /* 顶栏 sticky 全宽，blur(20px) 每帧都要重算整条背景：低端安卓滚动/点击时
+       会掉帧，边缘还会闪方块状残影。手机上直接换成实色，不再做玻璃 */
+    background: var(--panel-solid);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
 
   .sidebar::after {
