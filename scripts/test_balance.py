@@ -371,6 +371,31 @@ class TrafficProtection(_Base):
         self.assertNotEqual(self._state().get("phase"), "exhausted")
         self.assertFalse(repo.list_events(limit=10, kind="balance_breaker"))
 
+    def test_no_breaker_when_duty_itself_is_fine(self) -> None:
+        """其余成员全到阈值、但当班没超：继续当班，不许整组熔断。
+
+        评估点选不到接替的人，只说明「没得换」，不说明「当班也该停」。
+        以前这里直接走 _breaker，会把一台没超限、域名还指着的当班一起停掉 ——
+        等于流量最少的机器被「没人接班」连坐。
+        """
+        self._settle_on(self.a)
+        self._traffic(self.a, 30.0)   # 当班远未到阈值
+        self._traffic(self.b, 195.0)  # 待机已到阈值
+        self._traffic(self.c, 196.0)
+        self._set_status(self.b, "Running")
+        self._set_status(self.c, "Running")
+        repo.upsert_balance_state(self.group_id, next_eval_at=0)
+
+        self._tick()
+
+        self.assertEqual(self._duty(), self.a, "当班没超限，不该被换掉")
+        self.assertNotIn(self.a, self.stopped, "当班没超限，不该被连坐停机")
+        self.assertEqual(self._state().get("phase"), "idle")
+        # 超限的待机成员仍要被流量保护停掉
+        self.assertIn(self.b, self.stopped)
+        self.assertIn(self.c, self.stopped)
+        self.assertFalse(repo.list_events(limit=10, kind="balance_breaker"))
+
     def test_over_limit_without_failover_stops_only_duty(self) -> None:
         repo.upsert_balance_group(
             {
@@ -396,7 +421,11 @@ class TrafficProtection(_Base):
         self.assertEqual(self.stopped, [self.a], "只停超限的当班，不许连坐")
         self.assertEqual(self._state().get("phase"), "exhausted")
         self.assertTrue(self.sent, "超限停机必须通知")
-        self.assertIn("超限停机报告（均衡组）", self.sent[0].title)
+        # 与换班「当班超限 + 关故障转移」同一份通知：同一件事同一套话，
+        # 只有组名和「去点哪个按钮」不同
+        self.assertIn("全局熔断报告（均衡组：", self.sent[0].title)
+        self.assertIn("该均衡组没有启用故障转移", self.sent[0].html)
+        self.assertIn("立即均衡", self.sent[0].html)
 
     def test_stopped_duty_does_not_drift_to_another_member(self) -> None:
         """关着故障转移：停了当班就等着，不能因为「别人没超」绕一圈又换一台。
@@ -572,9 +601,11 @@ class DutyRecovery(_Base):
         self.assertEqual(self._duty(), self.a, "掉线的是当班，应该拉起它自己，不是换人")
         self.assertIn(self.a, self.started)
         self.assertEqual(self._state().get("phase"), "starting")
-        event = repo.list_events(limit=5, kind="balance_switch")[0]
-        self.assertIn("均衡恢复中", str(event["title"]))
-        self.assertIn("等待当班 均衡A 重新到位", str(event["detail"]))
+        # 与换班的「当班自动拉起中」同构：这是恢复，不是一次新的均衡
+        event = repo.list_events(limit=5, kind="balance_recover")[0]
+        self.assertIn("当班自动拉起中", str(event["title"]))
+        self.assertIn("当班 均衡A", str(event["title"]))
+        self.assertEqual(str(event["detail"]), "等待运行到位")
 
     def test_recover_settles_quietly(self) -> None:
         self._settle_on(self.a)
@@ -584,7 +615,7 @@ class DutyRecovery(_Base):
         self._tick(offset=5)
         self.assertEqual(self._state().get("phase"), "idle")
         event = repo.list_events(limit=5)[0]
-        self.assertIn("均衡恢复（", str(event["title"]))
+        self.assertIn("当班已恢复运行", str(event["title"]))
         self.assertNotIn("均衡完成", str(event["title"]))
         self.assertEqual(self.sent, [], "掉线恢复只记事件，不推报告")
 
@@ -668,10 +699,13 @@ class SettleNotice(_Base):
         self._traffic(self.b, 60.0)
         self._tick()
         event = self._event("balance_failover")
-        self.assertIn("均衡转移", str(event["title"]))
+        # 与换班「当班超限，故障转移」同一个说法，靠对象名区分是谁的组
+        self.assertEqual(str(event["title"]), "当班超限，故障转移（均衡组：均衡组）")
         self.assertIn("当班 均衡B", str(event["detail"]))
         self.assertEqual(len(self.sent), 1, "故障转移必须发通知")
-        self.assertIn("均衡转移报告", self.sent[0].title)
+        # 通知标题与换班共用「故障转移」，靠范围括号区分归属
+        self.assertIn("故障转移报告", self.sent[0].title)
+        self.assertIn("均衡组：", self.sent[0].title)
 
     def test_stall_failover_names_the_dead_one(self) -> None:
         self._settle_on(self.a)
@@ -931,8 +965,12 @@ class BootstrapAudit(_Base):
 
 
 class EvalAudit(_Base):
-    def test_eval_stops_idle_member_set_to_stop(self) -> None:
-        """评估点按「下班后」设置摆正：设停机的待机成员停掉，keep 的不拉起。"""
+    def test_eval_does_not_stop_idle_member_by_off_action(self) -> None:
+        """评估点只比流量差值，不按「下班后」设置纠正待机成员。
+
+        「下班后停机」说的是它被换下来之后怎么处理，不是让系统每个评估点去
+        纠正一台本来就在待机的机器 —— 那等于每小时替用户做一次启停决定。
+        """
         self._traffic(self.a, 20.0)  # A 最少 → 当班，且不会触发切换
         self._traffic(self.b, 50.0)
         self._traffic(self.c, 80.0)
@@ -959,20 +997,24 @@ class EvalAudit(_Base):
 
         self._tick()
 
-        self.assertIn(self.b, self.stopped, "设停机的待机成员应在评估点被停掉")
-        self.assertEqual(self.started, [], "保持运行的成员停着，日常评估点不该主动拉起")
-        events = repo.list_events(limit=5, kind="balance_off")
-        self.assertEqual(len(events), 1)
-        self.assertIn("待机成员按设置停机", str(events[0]["title"]))
+        self.assertNotIn(self.b, self.stopped, "评估点不该按设置去停待机成员")
+        self.assertEqual(self.started, [], "评估点不该主动开机")
+        self.assertEqual(self._duty(), self.a, "差值没到，当班不变")
 
-    def test_eval_writes_nothing_when_states_match(self) -> None:
-        """状态本来就对：评估点不产生任何停机事件（避免每小时刷一条）。"""
+    def test_eval_still_stops_idle_member_over_limit(self) -> None:
+        """流量保护与「下班后」设置无关：待机成员烧到阈值照样停。"""
         self._settle_on(self.a)
-        self._set_status(self.b, "Stopped")
-        self._set_status(self.c, "Stopped")
+        self._traffic(self.a, 20.0)
+        self._traffic(self.b, 190.0)  # 待机但已到阈值（阈值 188）
+        self._set_status(self.b, "Running")
         repo.upsert_balance_state(self.group_id, next_eval_at=0)
+
         self._tick()
-        self.assertEqual(repo.list_events(limit=5, kind="balance_off"), [])
+
+        self.assertIn(self.b, self.stopped, "待机成员超限，评估点应停它")
+        event = repo.list_events(limit=5, kind="balance_limit")[0]
+        self.assertIn("流量超限", str(event["title"]))
+        self.assertIn("成员 均衡B", str(event["title"]))
 
 
 if __name__ == "__main__":

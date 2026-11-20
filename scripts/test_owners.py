@@ -126,9 +126,10 @@ class OwnersTest(unittest.TestCase):
         note, mode, _ = shift.engine._managed_note(self.bal_b)
         self.assertEqual(mode, "balance_off")
         self.assertIn("非当班", note)
-        # 非当班是唯一允许手动开关机的托管成员：提示不能写成「会被纠正」
+        # 非当班是唯一允许手动开关机的托管成员：提示不能写成「会被纠正」，
+        # 也不能再承诺「下次评估会按设置停」—— 评估点已不再动开关机
         detail = shift.engine._managed_detail(note, mode)
-        self.assertIn("按「下班后」设置处理", detail)
+        self.assertIn("只比流量差值", detail)
         self.assertNotIn("按流程纠正", detail)
 
     def test_manual_action_refuses_while_balance_switching(self) -> None:

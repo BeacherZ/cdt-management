@@ -303,6 +303,15 @@ def obj_member(name: str, label: str) -> str:
     return f"{SCOPE_GROUP}：{name or '—'}，成员 {label or '—'}"
 
 
+def obj_balance_duty(name: str, label: str) -> str:
+    """均衡组里跟具体某台有关的事件：和换班一样点名到实例。"""
+    return f"{SCOPE_BALANCE}：{name or '—'}，当班 {label or '—'}"
+
+
+def obj_balance_member(name: str, label: str) -> str:
+    return f"{SCOPE_BALANCE}：{name or '—'}，成员 {label or '—'}"
+
+
 def _message(kind: str, title_html: str, title: str, body: str) -> notify.Message:
     raw = f"{title_html}\n\n{body}"
     return notify.Message(kind=kind, title=title, html=raw, text=_TAG_RE.sub("", raw))
@@ -558,13 +567,15 @@ def balance_failover(
     group_name: str = "",
     reason: str = "traffic",
 ) -> notify.Message:
-    """⚠️ 流量均衡转移：当班到阈值，或起不来，换成流量最少的成员。
+    """⚠️ 故障转移（均衡组）：当班超限，或起不来，换成流量最少的成员。
 
     **正文照故障转移报告写**（`shift_failover`）：接替账号 → 超限账号（起不来时写
     离线账号）→ 其余每台「停止账号」，只有标题和概览那行不同。
     """
     stall = reason == "stall"
-    cause = "当班实例疑被抢占，多次拉起未成功" if stall else "当班实例流量已到阈值"
+    # 起因措辞与换班的故障转移逐字对齐：同一类事故在两份报告里该说同一句话，
+    # 只有「已交给谁」不同（均衡组没有时刻表，交的是用量最少的成员）。
+    cause = "当班实例疑被抢占，多次拉起未成功" if stall else "当班实例流量超限"
     taken_label = "离线账号" if stall else "超限账号"
     parts = [running_block("接替账号", duty, ddns_status)]
     seen = {_member_id(duty)}
@@ -583,8 +594,10 @@ def balance_failover(
     return _titled(
         "balance_failover",
         "⚠️",
-        title_of("均衡转移", group_name, scope=SCOPE_BALANCE),
-        f"📢 <b>流量均衡转移</b>：{cause}，已交给当前用量最少的成员。\n{SEP}\n"
+        # 标题跟换班的故障转移同名：同一类事在两份报告里该叫同一个名字，
+        # 由范围括号（换班组 / 均衡组）区分归属，别再造一个「均衡转移」的新词。
+        title_of("故障转移", group_name, scope=SCOPE_BALANCE),
+        f"📢 <b>故障转移</b>：{cause}，已交给当前用量最少的成员。\n{SEP}\n"
         + _join_blocks(parts),
     )
 
@@ -686,7 +699,10 @@ def breaker(
 
 
 def limit_stop(
-    server: dict[str, Any], group_name: str = "", mode: str | None = None
+    server: dict[str, Any],
+    group_name: str = "",
+    mode: str | None = None,
+    scope: str = SCOPE_GROUP,
 ) -> notify.Message:
     """🚨 全局熔断（单台场景）：当班超限，这台机器只停它自己。
 
@@ -695,18 +711,25 @@ def limit_stop(
     只是范围不同（单台 / 全组），分两个标题在推送里只会让人以为是两件事。
     正文保留 ＩＰ 行，与其它通知的实例块字段顺序一致。
 
+    换班组和均衡组共用这一份：同一件事（当班超限 + 组里关了故障转移）该用同一套
+    话说，只有组名和「点哪个按钮」不同。以前均衡组走的是 over_limit()，标题成了
+    「超限停机报告」，正文也没提「没有启用故障转移」，读起来像两回事。
+
     停机措辞按 mode（缺省取实例自己的 StoppedMode）：不支持节省停机的规格会
     fallback 成普通停机，照常收规格费，不能一律写「已节省停机」。
     """
     stopped = stop_phrase(mode if mode is not None else server.get("stopped_mode"), "已强制")
+    balance = scope == SCOPE_BALANCE
+    who = "该均衡组" if balance else "该换班组"
+    action = "立即均衡" if balance else "立即换班"
     return _titled(
         "limit_stop",
         "🚨",
-        title_of("全局熔断", group_name),
+        title_of("全局熔断", group_name, scope=scope),
         "\n".join(
             [
-                f"当班实例流量超限，该换班组没有启用故障转移，{stopped}。",
-                "如有需要，请开启故障转移或者去管理后台手动点击“立即换班”。",
+                f"当班实例流量超限，{who}没有启用故障转移，{stopped}。",
+                f"如有需要，请开启故障转移或者去管理后台手动点击“{action}”。",
                 "",
                 f"🖥 {_label(server)}",
                 f"┃ 📦 实例：<code>{_instance(server)}</code>",

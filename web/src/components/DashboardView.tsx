@@ -48,7 +48,6 @@ const EVENT_ICON: Record<string, typeof Info> = {
   balance_new: UserPlus,
   balance_recover: Activity,
   balance_limit: ShieldAlert,
-  balance_off: CloudOff,
   balance_failover: AlertTriangle,
   balance_error: AlertTriangle,
   balance_breaker: ShieldAlert,

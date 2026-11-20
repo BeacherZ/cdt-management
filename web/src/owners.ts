@@ -57,10 +57,10 @@ export function ownerTagText(owner: Managed): string {
  * 换班组、单机保活托管中一律锁死：这两套流程每轮都对账，手动启停下一轮就被
  * 打回，点了只会多出两条反向指令（换班组本来就是为了省钱，排班表才是准的）。
  *
- * 均衡组的**非当班**成员是唯一豁免：日常巡检只停不拉，手动开机不会被立刻
- * 打回（它若设了「下班后停机」，到汇总评估点才停），闲置时手动关掉也能省钱。
- * 当班仍然锁：关机等于中断对外服务，要换人请走「立即均衡」，那条路会先把
- * 新机器拉起来再切 DNS。
+ * 均衡组的**非当班**成员是唯一豁免：评估点只比流量差值，不纠正任何人的开关机，
+ * 手动开机不会被立刻打回（只有轮到它被换下来时，才按「下班后」设置处理），
+ * 闲置时手动关掉也能省钱。当班仍然锁：关机等于中断对外服务，要换人请走
+ * 「立即均衡」，那条路会先把新机器拉起来再切 DNS。
  */
 export function ownerManualFree(owner: Managed | null | undefined): boolean {
   if (!owner || !owner.active) return true
@@ -78,7 +78,7 @@ export function ownerActionHint(owner: Managed | null | undefined, running: bool
   if (owner?.kind === 'balance' && owner.active) {
     return running
       ? '关机（非当班成员，不影响对外服务）'
-      : '开机（非当班成员，不会被自动拉起；若设为「下班后停机」，下次评估会再停）'
+      : '开机（非当班成员，不会被自动拉起；轮到它当班时系统会自行开机）'
   }
   return running ? '关机（优先节省停机，不支持时转普通停机）' : '开机'
 }

@@ -373,7 +373,7 @@ class BalanceReports(unittest.TestCase):
             reason="traffic",
         )
         html = message.html
-        self.assertEqual(message.title, "CDT 均衡转移报告（均衡组：新加坡）")
+        self.assertEqual(message.title, "CDT 故障转移报告（均衡组：新加坡）")
         self.assertIn("⚪ <b>超限账号 </b>", html)
         # 剩下的第三台也要出现，标成「停止账号」（与故障转移报告一致）
         self.assertIn("⚪ <b>停止账号 </b>", html)

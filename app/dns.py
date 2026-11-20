@@ -492,13 +492,12 @@ def _shift_events(kind: str, target_id: int) -> list[dict[str, Any]]:
     """这个目标身上还挂着哪些「进行中」的换班事件。"""
     if not target_id:
         return []
-    from . import shift  # 延迟导入：shift 反过来要用本模块
+
+    from . import balance, shift  # 延迟导入：这两个模块反过来要用本模块
 
     if kind == TARGET_BALANCE:
         # 均衡组切换时同样要占住解析：结算那一步由 balance 自己同步并写清前因
-        return repo.running_events(int(target_id), ("balance_switch",))
-
-    from . import balance  # 延迟导入：balance 反过来要用本模块
+        return repo.running_events(int(target_id), balance.RUNNING_EVENT_KINDS)
 
     if kind == TARGET_GROUP:
         group_ids = [int(target_id)]
@@ -517,7 +516,7 @@ def _shift_events(kind: str, target_id: int) -> list[dict[str, Any]]:
     for group_id in group_ids:
         events.extend(repo.running_events(group_id, kinds))
     for group_id in balance_ids:
-        events.extend(repo.running_events(group_id, ("balance_switch",)))
+        events.extend(repo.running_events(group_id, balance.RUNNING_EVENT_KINDS))
     return events
 
 

@@ -21,7 +21,7 @@ _TMP = tempfile.mkdtemp(prefix="cdt-dns-test-")
 os.environ["CDT_DATA_DIR"] = _TMP
 os.environ["CDT_DRY_RUN"] = "1"
 
-from app import db, ddns, dns, repo, settings  # noqa: E402
+from app import balance, db, ddns, dns, repo, settings  # noqa: E402
 
 CALLS: list[tuple[str, str]] = []
 
@@ -343,6 +343,27 @@ class Binding(Base):
         self.assertTrue(item["target"]["running"])
         self.assertEqual(item["target"]["duty"], "香港-A")
         self.assertEqual(item["desired_ip"], "47.243.10.31")
+
+    def test_balance_running_events_hold_dns(self):
+        """均衡组进行中的三种事件都要占住解析，巡检不许抢在结算前动手。
+
+        以前只认 balance_switch：新建组（balance_new）和掉线拉起（balance_recover）
+        开着的时候巡检会以为「没在切换」，先把域名指过去，等结算那一步去 Cloudflare
+        一看值已经对了，事件里只能写「IP 未变化」—— 域名明明刚跟着机器换过。
+        """
+        a = self.add_server("香港-A", ip="47.243.10.31")
+        b = self.add_server("香港-B", status="Stopped", ip="47.243.10.32")
+        group_id = self.add_balance_group("均衡组", [a, b], a)
+        dns.bind("a.example.com", dns.TARGET_BALANCE, group_id)
+        for kind in balance.RUNNING_EVENT_KINDS:
+            with self.subTest(kind=kind):
+                CALLS.clear()
+                event_id = repo.add_event(kind, "进行中", group_id=group_id, status="running")
+                # 当班换了公网 IP：巡检若没被占住，这里就会发一次同步
+                repo.update_server_runtime(a, public_ip="47.243.10.99")
+                dns.reconcile(self.config())
+                self.assertEqual(CALLS, [], f"{kind} 期间不该打 Cloudflare")
+                repo.finish_event(event_id, "done")
 
     def test_deleting_group_releases_binding(self):
         a = self.add_server("香港-A")
