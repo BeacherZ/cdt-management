@@ -4227,15 +4227,17 @@ input[type='number']::-webkit-inner-spin-button {
   }
 
   /* 卡片脚：归属标签 + 域名胶囊 + 开关按钮挤一行。
-     谁让位：归属标签（「换班组「HK」托管」）不缩 —— 截成「换班组「...」」
-     等于没说归谁；域名截掉尾缀还认得出是哪条记录，让它和按钮以外先让位 */
+     谁让位：域名截掉尾缀还认得出是哪条记录，先让它缩；开关按钮不能让。
+     归属标签允许「缩到只截组名」—— 胶囊里「· 当班 / · 非当班」是独立一段、
+     不参与收缩，所以组名被截时当班状态仍然留着，不至于把按钮挤出屏幕。
+     （手机上组名普遍很短，正常情况根本不会触发截断。） */
   .card-foot {
     flex-wrap: nowrap;
     gap: 6px;
   }
 
   .card-foot .owner-tag {
-    flex: 0 0 auto;
+    flex: 0 1 auto;
     min-width: 0;
   }
 
@@ -4303,6 +4305,12 @@ input[type='number']::-webkit-inner-spin-button {
     padding: 4px 6px;
     gap: 3px;
   }
+
+  /* 上一档的胶囊 gap 是 3px，当班那半句的负边距要跟着收 1px，
+     否则「·」会压在组名的收尾括号上 */
+  .card-foot .owner-duty {
+    margin-left: -3px;
+  }
 }
 
 @media (max-width: 560px) {
@@ -4323,8 +4331,12 @@ input[type='number']::-webkit-inner-spin-button {
   .stat .ring {
     display: none;
   }
+  /* minmax(0, 1fr) 而不是 1fr：1fr 的下限是 min-content，卡片里只要有一句
+     不能断行的长内容（长组名的归属胶囊、超长实例 ID），整列会被顶到比屏幕还宽，
+     同屏所有卡片一起溢出、右侧按钮看不见。700 那一档本来就是 minmax(0,1fr)，
+     这里必须跟着，否则更窄的机型反而破功。 */
   .server-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .modal-foot {
     flex-wrap: wrap;
