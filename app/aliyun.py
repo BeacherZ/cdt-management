@@ -163,11 +163,11 @@ def brief_error(exc: Exception | str) -> str:
 #   国际站   business.ap-southeast-1.aliyuncs.com / ap-southeast-1
 # ECS 与 CDT 两个站用的是同一套域名（ecs.{region}.aliyuncs.com / cdt.aliyuncs.com），
 # 所以换站点不会影响保活与流量统计，只在接账单类接口时才需要区分。
-# 取值参考上游 wang4386/CDT-Monitor 的 bssEndpoint()。
+# 下面是 BSS 两个站点的 endpoint 对照。
 # --------------------------------------------------------------------------
 
 CDT_DOMAIN = "cdt.aliyuncs.com"
-# CDT 是中心化接口，与实例所在地域无关，固定用香港（上游同样如此）
+# CDT 是中心化接口，与实例所在地域无关，固定用香港
 CDT_REGION = "cn-hongkong"
 
 BSS_ENDPOINTS: dict[str, tuple[str, str]] = {

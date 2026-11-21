@@ -1,19 +1,6 @@
 # 致谢与来源说明
 
-本项目（CDT-Management）是独立实现，但在**界面设计与安装体验**上明确参考了两个 MIT 项目。原版权归各自作者所有，`LICENSE` 中已一并保留声明。
-
-## 界面与交互
-
-[**wang4386/CDT-Monitor**](https://github.com/wang4386/CDT-Monitor) — 作者 **青柠**，MIT。
-
-参考的部分：
-
-- 单进程 + SQLite 的部署形态，以及「状态查询只读本地快照、控制类操作异步执行」的思路
-- 视觉语言：CSS 变量驱动的浅色/深色主题、圆角卡片、柔和内阴影、状态色语义（绿=正常 / 琥珀=注意 / 红=危险）
-- 页面结构：顶栏品牌 + 状态徽章、账号卡片、设置抽屉的分页组织方式
-- 实例状态命名（`Running` / `Stopped` / `Starting` / `Stopping`）与 `StopCharging` 节省停机的语义
-
-**没有**沿用其 Go 后端、Vue/React 组件代码或数据库 schema —— 本项目的后端（Python + FastAPI）、前端组件、换班引擎、DDNS 与通知实现均为重新编写。
+本项目（CDT-Management）是独立实现。
 
 ## 安装脚本
 
