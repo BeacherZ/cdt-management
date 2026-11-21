@@ -311,7 +311,7 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 
 Bot Token 填了没反应？整串原样粘贴（如 `123456789:AAH…`），冒号前那串数字不能少、前后不要有空格。
 
-群组收不到或一直超时？chat_id 整串原样粘贴，别手改、别带空格；机器人先进群，境内服务器填代理。
+群组收不到或一直超时？chat_id 整串原样粘贴，别手改、别带空格；境内服务器填代理。
 
 **数据**
 
