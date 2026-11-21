@@ -12,8 +12,9 @@
 停机状态一律读实例真实返回的 StoppedMode（StopCharging 节省停机 / KeepCharging 普通停机），
 不按脚本写死「Stopped (StopCharging)」——普通停机照常收规格费，写错会误导。
 
-唯一在脚本之外统一加的一行是「📍 地域」：跟着 ＩＰ 行的下一行，取 ECS DescribeInstances
-返回的真实 RegionId（如 cn-hongkong），和每日报告字段顺序一致。其余字段位置不动。
+唯一在脚本之外统一加的一行是「📍 地域」：取 ECS DescribeInstances 返回的真实 RegionId
+（如 cn-hongkong），和每日报告字段顺序一致。位置在 ＩＰ 行下面；块里带 DDNS 行时
+DDNS 紧贴 ＩＰ（这两行说的都是同一台机器对外的那个地址），地域排在 DDNS 之后。
 
 账号块（换班 / 流量均衡）在「状态」上面还有一行 `📈 流量：x GB / yGB`：
 这两类报告都要列出整组，没有流量行就没法一眼比出「谁快超限、下一次会切给谁」。
@@ -407,6 +408,8 @@ def running_block(
     """线上运行的那台。脚本里叫「运行账号 / 接替账号」。
 
     与 v1.6.8 逐字一致，只在「状态」行上面多一行流量（`📈 流量：x GB / yGB`）。
+    DDNS 行跟在 ＩＰ 后面：一个是机器当前的地址，一个是域名指到哪儿，读的时候
+    本来就该连在一起看；地域是背景信息，往后排。
     status_text / icon 只给均衡报告用：它还要求状态是回读的真值，不能写死 Running。
     """
     return "\n".join(
@@ -415,8 +418,8 @@ def running_block(
             f"┃ 🏷 别名：{_label(server)}",
             f"┃ 📦 实例：<code>{_instance(server)}</code>",
             f"┃ 🌐 ＩＰ：{_ip(server)}",
-            f"┃ 📍 地域：{_region(server)}",
             f"┃ ☁️ DDNS：{ddns_status}",
+            f"┃ 📍 地域：{_region(server)}",
             traffic_line(server),
             f"┃ {icon} 状态：{status_text}",
         ]
@@ -871,8 +874,8 @@ def recovery(
         f"🖥 {_label(server)}",
         f"┃ 📦 实例：<code>{_instance(server)}</code>",
         f"┃ 🌐 ＩＰ：{_ip(server)}",
-        f"┃ 📍 地域：{_region(server)}",
         f"┃ ☁️ DDNS：{ddns_status}",
+        f"┃ 📍 地域：{_region(server)}",
         "┃ 🟢 状态：Running",
         SEP,
     ]
@@ -897,10 +900,10 @@ def shift_error(
         f"┃ 🏷 别名：{_label(duty)}",
         f"┃ 📦 实例：<code>{_instance(duty)}</code>",
         f"┃ 🌐 ＩＰ：{_ip(duty)}",
-        f"┃ 📍 地域：{_region(duty)}",
     ]
     if ddns_status:
         duty_lines.append(f"┃ ☁️ DDNS：{ddns_status}")
+    duty_lines.append(f"┃ 📍 地域：{_region(duty)}")
     duty_lines.append(traffic_line(duty))
     duty_lines.append(f"┃ {_state_icon(duty)} 状态：{_status(duty)}")
     parts = ["\n".join(duty_lines)]

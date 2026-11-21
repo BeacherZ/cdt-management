@@ -67,8 +67,8 @@ class ShiftDone(unittest.TestCase):
             "┃ 🏷 别名：AliCloud-CDT-AM\n"
             "┃ 📦 实例：<code>i-aaa111</code>\n"
             "┃ 🌐 ＩＰ：198.51.100.1\n"
-            "┃ 📍 地域：中国香港\n"
             "┃ ☁️ DDNS：✅ 已同步\n"
+            "┃ 📍 地域：中国香港\n"
             "┃ 📈 流量：12.00 GB / 200GB\n"
             "┃ 🟢 状态：Running\n"
             f"{SEP}\n"
@@ -249,8 +249,8 @@ class ShiftFailover(unittest.TestCase):
             "┃ 🏷 别名：AliCloud-CDT-PM\n"
             "┃ 📦 实例：<code>i-bbb222</code>\n"
             "┃ 🌐 ＩＰ：198.51.100.2\n"
-            "┃ 📍 地域：中国香港\n"
             "┃ ☁️ DDNS：✅ 已同步\n"
+            "┃ 📍 地域：中国香港\n"
             "┃ 📈 流量：190.00 GB / 200GB\n"
             "┃ 🟢 状态：Running\n"
             f"{SEP}\n"
@@ -504,8 +504,8 @@ class OtherReports(unittest.TestCase):
             "🖥 AliCloud-CDT-AM\n"
             "┃ 📦 实例：<code>i-aaa111</code>\n"
             "┃ 🌐 ＩＰ：198.51.100.1\n"
-            "┃ 📍 地域：中国香港\n"
             "┃ ☁️ DDNS：✅ 已同步\n"
+            "┃ 📍 地域：中国香港\n"
             "┃ 🟢 状态：Running\n"
             f"{SEP}"
         )
@@ -550,8 +550,8 @@ class OtherReports(unittest.TestCase):
         self.assertEqual(balance.count("┃ 📈 流量："), 1)
 
     def test_every_notification_has_region_line(self):
-        # 所有通知的实例块都要跟每日报告一样带「地域」行（IP 下面一行；熔断块没有 IP 行，
-        # 就跟在实例行后面）
+        # 所有通知的实例块都要跟每日报告一样带「地域」行（IP 那段里排在 DDNS 之后；
+        # 熔断块没有 IP 行，就跟在实例行后面）
         cases = {
             "换班完成": messages.shift_done(A, [B], "AM", "✅ 已同步"),
             "故障转移": messages.shift_failover(B, [A], [], "✅ 已同步"),
@@ -566,6 +566,33 @@ class OtherReports(unittest.TestCase):
         # 地域缺失时给「-」，不能留空
         bare = messages.recovery({k: v for k, v in A.items() if k != "region_id"}, "✅ 已同步")
         self.assertIn("┃ 📍 地域：-", bare.html)
+
+    def test_ddns_line_sits_right_below_ip(self):
+        """DDNS 行必须紧贴 ＩＰ：一个是机器当前的地址，一个是域名指到哪儿，
+        两行连在一起才看得出对不对得上。地域是背景信息，退到 DDNS 之后。"""
+        cases = {
+            "换班完成": messages.shift_done(A, [B], "AM", "✅ 已同步"),
+            "手动换班完成": messages.shift_done(A, [B], "AM", "✅ 已同步", manual=True),
+            "故障转移": messages.shift_failover(B, [A], [], "✅ 已同步"),
+            "均衡完成": messages.balance_switch(A, [A, B], "✅ 已同步"),
+            "均衡故障转移": messages.balance_failover(B, [A], [A, B], "✅ 已同步"),
+            "抢占恢复": messages.recovery(A, "✅ 已同步"),
+            "换班异常": messages.shift_error(B, [A], 10, ddns_status="✅ 已同步"),
+        }
+        for name, message in cases.items():
+            with self.subTest(kind=name):
+                html = message.html
+                # 紧邻：DDNS 行的下一行就是地域
+                self.assertIn("┃ ☁️ DDNS：✅ 已同步\n┃ 📍 地域：", html)
+                # 顺序：ＩＰ → DDNS → 地域
+                self.assertLess(html.index("┃ 🌐 ＩＰ："), html.index("┃ ☁️ DDNS："))
+                self.assertLess(html.index("┃ ☁️ DDNS："), html.index("┃ 📍 地域："))
+
+    def test_ddns_line_absent_keeps_region_below_ip(self):
+        """没开 DDNS 的组不写这一行；此时地域仍然紧跟 ＩＰ，不留空位。"""
+        html = messages.shift_error(B, [A], 10).html
+        self.assertNotIn("☁️ DDNS", html)
+        self.assertIn("┃ 🌐 ＩＰ：198.51.100.2\n┃ 📍 地域：", html)
 
     def test_region_code_is_translated(self):
         # 阿里云国际站的 RegionId 是 ap-northeast-1 这类代码，通知里要翻成人话，
