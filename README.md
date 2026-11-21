@@ -290,21 +290,3 @@ curl -fsSL https://raw.githubusercontent.com/BeacherZ/cdt-management/main/instal
 **所有成员都超限了怎么办？** 会全局熔断，全部节省停机，等下个月流量重置后手动开机，或调整阈值。
 
 **忘了面板密码？** 删掉数据目录里的 `cdt-management.db` 会清空全部配置和实例凭据，需要重新添加。
-
-## 🛠️本地开发
-
-```bash
-python -m venv .venv && ./.venv/bin/pip install -r requirements.txt
-./.venv/bin/python -m app.main              # 后端 :8080
-cd web && npm install && npm run dev        # 前端 :5273，已配 /api 代理
-CDT_DRY_RUN=1 ./.venv/bin/python -m app.main # 不调真实阿里云
-```
-
-`CDT_DRY_RUN=1` 时阿里云调用走内存桩，换班、均衡整条链路都能在本地跑通，不碰真实账号。
-
-## 📄致谢与许可
-
-- 面板的信息架构、视觉语言、交互细节参考 [**wang4386/CDT-Monitor**](https://github.com/wang4386/CDT-Monitor)，作者 **青柠**，MIT 协议。
-- 一键安装脚本的形态参考 [**BeacherZ/dailycheckin-plus**](https://github.com/BeacherZ/dailycheckin-plus)。
-
-本项目以 MIT 协议发布，`LICENSE` 里同时保留了上游版权声明。
