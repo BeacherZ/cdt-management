@@ -412,11 +412,20 @@
        设置/退出图标也会停在半空中而不是贴到屏幕右边 */
     align-self: stretch;
     width: 100%;
-    /* 顶栏 sticky 全宽，blur(20px) 每帧都要重算整条背景：低端安卓滚动/点击时
-       会掉帧，边缘还会闪方块状残影。手机上直接换成实色，不再做玻璃 */
+    /* 顶栏保留玻璃：背景的环境光晕要能透到 Logo 行和导航行后面，
+       否则顶栏就是一块死白的板子，跟页面底色断开（v1.8.0 之前的观感）。
+       白度压到 82%→68%：比桌面（58%→26%）浓得多，滚动时下方卡片只透出一层
+       模糊的影子，不会糊穿文字；blur 也从 20px 降到 14px，整条顶栏每帧重算的
+       面积比桌面小，低端机不至于像 20px 那样掉帧、边缘闪方块。
+       上一行纯色是给不支持 color-mix 的浏览器兜底（Chrome < 111）。 */
     background: var(--panel-solid);
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--panel-solid) 82%, transparent),
+      color-mix(in srgb, var(--panel-solid) 68%, transparent)
+    );
+    backdrop-filter: blur(14px) saturate(1.4);
+    -webkit-backdrop-filter: blur(14px) saturate(1.4);
   }
 
   .sidebar::after {
