@@ -2613,18 +2613,22 @@ input[type='number']::-webkit-inner-spin-button {
    表格只借用「列对齐」这件事——去掉表头底色和粗边框，只留细线和行悬停，
    免得在概览里突然出现一块「后台表格」的硬边 */
 .inst-list {
-  /* 左右不缩进，表格满幅到卡片边框；底部留 16px（正好等于圆角半径），
-     别让最后一行挤着卡片下沿，看着像被切了一刀 */
-  padding: 0 0 16px;
-  /* 内容贴着圆角裁掉，否则末行会在边角露出直角 */
-  overflow: hidden;
+  /* 左右不缩进，表格满幅到卡片边框；底部也不留空 —— 最后一行直接贴到
+     卡片的圆角弧边上，弧线由卡片自己裁出来。之前留 16px 是怕末行像被
+     切了一刀，但运行中的末行铺着渐变时，那一截空白会在绿和弧边之间
+     多出一条灰带，反而更突兀 */
+  padding: 0;
+  /* 用 clip 而不是 hidden 裁圆角：hidden 会把这行表格（border-collapse）
+     的末行边框多算 15px 进卡片高度，末行底下就凭空多一条灰带 */
+  overflow: clip;
 }
 
-/* 窄屏（≤1100）列宽装不下时让表格在卡片内横滑，不把整页撑宽 */
+/* 窄屏（≤1100）列宽装不下时让表格在卡片内横滑，不把整页撑宽。
+   纵向仍用 clip：跟着 hidden 会再把那 15px 末行留白带回来 */
 @media (max-width: 1100px) {
   .inst-list {
     overflow-x: auto;
-    overflow-y: hidden;
+    overflow-y: clip;
   }
 }
 
@@ -2684,7 +2688,9 @@ input[type='number']::-webkit-inner-spin-button {
 
 /* 概览：运行中的行上渐变。只上色、不描绿边 —— 行在桌面是表格行，本身没有
    独立边框，边框一加就是贴着行的一圈线。行底就是卡片自己的玻璃面，
-   渐变直接叠上去，不另铺实色。 */
+   渐变直接叠上去，不另铺实色。
+   末行最后一截（行高 72% 之后）已经收成透明，卡片底部圆角那一圈仍是
+   卡片原来的灰面，不会被染绿。 */
 .inst-table tbody tr.is-live {
   background: linear-gradient(180deg, var(--accent-soft), transparent 72%);
 }
@@ -2950,7 +2956,8 @@ input[type='number']::-webkit-inner-spin-button {
 
   /* 运行中的实例卡也铺这层渐变，和实例管理 / 单机保活 / DNS 三处一致：
      概览是「一眼看全局」的页面，手机上先让活着的机器浮起来。
-     只做手机端 —— 桌面这一页是表格行，整行铺绿会盖掉斑马纹和 hover 的层次。 */
+     这一段只在手机端生效：桌面那一页是表格行，同一层渐变铺在行上是「整行
+     微微发亮」，铺在独立小卡上才是「这张卡浮起来」。 */
   .inst-table tbody tr.is-live {
     border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
     background:
