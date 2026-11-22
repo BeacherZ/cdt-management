@@ -69,7 +69,7 @@ class ShiftDone(unittest.TestCase):
             "┃ 🌐 ＩＰ：198.51.100.1\n"
             "┃ ☁️ DDNS：✅ 已同步\n"
             "┃ 📍 地域：中国香港\n"
-            "┃ 📈 流量：12.00 GB / 200GB\n"
+            "┃ 📈 流量：12.00 GB\n"
             "┃ 🟢 状态：Running\n"
             f"{SEP}\n"
             "⚪ <b>停止账号 </b>\n"
@@ -77,7 +77,7 @@ class ShiftDone(unittest.TestCase):
             "┃ 📦 实例：<code>i-bbb222</code>\n"
             "┃ 🌐 ＩＰ：198.51.100.2\n"
             "┃ 📍 地域：中国香港\n"
-            "┃ 📈 流量：190.00 GB / 200GB\n"
+            "┃ 📈 流量：190.00 GB\n"
             "┃ ⚪ 状态：Stopped (StopCharging)\n"
             f"{SEP}"
         )
@@ -189,30 +189,33 @@ class ShiftDone(unittest.TestCase):
         """每个账号块都要有流量行，且固定落在「状态」上面（换班 / 均衡一致）。
 
         早期照抄脚本时换班报告是没有「已用」这一行的，加了流量行之后，读报告的人
-        才能直接比出「这台还剩多少额度」。
+        才能一眼比出整组里谁用得多、下一次会切给谁。
         """
         html = messages.shift_done(A, [B], "AM", "✅ 已同步").html
         self.assertEqual(html.count("┃ 📈 流量："), 2)
-        self.assertIn("┃ 📈 流量：12.00 GB / 200GB\n┃ 🟢 状态：Running", html)
+        self.assertIn("┃ 📈 流量：12.00 GB\n┃ 🟢 状态：Running", html)
         self.assertIn(
-            "┃ 📈 流量：190.00 GB / 200GB\n┃ ⚪ 状态：Stopped (StopCharging)",
+            "┃ 📈 流量：190.00 GB\n┃ ⚪ 状态：Stopped (StopCharging)",
             html,
         )
 
-    def test_traffic_line_without_quota_or_threshold(self):
-        """没填额度 / 阈值时不留空壳，也不要写「额度 0 GB」。"""
-        bare = {**A, "quota_gb": 0, "threshold_gb": 0}
-        html = messages.shift_done(bare, [B], "AM", "✅ 已同步").html
-        # 只看运行账号那一块（停止账号 B 有自己的额度和阈值）
-        block = html.split(SEP)[1]
-        self.assertIn("┃ 📈 流量：12.00 GB\n", block)
-        self.assertNotIn("额度", block)
-        self.assertNotIn("（阈值", block)
+    def test_traffic_line_has_no_quota(self):
+        """流量行只写已用量：额度各台不同，拼上去只会把已经够长的一行再拉长。"""
+        html = messages.shift_done(A, [B], "AM", "✅ 已同步").html
+        self.assertIn("┃ 📈 流量：12.00 GB\n", html)
+        self.assertIn("┃ 📈 流量：190.00 GB\n", html)
+        self.assertNotIn("/ 200GB", html)
+        self.assertNotIn("额度", html)
+        self.assertNotIn("（阈值", html)
+        # 没填额度也得是同一行，不能冒出「/ 0GB」这种空壳
+        bare = messages.shift_done({**A, "quota_gb": 0}, [B], "AM", "✅ 已同步").html
+        self.assertIn("┃ 📈 流量：12.00 GB\n", bare)
+        self.assertNotIn("0GB", bare)
 
     def test_traffic_line_unknown_usage(self):
         """流量还没查过时写「—」，不能写 0.00 GB 冒充「一点没用到」。"""
         html = messages.shift_done({**A, "traffic_used": None}, [B], "AM", "✅ 已同步").html
-        self.assertIn("┃ 📈 流量：— / 200GB", html)
+        self.assertIn("┃ 📈 流量：—", html)
 
     def test_group_name_in_title(self):
         # 标题带组名 + 全角范围括号；不传组名时退回「（换班组）」
@@ -251,7 +254,7 @@ class ShiftFailover(unittest.TestCase):
             "┃ 🌐 ＩＰ：198.51.100.2\n"
             "┃ ☁️ DDNS：✅ 已同步\n"
             "┃ 📍 地域：中国香港\n"
-            "┃ 📈 流量：190.00 GB / 200GB\n"
+            "┃ 📈 流量：190.00 GB\n"
             "┃ 🟢 状态：Running\n"
             f"{SEP}\n"
             "⚪ <b>超限账号 </b>\n"
@@ -259,7 +262,7 @@ class ShiftFailover(unittest.TestCase):
             "┃ 📦 实例：<code>i-aaa111</code>\n"
             "┃ 🌐 ＩＰ：198.51.100.1\n"
             "┃ 📍 地域：中国香港\n"
-            "┃ 📈 流量：190.00 GB / 200GB\n"
+            "┃ 📈 流量：190.00 GB\n"
             "┃ ⚪ 状态：Stopped (StopCharging)\n"
             f"{SEP}"
         )
@@ -337,9 +340,9 @@ class BalanceReports(unittest.TestCase):
         self.assertNotIn("<b>停止账号 </b>", html)
         # 每块都带流量行，且在三块里各出现一次
         self.assertEqual(html.count("┃ 📈 流量："), 3)
-        self.assertIn("┃ 📈 流量：12.00 GB / 200GB", html)
-        self.assertIn("┃ 📈 流量：190.00 GB / 200GB", html)
-        self.assertIn("┃ 📈 流量：5.00 GB / 200GB", html)
+        self.assertIn("┃ 📈 流量：12.00 GB", html)
+        self.assertIn("┃ 📈 流量：190.00 GB", html)
+        self.assertIn("┃ 📈 流量：5.00 GB", html)
 
     def test_auto_switch_same_shape_as_manual(self):
         """自动 / 手动只差标题和概览那行，正文块完全一样。"""
@@ -506,10 +509,39 @@ class OtherReports(unittest.TestCase):
             "┃ 🌐 ＩＰ：198.51.100.1\n"
             "┃ ☁️ DDNS：✅ 已同步\n"
             "┃ 📍 地域：中国香港\n"
+            "┃ 📈 流量：12.00 GB\n"
             "┃ 🟢 状态：Running\n"
             f"{SEP}"
         )
         self.assertEqual(messages.recovery(A, "✅ 已同步").html, expected)
+
+    def test_recovery_has_traffic_line(self):
+        """抢占恢复也要有流量行：三个入口（单机保活 / 换班组 / 均衡组）同一版式，
+        且位置跟换班、均衡一致 —— 地域之后、状态之前。"""
+        cases = {
+            "换班组": messages.recovery(A, "✅ 已同步"),
+            "单机保活": messages.recovery(A, "✅ 已同步", kind="keepalive"),
+            "均衡组": messages.recovery(
+                A, "✅ 已同步", group_name="新加坡", scope=messages.SCOPE_BALANCE
+            ),
+        }
+        for name, message in cases.items():
+            with self.subTest(kind=name):
+                html = message.html
+                self.assertIn(
+                    "┃ 📍 地域：中国香港\n┃ 📈 流量：12.00 GB\n┃ 🟢 状态：Running",
+                    html,
+                )
+                # 和别的报告一个口径：只写已用量，不带额度、不带阈值
+                self.assertNotIn("GB / ", html)
+                self.assertNotIn("（阈值", html)
+
+    def test_recovery_traffic_line_without_data(self):
+        """刚拉起还没查过流量时写「—」，不能写 0.00 GB（那会被读成「一点没用」）。"""
+        bare = {k: v for k, v in A.items() if k != "traffic_used"}
+        self.assertIn("┃ 📈 流量：—\n┃ 🟢 状态：Running", messages.recovery(bare, "✅ 已同步").html)
+        unknown = {**A, "traffic_used": ""}
+        self.assertIn("┃ 📈 流量：—\n", messages.recovery(unknown, "✅ 已同步").html)
 
     def test_keepalive_reuses_recovery_layout(self):
         message = messages.recovery(
