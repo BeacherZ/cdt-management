@@ -267,7 +267,7 @@ export default function DashboardView({
                     (group) => group.duty_server_id === server.id,
                   )
                   return (
-                    <tr key={server.id}>
+                    <tr key={server.id} className={running ? 'is-live' : ''}>
                       <td data-label="状态">
                         <Badge tone={statusTone(server.instance_status)} pulse={running}>
                           {statusLabel(server.instance_status)}

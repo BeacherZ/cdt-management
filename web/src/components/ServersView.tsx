@@ -288,9 +288,9 @@ export default function ServersView({
 
             return (
               <div
-                className={`card server-card${dragId === server.id ? ' dragging' : ''}${
-                  overId === server.id ? ' drag-over' : ''
-                }`}
+                className={`card server-card${running ? ' is-live' : ''}${
+                  dragId === server.id ? ' dragging' : ''
+                }${overId === server.id ? ' drag-over' : ''}`}
                 key={server.id}
                 draggable
                 onDragStart={(event) => {

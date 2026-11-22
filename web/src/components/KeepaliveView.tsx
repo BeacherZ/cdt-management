@@ -91,7 +91,12 @@ export default function KeepaliveView({
             // 以为机器挂了。in_window 由后端按同一套判定算好，前端不重复推演。
             const resting = item.enabled && item.in_window === false
             return (
-              <div className="card server-card" key={item.id}>
+              <div
+                className={`card server-card${
+                  running && item.enabled && !resting ? ' is-live' : ''
+                }`}
+                key={item.id}
+              >
                 <div className="head">
                   <Badge tone={statusTone(item.instance_status)} pulse={running && item.enabled}>
                     {statusLabel(item.instance_status, item.stopped_mode)}

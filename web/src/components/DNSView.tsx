@@ -218,11 +218,14 @@ export default function DNSView({
             const meta = STATE_META[record.state]
             const working = busy === record.record
             const target = record.target
+            // 只有目标此刻真在跑才铺渐变：绑在已停机实例/组上的记录保持素卡，
+            // 否则绿底配着「目标未运行」的黄标，两种信号打架。
+            const live = Boolean(target?.running)
             return (
               <div
-                className={`card dns-row${dragRecord === record.record ? ' dragging' : ''}${
-                  overRecord === record.record ? ' drag-over' : ''
-                }`}
+                className={`card dns-row${live ? ' is-live' : ''}${
+                  dragRecord === record.record ? ' dragging' : ''
+                }${overRecord === record.record ? ' drag-over' : ''}`}
                 key={record.record}
                 draggable
                 onDragStart={(event) => {

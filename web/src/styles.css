@@ -2354,6 +2354,40 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 
+/* -------------------------------------------------------------- 运行中卡片 */
+
+/* 「在跑」的卡片统一带一层自上而下的淡绿：实例管理的运行中、单机保活窗口内、
+   DNS 已绑定且在跑的记录三处共用。渐变配方和换班页「当班槽位」(.slot.is-duty)
+   一致，一屏里只有真在承载流量的卡片浮起来，扫一眼就知道哪些是活的。
+
+   底色改成 --panel-solid 打底：半透明的 --panel 再叠一层渐变会发灰，
+   浅色下和纯白拉不开差距。边框用 accent 混线色，深浅两套主题都能自洽；
+   .slot.is-duty 那圈 1px 外环这里不加——卡片本身已有 --shadow-2。
+
+   底色既然是实色，backdrop-filter 就什么都透不出来，只是白跑一遍实时模糊；
+   这里直接摘掉，桌面和手机都省下每张卡一次 14px 模糊 + 饱和。 */
+.card.is-live {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+  background:
+    linear-gradient(180deg, var(--accent-soft), transparent 72%),
+    var(--panel-solid);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* 带渐变之后，悬停要更亮一档才有反馈；同时盖掉 .server-card:hover 的 24% 描边，
+   否则鼠标扫过反而变淡。 */
+.card.is-live:hover {
+  border-color: color-mix(in srgb, var(--accent) 56%, var(--line));
+}
+
+/* 拖到「运行中」卡片上时，边框要和拖到素卡上一样是满色 accent。
+   上面那条 42% 和 .dns-row.drag-over / .server-card.drag-over 同权重、又排在后面，
+   不补这一条的话落点只剩那圈 2px 外环，边框反而比素卡弱。 */
+.card.is-live.drag-over {
+  border-color: var(--accent);
+}
+
 /* -------------------------------------------------------------- 当班槽位 */
 
 .slot {
@@ -2542,7 +2576,13 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 /* 距下次切换：挂在状态胶囊后面。秒数每秒跳一次，数字走等宽 + 表格数字，
-   否则整行会跟着字宽来回抖 */
+   否则整行会跟着字宽来回抖。
+
+   数字是这一行里唯一会动的、也是扫卡片时第一眼要找的东西，所以加重到正文色 + 700
+   （原来是 --ink-soft / 620，压在灰标签旁不够跳）。标签仍留 --muted：靠「灰标签 +
+   重数字」的明暗差把数字顶出来，两截一起加粗反而没有层次。
+   只动颜色、字重和 1px 字号，不加底色/内边距，整块宽度只多 5px 上下 —— 窄屏组名
+   本来就在省略，不会被挤到换行。 */
 .group-countdown {
   display: inline-flex;
   align-items: center;
@@ -2555,11 +2595,11 @@ input[type='number']::-webkit-inner-spin-button {
 
 .group-countdown b {
   font-family: var(--mono);
-  font-size: 12px;
-  font-weight: 620;
-  letter-spacing: -0.01em;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0;
   font-variant-numeric: tabular-nums;
-  color: var(--ink-soft);
+  color: var(--ink);
 }
 
 /* 桌面只看标题行那份，元信息行那份是给手机准备的（≤700 反过来） */
@@ -2639,6 +2679,22 @@ input[type='number']::-webkit-inner-spin-button {
 
   .inst-table tbody tr:hover {
     background: var(--panel-inset);
+  }
+}
+
+/* 概览：运行中的行上渐变。只上色、不描绿边 —— 行在桌面是表格行，本身没有
+   独立边框，边框一加就是贴着行的一圈线。行底就是卡片自己的玻璃面，
+   渐变直接叠上去，不另铺实色。 */
+.inst-table tbody tr.is-live {
+  background: linear-gradient(180deg, var(--accent-soft), transparent 72%);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  /* hover 时在渐变上再叠那层 --panel-inset：反馈还在，但不会把绿色整条顶掉 */
+  .inst-table tbody tr.is-live:hover {
+    background:
+      linear-gradient(180deg, var(--accent-soft), transparent 72%),
+      var(--panel-inset);
   }
 }
 
@@ -2822,8 +2878,11 @@ input[type='number']::-webkit-inner-spin-button {
      实例卡拆成独立小卡后是实色白 #fff，而 .card / .stat 还是 rgba(255,255,255,.72)
      加 14px 模糊，叠在 #eceff3 页面上算出来是 #fafbfc——同屏比较时一个更白、
      一个偏灰，卡片看着就不像一套。顺带省掉每张卡的模糊开销。
-     登录页 .auth 不在这个选择器里，仍然保持它自己的亮色门面。 */
-  .card:not(.inst-list),
+     登录页 .auth 不在这个选择器里，仍然保持它自己的亮色门面。
+
+     .is-live 要排除：它自己那条背景是「渐变 + 实色」，被这里同权重、又靠后的
+     实色覆盖掉就只剩白底了（桌面没有这条规则，所以只有手机上会丢渐变）。 */
+  .card:not(.inst-list):not(.is-live),
   .stat {
     background: var(--panel-solid);
     backdrop-filter: none;
@@ -2887,6 +2946,16 @@ input[type='number']::-webkit-inner-spin-button {
 
   .inst-table tbody tr:last-child {
     margin-bottom: 0;
+  }
+
+  /* 运行中的实例卡也铺这层渐变，和实例管理 / 单机保活 / DNS 三处一致：
+     概览是「一眼看全局」的页面，手机上先让活着的机器浮起来。
+     只做手机端 —— 桌面这一页是表格行，整行铺绿会盖掉斑马纹和 hover 的层次。 */
+  .inst-table tbody tr.is-live {
+    border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+    background:
+      linear-gradient(180deg, var(--accent-soft), transparent 72%),
+      var(--panel-solid);
   }
 
   /* 拆掉单元格盒子：里面的元素直接落进上面那五个格位。
