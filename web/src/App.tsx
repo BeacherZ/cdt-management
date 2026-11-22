@@ -808,9 +808,12 @@ export default function App() {
         </button>
 
         <nav className="nav-list" aria-label="主视图">
-          <div className="nav-group">{NAV_PAGES.map(navRow)}</div>
           <div className="nav-group">
-            <div className="nav-label">托管方式</div>
+            <div className="nav-label">控制台</div>
+            {NAV_PAGES.map(navRow)}
+          </div>
+          <div className="nav-group">
+            <div className="nav-label">自动化</div>
             {NAV_MODES.map(navRow)}
           </div>
         </nav>

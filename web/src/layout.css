@@ -118,7 +118,7 @@
 .sidebar .nav-list {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
 }
 
 /* 一组菜单项：项与项之间 2px，组与组之间由 .nav-list 的 gap 拉开 */
@@ -128,13 +128,14 @@
   gap: 2px;
 }
 
-/* 段标题：11px 小字 + 右侧一条延长线，一眼看出下面几项是一伙的。
-   不放大、不用主色、不可点 —— 它只是分组，不是页面。 */
+/* 段标题：11px 小字，和菜单文字拉开一档，够区分就行。
+   不画右侧延长线：1px 的线落在非整数像素上会被抗锯齿摊成一行或两行，
+   两条标题的纵坐标小数部分不同，看上去就一细一粗，索性留白代替线。 */
 .nav-label {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 16px 6px;
+  padding: 0 16px 4px;
   color: var(--muted);
   font-size: 11px;
   font-weight: 600;
@@ -142,14 +143,7 @@
   user-select: none;
 }
 
-.nav-label::after {
-  content: '';
-  flex: 1;
-  height: 1px;
-  background: var(--line);
-}
-
-/* 菜单行：大行（11px 内边距 ≈ 42px 高）+ 16px 横向内边距，图标和文字整块
+/* 菜单行：行高 10px 内边距（≈ 40px 高）+ 16px 横向内边距，图标和文字整块
    从侧栏边缘往里收一档，看着是「一块块」而不是「贴着左边的一串字」。
    图标列保持固定 x 轴、不逐项居中：菜单是靠这一列扫视的，
    每一行各自居中会让图标左右游走，反而更乱。
@@ -160,7 +154,7 @@
   align-items: center;
   gap: 10px;
   width: 100%;
-  padding: 11px 16px;
+  padding: 10px 16px;
   border: 0;
   border-radius: 12px;
   background: transparent;

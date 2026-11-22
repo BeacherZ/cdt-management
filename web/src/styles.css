@@ -589,14 +589,33 @@ label {
     box-shadow var(--t-fast) var(--ease);
 }
 
-.sub-tabs button:hover {
-  color: var(--ink);
+/* 悬停和侧栏主菜单同一层灰底：只在真指针上生效，
+   触屏 tap 完不会留下一块灰斑；选中那颗是实心绿药丸，不叠灰 */
+@media (hover: hover) and (pointer: fine) {
+  .sub-tabs button:hover:not(.on) {
+    color: var(--ink);
+    background: var(--panel-inset);
+  }
+
+  :root[data-theme='dark'] .sub-tabs button:hover:not(.on) {
+    background: var(--fill-subtle);
+  }
 }
 
+/* 选中项和侧栏主菜单一样是实心品牌绿药丸（白字 + 顶部内高光 + 一圈品牌色投影）。
+   底色已经够重，字不再加粗：600 以上压在白字上会糊成一团，靠色彩区分就够了 */
 .sub-tabs button.on {
-  color: var(--ink);
-  background: var(--panel-solid);
-  box-shadow: var(--shadow-1);
+  color: #fff;
+  background: var(--accent-grad);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 6px 14px -8px var(--accent-ring);
+}
+
+/* 深色主题的 --accent-grad 是亮绿，白字压上去只有 1.9:1，
+   和 .nav-item.on 一样换成深绿 */
+:root[data-theme='dark'] .sub-tabs button.on {
+  color: #04241b;
 }
 
 /* 测试按钮行，避免和下面内容贴死 */
@@ -1203,6 +1222,24 @@ input[type='number']::-webkit-inner-spin-button {
    七项平铺时看不出哪条属于哪套逻辑，分组后扫一眼就知道在配什么 */
 .switch-group + .switch-group > .switch-group-label {
   margin-top: 18px;
+}
+
+/* 通知类别顶部标题与它下面的第一个分组标题之间留一口气：
+   标题是 16px + 右侧说明同行，紧接一个 12.5px 粗体分组标题时，
+   两行的行盒几乎贴在一起，读起来像一句被硬拆成两截；
+   拉开到 18px 后层级才分得开（组与组之间也是 18px，节奏一致）。
+   写成 .section-head.notify-cat-head 两级：layout.css 里的 .section-head 在
+   main.tsx 中后导入，同权重的单类规则会被它的 margin-bottom: 12px 盖掉。 */
+.section-head.notify-cat-head {
+  margin-bottom: 18px;
+}
+
+@media (max-width: 700px) {
+  /* 手机上说明文字独占一行，标题块本身已经多出一行高度，
+     再留 18px 会显得空，收到 14px */
+  .section-head.notify-cat-head {
+    margin-bottom: 14px;
+  }
 }
 
 /* 通知类别的分组标题：之前 11.5px 灰字，和下面的开关名几乎分不出层级。
@@ -2614,9 +2651,8 @@ input[type='number']::-webkit-inner-spin-button {
    免得在概览里突然出现一块「后台表格」的硬边 */
 .inst-list {
   /* 左右不缩进，表格满幅到卡片边框；底部也不留空 —— 最后一行直接贴到
-     卡片的圆角弧边上，弧线由卡片自己裁出来。之前留 16px 是怕末行像被
-     切了一刀，但运行中的末行铺着渐变时，那一截空白会在绿和弧边之间
-     多出一条灰带，反而更突兀 */
+     卡片的圆角弧边上，弧线由卡片自己裁出来。留 16px 反倒会让末行底下
+     多出一条灰带，看着像被切了一刀 */
   padding: 0;
   /* 用 clip 而不是 hidden 裁圆角：hidden 会把这行表格（border-collapse）
      的末行边框多算 15px 进卡片高度，末行底下就凭空多一条灰带 */
@@ -2686,23 +2722,9 @@ input[type='number']::-webkit-inner-spin-button {
   }
 }
 
-/* 概览：运行中的行上渐变。只上色、不描绿边 —— 行在桌面是表格行，本身没有
-   独立边框，边框一加就是贴着行的一圈线。行底就是卡片自己的玻璃面，
-   渐变直接叠上去，不另铺实色。
-   末行最后一截（行高 72% 之后）已经收成透明，卡片底部圆角那一圈仍是
-   卡片原来的灰面，不会被染绿。 */
-.inst-table tbody tr.is-live {
-  background: linear-gradient(180deg, var(--accent-soft), transparent 72%);
-}
-
-@media (hover: hover) and (pointer: fine) {
-  /* hover 时在渐变上再叠那层 --panel-inset：反馈还在，但不会把绿色整条顶掉 */
-  .inst-table tbody tr.is-live:hover {
-    background:
-      linear-gradient(180deg, var(--accent-soft), transparent 72%),
-      var(--panel-inset);
-  }
-}
+/* 概览：运行中的行不再上渐变，整块表格保持同一张卡片的底色，
+   运行中与否交给「状态」那一列的徽标去说明，行本身不再发亮。
+   原来那条 180deg 的 accent 渐变换行时会把相邻行染出深浅差，表格看着发花。 */
 
 /* 实例格两行：第一行别名 +「当班」，第二行实例 ID 胶囊 */
 .inst-main {
@@ -2954,10 +2976,9 @@ input[type='number']::-webkit-inner-spin-button {
     margin-bottom: 0;
   }
 
-  /* 运行中的实例卡也铺这层渐变，和实例管理 / 单机保活 / DNS 三处一致：
-     概览是「一眼看全局」的页面，手机上先让活着的机器浮起来。
-     这一段只在手机端生效：桌面那一页是表格行，同一层渐变铺在行上是「整行
-     微微发亮」，铺在独立小卡上才是「这张卡浮起来」。 */
+  /* 手机上这行是一张独立小卡，运行中仍铺渐变 + 品牌色描边：
+     卡片是「一块」而不是表格里的一行，浮起来才说得通；
+     桌面那种「整行微微发亮」才去掉。 */
   .inst-table tbody tr.is-live {
     border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
     background:
@@ -4486,6 +4507,9 @@ input[type='number']::-webkit-inner-spin-button {
   background: var(--panel-soft);
 }
 
+/* 设置页左侧分类：配色跟主菜单（.nav-item）对齐 —— 未选中是正文灰 + 品牌绿图标，
+   悬停压一层和侧栏同档的灰，选中是一颗实心品牌绿药丸（白字白图标）。
+   这样从侧栏点进设置，两套导航是同一套语言，不会一个青绿一个白卡。 */
 .settings-nav button {
   display: flex;
   align-items: center;
@@ -4495,10 +4519,10 @@ input[type='number']::-webkit-inner-spin-button {
   border: 0;
   border-radius: 9px;
   background: transparent;
-  color: var(--muted);
+  color: var(--ink-soft);
   font-family: inherit;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
   text-align: left;
   white-space: nowrap;
   cursor: pointer;
@@ -4507,19 +4531,49 @@ input[type='number']::-webkit-inner-spin-button {
     color var(--t-fast) var(--ease);
 }
 
-.settings-nav button:hover {
-  color: var(--ink);
-  background: var(--panel-inset);
+/* 图标同样是品牌绿；选中时跟着白字走 currentColor，一颗药丸只有一个色相 */
+.settings-nav button svg {
+  color: var(--accent);
+  opacity: 0.9;
+  flex-shrink: 0;
+  transition: opacity var(--t-fast) var(--ease);
 }
 
+/* 悬停只对真指针生效：触屏上 :hover 会在 tap 后一直挂着，那层灰底留在按钮上
+   像「卡住了」。底色与侧栏菜单、实例状态行用的是同一层 --panel-inset */
+@media (hover: hover) and (pointer: fine) {
+  .settings-nav button:hover:not(.on) {
+    color: var(--ink);
+    background: var(--panel-inset);
+  }
+
+  .settings-nav button:hover svg {
+    opacity: 1;
+  }
+
+  :root[data-theme='dark'] .settings-nav button:hover:not(.on) {
+    background: var(--fill-subtle);
+  }
+}
+
+/* 选中：和侧栏同一种实心品牌绿药丸 */
 .settings-nav button.on {
-  background: var(--panel-solid);
-  color: var(--ink);
-  box-shadow: var(--shadow-1);
+  background: var(--accent-grad);
+  color: #fff;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 6px 14px -8px var(--accent-ring);
 }
 
 .settings-nav button.on svg {
-  color: var(--accent);
+  color: currentColor;
+  opacity: 1;
+}
+
+/* 深色主题的 --accent-grad 是亮绿，白字压上去只有 1.9:1，
+   和 .nav-item.on / .btn.primary 一个处理：文字换成深绿 */
+:root[data-theme='dark'] .settings-nav button.on {
+  color: #04241b;
 }
 
 .settings-main {

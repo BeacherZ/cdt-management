@@ -855,7 +855,7 @@ export default function SettingsView({ settings, onSaved, onDirtyChange }: Props
 
                 {notifyTab === 'category' && (
                   <>
-                    <div className="section-head" style={{ marginBottom: 6 }}>
+                    <div className="section-head notify-cat-head">
                       <h2>
                         <BellRing size={13} /> 推送哪些事件
                       </h2>
