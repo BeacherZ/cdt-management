@@ -144,7 +144,7 @@
 **说明**：支持 Telegram、邮件、Webhook 三类渠道，可同时开启。
 
 <details>
-<summary>9 张通知示例（点击查看大图）</summary>
+<summary>通知示例（点击查看大图）</summary>
 
 <p align="center">
   <a href="docs/screenshots/25-notify-overview.png"><img src="docs/screenshots/25-notify-overview.png" width="96.8%" alt="9 张通知示例：换班完成、故障转移、全局熔断、超限停机（单机保活 / 闲散）、均衡完成、抢占恢复、换班异常、每日报告"></a>
