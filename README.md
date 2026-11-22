@@ -26,17 +26,17 @@
 浅色 / 深色（`设置 → 常规设置 → 外观`，点击查看大图）
 
 <p align="center">
-  <a href="docs/screenshots/02-dashboard.png"><img src="docs/screenshots/02-dashboard.png" width="48.5%" alt="运行概览（浅色）"></a>
-  <a href="docs/screenshots/03-dashboard-dark.png"><img src="docs/screenshots/03-dashboard-dark.png" width="48.5%" align="top" alt="运行概览（深色）"></a>
+  <a href="docs/screenshots/02-dashboard.png"><img src="docs/screenshots/02-dashboard.png" width="48.2%" alt="运行概览（浅色）"></a>
+  <a href="docs/screenshots/03-dashboard-dark.png"><img src="docs/screenshots/03-dashboard-dark.png" width="48.2%" align="top" alt="运行概览（深色）"></a>
 </p>
 
 手机端（自适应布局）
 
 <p align="center">
-  <a href="docs/screenshots/04-mobile-dashboard.png"><img src="docs/screenshots/04-mobile-dashboard.png" width="24%" align="top" alt="手机端运行概览（浅色）"></a>
-  <a href="docs/screenshots/05-mobile-dashboard-dark.png"><img src="docs/screenshots/05-mobile-dashboard-dark.png" width="24%" align="top" alt="手机端运行概览（深色）"></a>
-  <a href="docs/screenshots/06-mobile-instances.png"><img src="docs/screenshots/06-mobile-instances.png" width="24%" align="top" alt="手机端实例管理"></a>
-  <a href="docs/screenshots/07-mobile-instances-dark.png"><img src="docs/screenshots/07-mobile-instances-dark.png" width="24%" align="top" alt="手机端实例管理（深色）"></a>
+  <a href="docs/screenshots/04-mobile-dashboard.png"><img src="docs/screenshots/04-mobile-dashboard.png" width="23.9%" align="top" alt="手机端运行概览（浅色）"></a>
+  <a href="docs/screenshots/05-mobile-dashboard-dark.png"><img src="docs/screenshots/05-mobile-dashboard-dark.png" width="23.9%" align="top" alt="手机端运行概览（深色）"></a>
+  <a href="docs/screenshots/06-mobile-instances.png"><img src="docs/screenshots/06-mobile-instances.png" width="23.9%" align="top" alt="手机端实例管理"></a>
+  <a href="docs/screenshots/07-mobile-instances-dark.png"><img src="docs/screenshots/07-mobile-instances-dark.png" width="23.9%" align="top" alt="手机端实例管理（深色）"></a>
 </p>
 
 ## ✨主要功能
@@ -147,7 +147,7 @@
 <summary>9 张通知示例（点击查看大图）</summary>
 
 <p align="center">
-  <a href="docs/screenshots/25-notify-overview.png"><img src="docs/screenshots/25-notify-overview.png" width="96%" alt="9 张通知示例：换班完成、故障转移、全局熔断、超限停机（单机保活 / 闲散）、均衡完成、抢占恢复、换班异常、每日报告"></a>
+  <a href="docs/screenshots/25-notify-overview.png"><img src="docs/screenshots/25-notify-overview.png" width="96.8%" alt="9 张通知示例：换班完成、故障转移、全局熔断、超限停机（单机保活 / 闲散）、均衡完成、抢占恢复、换班异常、每日报告"></a>
 </p>
 
 </details>
