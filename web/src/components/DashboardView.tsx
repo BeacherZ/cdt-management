@@ -24,8 +24,8 @@ import { useState } from 'react'
 import type { EventItem, Overview } from '../types'
 import { clockText, timeAgo } from '../time'
 import { regionLabel } from '../regions'
-import { ownerBase, ownerLabel } from '../owners'
-import { Badge, Empty, Meter, Ring, money, statusLabel, statusTone } from './ui'
+import { ownerBase, ownerIcon, ownerLabel } from '../owners'
+import { Badge, Empty, Meter, OwnerIcon, Ring, money, statusLabel, statusTone } from './ui'
 
 const EVENT_ICON: Record<string, typeof Info> = {
   shift_done: Zap,
@@ -232,14 +232,16 @@ export default function DashboardView({
           <div className="card inst-list">
             <table className="inst-table">
               <colgroup>
-                {/* 归属列要同时放「换班组「HK」」和「当班」胶囊（内容最宽约 121px），
-                    13% 会把文字压成省略号；实例列实际只用 103px、留了 50px 空档，
-                    从这里借 2% 给归属、1% 给地域 */}
+                {/* 归属列要同时放「图标 + 换班组「港新联合保活」 + 当班胶囊」，
+                    最长那行实测 12px 字号下要 188px（含内边距 212px），13% 会截成省略号。
+                    实例列实际只用 103px、冗余最多，从这里再借 3% 给归属。
+                    19% 是照着最长那行量出来的：1440 档给到 143px 文字位，
+                    「换班组「港新联合保活」」132px 刚好放得下，不再省略 */}
                 <col style={{ width: '12%' }} />
-                <col style={{ width: '18%' }} />
+                <col style={{ width: '15%' }} />
                 <col style={{ width: '13%' }} />
                 <col style={{ width: '15%' }} />
-                <col style={{ width: '16%' }} />
+                <col style={{ width: '19%' }} />
                 <col style={{ width: '12%' }} />
                 <col style={{ width: '14%' }} />
               </colgroup>
@@ -302,12 +304,17 @@ export default function DashboardView({
                           挂在别名后面反而像实例名的一部分 */}
                       <td data-label="归属">
                         <div className="inst-owner-line">
+                          {/* 归属前面带同款图标：换班绿 / 均衡蓝 / 保活紫 / 闲散灰，
+                              和实例管理、DNS 记录卡是同一套 OwnerIcon，扫列时先认色再认字 */}
                           <span
                             className={`inst-owner${owner ? '' : ' is-idle'}`}
                             title={ownerLabel(owner)}
                           >
-                            {owner ? ownerBase(owner) : ownerLabel(null)}
-                            {owner && !owner.active && <i> · 已暂停</i>}
+                            <OwnerIcon kind={ownerIcon(owner)} size={12} />
+                            <span className="inst-owner-text">
+                              {owner ? ownerBase(owner) : ownerLabel(null)}
+                              {owner && !owner.active && <i> · 已暂停</i>}
+                            </span>
                           </span>
                           {dutyOf && <span className="duty-tag">当班</span>}
                           {dutyBalance && <span className="duty-tag duty-tag-balance">当班</span>}

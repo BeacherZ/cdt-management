@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react'
-import { X } from 'lucide-react'
+import { Hand, HeartPulse, Repeat, Scale, X } from 'lucide-react'
+import type { OwnerKind } from '../owners'
 
 /* -------------------------------------------------------------- 徽章 */
 
@@ -84,6 +85,30 @@ export function groupStateTone(state: string): Tone {
 /** 只在「正在动」的状态上闪，静态状态闪起来像在报警 */
 export function groupStatePulse(state: string): boolean {
   return state === 'switching' || state === 'recovering'
+}
+
+/* -------------------------------------------------------------- 归属图标 */
+
+/**
+ * 归属图标：四种状态各一颗，一次定义，四处共用（实例管理卡片、实例列表、
+ * 换班组的成员选择器、DNS 记录卡）。
+ *
+ * 以前每个界面各写一串三元，结果均衡组在实例列表里漏过一次（只有换班和保活
+ * 有图标）；「闲散手动」干脆一颗都没有，和另外三种摆在一起像掉了零件。
+ *
+ * 颜色不进组件：默认继承父级 `color`，想上语义色就由父容器的 class 决定
+ * （见 styles.css 里 .owner-icon-* 那四条）。闲散手动因此天然和文字同色。
+ */
+export function OwnerIcon({ kind, size = 10 }: { kind: OwnerKind; size?: number }) {
+  const Icon =
+    kind === 'shift'
+      ? Repeat
+      : kind === 'balance'
+        ? Scale
+        : kind === 'keepalive'
+          ? HeartPulse
+          : Hand
+  return <Icon size={size} className={`owner-icon owner-icon-${kind}`} aria-hidden />
 }
 
 /* -------------------------------------------------------------- 环形进度 */

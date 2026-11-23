@@ -705,10 +705,14 @@ label {
 }
 
 .dns-row {
-  padding: 13px 15px;
+  /* 内边距四边对称 + 圆角比通用卡小一档（16 → 12）：DNS 卡内容就三行，
+     16px 圆角在 330×135 的尺寸上显得圆滚滚的，收一档更「方正」。
+     注意别改 .card 的 --radius-lg，那会影响所有页面的卡片。 */
+  border-radius: 12px;
+  padding: 14px 16px;
   display: flex;
   flex-direction: column;
-  gap: 9px;
+  gap: 10px;
   /* 拖拽排序：整行可拖动，卡片尺寸与内容不变 */
   cursor: grab;
 }
@@ -781,8 +785,156 @@ label {
 .dns-bind .select {
   flex: 1;
   min-width: 0;
-  max-width: 340px;
+  /* 不设上限：下拉右侧要顶到卡片内边距，和下面「解析到 / 时间」那条线的
+     右端齐平。以前限 340px，宽卡上右边空出一截，四行看着参差。 */
+  max-width: none;
   height: 32px;
+}
+
+/* 自绘的「绑定到」下拉（原生 <option> 放不进彩色图标）。
+   收起状态沿用 .select 的边框/底色/高度，看不出和普通下拉有差别，
+   点开才多出图标和分组标题。 */
+.dns-bind .bind-picker {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+
+.bind-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* 触发器借了 .select 的边框/底色/字号，但**不要**它那支原生箭头：
+   .select 用 background-image 画好了一支、padding-right 还留了 32px，
+   而 .bind-caret 是真实 DOM 的 lucide 图标 —— 两套叠在一起就是并排两个 ⌄。
+   这里把背景箭头清掉、右内边距收到 10px（箭头到边 10px，比原来 11px 略紧）。
+   深色主题那条 :root[data-theme='dark'] .select 权重 0,3,0，必须一起压住，
+   否则切到深色箭头又冒出来。 */
+.dns-bind .select.bind-trigger,
+:root[data-theme='dark'] .dns-bind .select.bind-trigger {
+  padding-right: 10px;
+  background-image: none;
+}
+
+.bind-trigger:disabled {
+  cursor: not-allowed;
+}
+
+.bind-trigger-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bind-caret {
+  flex: none;
+  color: var(--muted);
+  transition: transform var(--t-fast) var(--ease);
+}
+
+.bind-picker.is-open .bind-caret {
+  transform: rotate(180deg);
+}
+
+.bind-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 400px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 5px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line-strong);
+  background: var(--panel-solid);
+  box-shadow: var(--shadow-3);
+}
+
+/* 分组之间一条极淡的分隔线：11px 的组标题和 13px 的选项挨着排时，
+   不加线看起来就是一串同级的条目，四个归属组分不出层次 */
+.bind-section {
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+}
+
+.bind-section + .bind-section,
+.bind-menu > .bind-option + .bind-section {
+  margin-top: 4px;
+}
+
+/* 分组标题：11px 小字 + 语义色图标，和主菜单那组标题一个调子 */
+.bind-section-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  user-select: none;
+}
+
+.bind-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-soft);
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.bind-option:hover {
+  background: var(--fill-subtle);
+  color: var(--ink);
+}
+
+.bind-option.is-active {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.bind-option.is-active svg {
+  flex: none;
+  color: var(--accent);
+}
+
+.bind-option-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 展开时把这张卡抬到邻居之上：.card 的 backdrop-filter 会自己生成层叠上下文，
+   不抬 z-index 的话，DOM 里排在后面的下一张卡会盖住菜单 */
+.dns-row:has(.bind-picker.is-open) {
+  z-index: 6;
+}
+
+/* 卡片贴着视口底部时向上展开（JS 在打开时判断，见 BindPicker）：
+   朝上时代码里会同时把 max-height 收到上方可用空间，两个方向都不出屏 */
+.bind-picker.is-flip .bind-menu {
+  top: auto;
+  bottom: calc(100% + 4px);
 }
 
 .dns-meta {
@@ -790,45 +942,74 @@ label {
      而不是垫在卡片最下面——否则底边齐了，内容却浮在半空，看着像忘了填。
      它是 .dns-row 的最后一个子元素，margin-top: auto 相当于把它按到内底边。 */
   margin-top: auto;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  row-gap: 4px;
-  flex-wrap: wrap;
+  /* 固定两行网格，不再是 flex-wrap：
+     第一行「归属目标」独占整行，第二行「解析到 … / 时间」左右两端对齐。
+     以前是 flex-wrap，目标名一长就把「解析到」顶到下一行——同排四张卡
+     里两张两行、两张一行，底边虽然被 stretch 拉齐了，卡里却错位。
+     现在内容再长也只在行内省略，行数永远一样。 */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 12px;
+  row-gap: 3px;
   font-size: 13px;
   color: var(--muted);
 }
 
 .dns-target {
-  display: inline-flex;
+  /* 归属那行占满两列；行内只有「图标 + 名字」，名字按剩余宽度省略 */
+  grid-column: 1 / -1;
+  display: flex;
   align-items: center;
   gap: 5px;
   min-width: 0;
 }
 
+/* 名字这一层负责省略号：裸文本节点截不断，一长就只能换行 */
+.dns-target-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .dns-target svg {
   flex: none;
-  opacity: 0.75;
+  /* 图标带语义色了（换班绿 / 均衡蓝 / 保活紫 / 闲散灰），不再压 0.75，
+     否则紫和蓝在小尺寸下会糊成同一片灰 */
 }
 
-.dns-run {
-  flex: none;
-  padding: 0 6px;
-  border-radius: 999px;
-  border: 1px solid var(--line);
-  font-size: 11px;
-  color: var(--muted-soft);
+/* 归属图标的四种配色，直接挂在图标类上（不再按容器逐个复制）。
+   归属行的文字多是中性灰，图标不靠父级 color 传递，必须自己带色；
+   胶囊里那些本来就从 .owner-tag.* 继承到同一个值，写上等于没变。
+   闲散手动刻意用 --muted：它和正文完全同色，一眼就知道「没人管」。 */
+.owner-icon-shift {
+  color: var(--accent);
 }
 
-.dns-run.on {
-  border-color: color-mix(in srgb, var(--green) 34%, var(--line));
-  color: var(--green);
+.owner-icon-balance {
+  color: var(--blue);
 }
 
+.owner-icon-keepalive {
+  color: var(--violet);
+}
+
+.owner-icon-free {
+  color: var(--muted);
+}
+
+/* 归属行原先还有一颗「运行中 / 未运行」小胶囊（.dns-meta .badge 压到 11px），
+   2026-11-23 按用户要求删掉：目标在不在，卡片第一行的状态徽标已经说了，
+   同一行再写一遍会把「换班组「X」·当班 Y」挤成省略号。 */
 .dns-ip {
+  /* 第二行左端；「该指向 vs 现在指向」并排时超宽就整段省略，
+     不能让箭头把时间挤下去 */
+  grid-column: 1;
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .dns-ip code {
@@ -839,6 +1020,12 @@ label {
   border: 1px solid var(--line);
   color: var(--ink-soft);
   font-family: ui-monospace, Consolas, monospace;
+  white-space: nowrap;
+  /* flex 子项默认 min-width: auto 不会缩，空间不够时整块被容器 overflow 硬切，
+     连省略号都没有。允许收缩 + 省略号，至少能看出「这里被截了」 */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* 该指向 vs 现在指向：还没同步时用琥珀色提醒 */
@@ -848,11 +1035,21 @@ label {
 }
 
 .dns-time {
+  /* 第二行右端对齐：和左边的「解析到」形成一条两端齐的表格线 */
+  grid-column: 2;
+  justify-self: end;
   color: var(--muted-soft);
+  white-space: nowrap;
 }
 
 .dns-error {
+  /* 出错信息独占一行（只有报错时才多出这一行），
+     单行截断，不让一句长错误把卡片撑高 */
+  grid-column: 1 / -1;
   color: var(--red);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .input,
@@ -1733,10 +1930,58 @@ input[type='number']::-webkit-inner-spin-button {
   gap: 14px;
   row-gap: 4px;
   flex-wrap: wrap;
-  padding: 6px 8px 6px 10px;
+  /* 四边对称：原来是 10/8，右侧比左侧少 2px，居中之后这点偏差会被放大成「有点歪」 */
+  padding: 6px 10px;
   border-radius: var(--radius-sm);
   background: var(--panel-inset);
   border: 1px solid var(--line);
+}
+
+/* 卡片里的费用条：三段式 —— 本月贴左、余额落在正中间、尾部（告警 + 刷新）贴右。
+   上一版是「整组内容居中」，量出来左右空白确实相等（1440 档 47.1 / 47.1，
+   390 档 45.7 / 45.7），但看着并不协调：左端是文字、右端是个 27px 的按钮，
+   按钮内部还有 8px padding，SVG 离边缘比文字离边缘远一大截；再加上两端各空
+   47px，三个数字像飘在条子中间，读起来没有起点也没有落点。
+   改成 1fr auto 1fr 网格：两侧 1fr 等宽 → 中间列天然落在几何中心（余额严格居中），
+   首尾各自贴边 → 左中右三个锚点，扫一眼就知道从哪读起。
+   列表视图那个 compact 变体不套这条——它是表格里的一列，要按列左对齐。 */
+.cost-row:not(.compact) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  column-gap: 12px;
+  justify-content: initial;
+}
+
+.cost-row:not(.compact) > .cost-item:first-child {
+  justify-self: start;
+}
+
+.cost-row:not(.compact) > .cost-item:nth-child(2) {
+  justify-self: center;
+}
+
+.cost-row:not(.compact) > .cost-tail {
+  justify-self: end;
+}
+
+/* 尾部这一格：告警图标和刷新按钮并排贴右侧 */
+.cost-tail {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* 320 / 老小屏：条子只有 258px，内宽 238 拿去三分之后本月那格只剩 64px，
+   而「本月 ¥27.44」要 71px —— 三段式在这里必然溢出。退回「整组居中 + 允许换行」，
+   宁可临时丢掉严格居中，也不能把金额切掉。360 及以上宽度够（每侧 84px），
+   走上面的三段式。 */
+@media (max-width: 340px) {
+  .cost-row:not(.compact) {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
 }
 
 .cost-item {
@@ -1778,8 +2023,9 @@ input[type='number']::-webkit-inner-spin-button {
   flex-shrink: 0;
 }
 
+/* 刷新按钮跟着内容居中（不再 margin-left:auto 顶到右边缘）。
+   表格里那支由 .server-table-cost .cost-refresh 改成绝对定位贴右边，另有规则。 */
 .cost-refresh {
-  margin-left: auto;
   flex-shrink: 0;
 }
 
@@ -1821,6 +2067,12 @@ input[type='number']::-webkit-inner-spin-button {
   color: var(--muted);
   border-color: var(--line-strong);
   background: var(--fill-subtle);
+}
+
+/* 闲散那颗手掌图标不压透明度：托管那三种有底色衬托，压到 85% 还看得见；
+   中性灰本来就和文字同色，再压一档会比字还淡，像没加载出来 */
+.owner-tag.free svg {
+  opacity: 1;
 }
 
 .owner-tag.kind-shift {
@@ -2290,6 +2542,10 @@ input[type='number']::-webkit-inner-spin-button {
   }
 
   .server-table tbody tr {
+    /* 手机卡片按 flex 竖排：DOM 里状态在实例前面（桌面要这个顺序），
+       手机靠 order 把「实例」提回第一行当标题 */
+    display: flex;
+    flex-direction: column;
     margin-bottom: 10px;
     padding: 12px 14px;
     border: 1px solid var(--line);
@@ -2337,15 +2593,18 @@ input[type='number']::-webkit-inner-spin-button {
     gap: 6px;
   }
 
-  /* 第一格是标题，压满整行、下面一条虚线分隔 */
-  .server-table td:first-child {
+  /* 第一格是标题，压满整行、下面一条虚线分隔。
+     按 data-label 认「实例」而不是 :first-child —— 桌面把状态挪到最前面之后，
+     :first-child 会变成那枚状态徽章，手机上就没有标题行了 */
+  .server-table td[data-label='实例'] {
+    order: -1;
     grid-template-columns: minmax(0, 1fr);
     padding: 0 0 8px;
     margin-bottom: 6px;
     border-bottom: 1px dashed var(--line);
   }
 
-  .server-table td:first-child::before {
+  .server-table td[data-label='实例']::before {
     display: none;
   }
 
@@ -2822,10 +3081,22 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 .inst-owner {
-  display: block;
+  /* 图标 + 文字同一行；省略号交给内层 .inst-owner-text —— 容器是 flex，
+     直接在这里写 text-overflow 截不到文字节点 */
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   min-width: 0;
   font-size: 12px;
   color: var(--ink-soft);
+}
+
+.inst-owner svg {
+  flex: none;
+}
+
+.inst-owner-text {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4265,6 +4536,12 @@ input[type='number']::-webkit-inner-spin-button {
     overflow-wrap: anywhere;
   }
 
+  /* 窄屏单列，卡片几乎占满整行：归属名允许折行，别让省略号把名字吃掉 */
+  .dns-target-text {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
   .dns-row-head .badge {
     order: 3;
   }
@@ -4283,6 +4560,23 @@ input[type='number']::-webkit-inner-spin-button {
   .dns-bind .select {
     min-width: 0;
     flex: 1 1 100%;
+    /* 这张下拉是整行宽的大框，跟着 .select 的 16px 走会显得又粗又笨
+       （下面是那条「iOS <16px 会放大」的规则）。13px 和旁边的「绑定到」
+       完全同号，下拉里再留 16px 反而比标签大一圈。降到 13px 与标签对齐；
+       代价是 iOS 聚焦时会放大一档，权衡后按用户要求的观感优先。 */
+    font-size: 13px;
+    height: 34px;
+  }
+
+  /* 自绘下拉的壳也要占满整行，否则它按 .select 的 flex:1 收缩、
+     标签和下拉又挤回同一行了 */
+  .dns-bind .bind-picker {
+    flex: 1 1 100%;
+  }
+
+  /* 小卡里一行只有半屏，菜单给矮一点，免得整页被撑出长滚动 */
+  .bind-menu {
+    max-height: 264px;
   }
 }
 

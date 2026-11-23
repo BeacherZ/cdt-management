@@ -24,13 +24,23 @@ import {
   ownerActionHint,
   ownerBase,
   ownerDutyText,
+  ownerIcon,
   ownerLabel,
   ownerManualFree,
   ownerTone,
 } from '../owners'
 import { clockText } from '../time'
 import type { Billing, Managed, Server } from '../types'
-import { Badge, Empty, Meter, money, statusLabel, statusTone, stoppedModeLabel } from './ui'
+import {
+  Badge,
+  Empty,
+  Meter,
+  OwnerIcon,
+  money,
+  statusLabel,
+  statusTone,
+  stoppedModeLabel,
+} from './ui'
 
 /**
  * 归属胶囊：卡片和列表共用这一份。
@@ -42,9 +52,11 @@ import { Badge, Empty, Meter, money, statusLabel, statusTone, stoppedModeLabel }
  */
 function OwnerTag({ owner }: { owner: Managed | null }) {
   if (!owner) {
+    // 闲散手动也有自己的图标（手掌），颜色跟着胶囊文字走，不再是一颗光秃秃的文字胶囊
     return (
       <span className="owner-tag free" title="闲散手动">
-        闲散手动
+        <OwnerIcon kind="free" />
+        <span className="owner-tag-text">闲散手动</span>
       </span>
     )
   }
@@ -54,13 +66,7 @@ function OwnerTag({ owner }: { owner: Managed | null }) {
       className={`owner-tag ${ownerTone(owner)}${owner.active ? '' : ' paused'}`}
       title={ownerLabel(owner)}
     >
-      {owner.kind === 'group' ? (
-        <Repeat size={10} />
-      ) : owner.kind === 'balance' ? (
-        <Scale size={10} />
-      ) : (
-        <HeartPulse size={10} />
-      )}
+      <OwnerIcon kind={ownerIcon(owner)} />
       <span className="owner-tag-text">{ownerBase(owner)}</span>
       {duty && <span className="owner-duty">· {duty}</span>}
     </span>
@@ -470,8 +476,10 @@ function ServerTable({
             改成按内容自然分配（见 styles.css 里 .server-table 的说明） */}
         <thead>
           <tr>
-            <th>实例 / 实例 ID</th>
+            {/* 状态在实例名前面：一眼先看「跑没跑」，再认是哪台。
+                手机上这张表会按 data-label 重排，「实例」那一格永远排第一行（见 styles.css） */}
             <th>状态</th>
+            <th>实例 / 实例 ID</th>
             <th>站点 / 地域</th>
             <th>IP / 域名</th>
             <th>流量 / 配额</th>
@@ -488,14 +496,6 @@ function ServerTable({
             const locked = !ownerManualFree(owner)
             return (
               <tr key={server.id}>
-                <td data-label="实例">
-                  <div className="server-table-title" title={server.label}>
-                    {server.label}
-                  </div>
-                  <code className="server-table-sub" title={server.instance_id}>
-                    {server.instance_id || '未填实例 ID'}
-                  </code>
-                </td>
                 <td data-label="状态">
                   {/* 状态与停机模式拆成两行：并排塞进一枚胶囊时「已停机 · 节省停机」
                       比整列还宽，会溢出压到右边的站点/地域列上 */}
@@ -509,6 +509,14 @@ function ServerTable({
                       </span>
                     )}
                   </div>
+                </td>
+                <td data-label="实例">
+                  <div className="server-table-title" title={server.label}>
+                    {server.label}
+                  </div>
+                  <code className="server-table-sub" title={server.instance_id}>
+                    {server.instance_id || '未填实例 ID'}
+                  </code>
                 </td>
                 <td data-label="站点 / 地域">
                   <div className="server-table-region">
@@ -694,22 +702,25 @@ function CostRow({
           {balanceText(billing)}
         </b>
       </span>
-      {failed && (
-        <AlertTriangle
-          size={11}
-          style={{ color: 'var(--amber, #b45309)', flexShrink: 0 }}
-          aria-label="费用查询失败"
-        />
-      )}
-      <button
-        type="button"
-        className="btn ghost icon sm cost-refresh"
-        title="重新查询费用"
-        disabled={busy}
-        onClick={onRefresh}
-      >
-        {busy ? <LoaderCircle size={12} className="spin" /> : <RefreshCw size={11} />}
-      </button>
+      {/* 尾部：告警图标和刷新按钮合成一格，贴着右边缘，余额才好落在正中间 */}
+      <span className="cost-tail">
+        {failed && (
+          <AlertTriangle
+            size={11}
+            style={{ color: 'var(--amber, #b45309)', flexShrink: 0 }}
+            aria-label="费用查询失败"
+          />
+        )}
+        <button
+          type="button"
+          className="btn ghost icon sm cost-refresh"
+          title="重新查询费用"
+          disabled={busy}
+          onClick={onRefresh}
+        >
+          {busy ? <LoaderCircle size={12} className="spin" /> : <RefreshCw size={11} />}
+        </button>
+      </span>
     </div>
   )
 }

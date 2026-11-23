@@ -1,21 +1,28 @@
-import { useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   ArrowRight,
+  Check,
+  ChevronDown,
   CircleSlash,
   Globe2,
   GripVertical,
-  HeartPulse,
   LoaderCircle,
   Plus,
   RefreshCw,
-  Repeat,
-  Scale,
-  Server as ServerIcon,
   Trash2,
 } from 'lucide-react'
-import type { BalanceGroup, DnsRecord, DnsState, Keepalive, Server, ShiftGroup } from '../types'
+import type {
+  BalanceGroup,
+  DnsRecord,
+  DnsState,
+  Keepalive,
+  Managed,
+  Server,
+  ShiftGroup,
+} from '../types'
 import { timeAgo } from '../time'
-import { Badge, Empty, type Tone } from './ui'
+import { ownerIcon, type OwnerKind } from '../owners'
+import { Badge, Empty, OwnerIcon, type Tone } from './ui'
 
 type Props = {
   dns: DnsState
@@ -23,6 +30,8 @@ type Props = {
   keepalives: Keepalive[]
   groups: ShiftGroup[]
   balances: BalanceGroup[]
+  /** 全量归属表：DNS 卡里那颗图标要跟实例管理说同一件事（闲散的显示手掌） */
+  owners: Map<number, Managed>
   busy: string | null
   syncingAll: boolean
   onBind: (record: string, kind: string, id: number) => void
@@ -60,12 +69,172 @@ function lastSyncText(ts: number): string {
   return timeAgo(ts)
 }
 
+/* ------------------------------------------------------------ 绑定下拉 */
+
+type BindItem = { value: string; label: string }
+type BindSection = { label: string; kind?: OwnerKind; items: BindItem[] }
+
+const UNBOUND: BindItem = { value: '', label: '不绑定（这条记录不会被动）' }
+
+/**
+ * 「绑定到」下拉。
+ *
+ * 为什么不用原生 <select>：分组标题要带语义色小图标（闲散灰手掌 / 保活紫心脉 /
+ * 换班绿循环 / 均衡蓝天平），而 <option> 里只能放纯文本，连颜色都只在大体上
+ * 生效、各家浏览器还不一致。于是自绘一个：收起状态长得和原来的 .select 一模一样，
+ * 点开才多出图标和一列分组标题。
+ *
+ * 交互按原生下拉的习惯做：点空白处收起、Esc 收起、再点一次触发器也收起；
+ * 选项是 button，键盘 Tab / Enter 都能走完。
+ */
+function BindPicker({
+  id,
+  value,
+  sections,
+  disabled,
+  onPick,
+}: {
+  id: string
+  value: string
+  sections: BindSection[]
+  disabled: boolean
+  onPick: (value: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  // 朝上还是朝下：卡片贴着视口底部时菜单必须往上翻，否则最后几项永远在屏外
+  const [flip, setFlip] = useState(false)
+  const boxRef = useRef<HTMLDivElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const activeRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    function onPointerDown(event: PointerEvent) {
+      if (!boxRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [open])
+
+  /**
+   * 打开时一次定好三件事，用 useLayoutEffect 是为了在绘制前完成，避免看见跳动：
+   *
+   * 1. 朝下还是朝上——手机上最后一张卡的菜单有 264px，视口底部根本放不下，
+   *    以前会伸到屏外，底部那几项（均衡组）既点不到也滚不出来；
+   * 2. 菜单最高多少——按「实际可用空间」和「内容高度」取小，两个方向都不溢出；
+   * 3. 把当前选中项滚到可视区中间——分组一多，选中项常在首屏之外。
+   */
+  useLayoutEffect(() => {
+    if (!open) return
+    const box = boxRef.current
+    const menu = menuRef.current
+    if (!box || !menu) return
+    const rect = box.getBoundingClientRect()
+    const gap = 6
+    const below = window.innerHeight - rect.bottom - gap
+    const above = rect.top - gap
+    // 上限跟 CSS 对齐：手机 264、桌面 400（见 styles.css 的 .bind-menu）
+    const cap = window.innerWidth <= 700 ? 264 : 400
+    const need = Math.min(menu.scrollHeight, cap)
+    const up = below < need && above > below
+    setFlip(up)
+    menu.style.maxHeight = `${Math.round(Math.max(140, Math.min(need, up ? above : below)))}px`
+    const active = activeRef.current
+    if (active) {
+      menu.scrollTop = Math.max(0, active.offsetTop - menu.clientHeight / 2 + active.offsetHeight / 2)
+    }
+  }, [open])
+
+  const current =
+    sections.flatMap((section) => section.items).find((item) => item.value === value) ?? UNBOUND
+
+  function pick(next: string) {
+    setOpen(false)
+    if (next !== value) onPick(next)
+  }
+
+  return (
+    <div className={`bind-picker${open ? ' is-open' : ''}${flip ? ' is-flip' : ''}`} ref={boxRef}>
+      <button
+        type="button"
+        id={id}
+        className="select bind-trigger"
+        disabled={disabled}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((prev) => !prev)}
+      >
+        <span className="bind-trigger-text">{current.label}</span>
+        <ChevronDown size={14} className="bind-caret" aria-hidden />
+      </button>
+      {open && (
+        <div
+          className="bind-menu"
+          role="listbox"
+          aria-labelledby={id}
+          ref={menuRef}
+          /* 菜单在 draggable 的卡片里：不拦住的话，按住菜单上下拖会变成拖整张卡。
+             preventDefault 掐掉这次拖拽，stopPropagation 挡住卡片那层 onDragStart ——
+             否则卡片照样进入「正在排序」状态，而拖拽已被取消、dragend 不会来，
+             这张卡会一直挂着 dragging 的高亮。 */
+          onDragStart={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+          }}
+        >
+          <button
+            type="button"
+            role="option"
+            aria-selected={value === ''}
+            ref={value === '' ? activeRef : null}
+            className={`bind-option${value === '' ? ' is-active' : ''}`}
+            onClick={() => pick('')}
+          >
+            <span className="bind-option-text">{UNBOUND.label}</span>
+            {value === '' && <Check size={13} aria-hidden />}
+          </button>
+          {sections.map((section) => (
+            <div className="bind-section" key={section.label} role="group" aria-label={section.label}>
+              <div className="bind-section-label">
+                {section.kind && <OwnerIcon kind={section.kind} size={12} />}
+                {section.label}
+              </div>
+              {section.items.map((item) => (
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={item.value === value}
+                  key={`${section.label}-${item.value}`}
+                  ref={item.value === value ? activeRef : null}
+                  className={`bind-option${item.value === value ? ' is-active' : ''}`}
+                  onClick={() => pick(item.value)}
+                >
+                  <span className="bind-option-text">{item.label}</span>
+                  {item.value === value && <Check size={13} aria-hidden />}
+                </button>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function DNSView({
   dns,
   servers,
   keepalives,
   groups,
   balances,
+  owners,
   busy,
   syncingAll,
   onBind,
@@ -115,6 +284,48 @@ export default function DNSView({
   const keepaliveServers = servers.filter(
     (server) => keepaliveIds.has(server.id) && !groupedIds.has(server.id),
   )
+  // 闲散手动：没被任何流程接管的机器。这里查 owners（后端全量口径，含已停用的组），
+  // 不看 server.managed —— 后端 managed_map 只标启用中的组员，停用的组员会被漏成闲散。
+  const idleServers = servers.filter((server) => !owners.has(server.id))
+
+  // 下拉分组：所有实例 → 闲散手动 → 单机保活 → 换班组 → 均衡组。
+  // 后四项是同一批机器的不同视角（快捷入口），有内容才出现，空的整组不占位。
+  // 四个归属组的标题都带语义色图标，和实例管理、DNS 卡片下方那行是同一套映射。
+  const bindSections: BindSection[] = []
+  if (servers.length > 0) {
+    bindSections.push({
+      label: '所有实例',
+      items: servers.map((server) => ({ value: `server:${server.id}`, label: server.label })),
+    })
+  }
+  if (idleServers.length > 0) {
+    bindSections.push({
+      label: '闲散手动',
+      kind: 'free',
+      items: idleServers.map((server) => ({ value: `server:${server.id}`, label: server.label })),
+    })
+  }
+  if (keepaliveServers.length > 0) {
+    bindSections.push({
+      label: '单机保活',
+      kind: 'keepalive',
+      items: keepaliveServers.map((server) => ({ value: `server:${server.id}`, label: server.label })),
+    })
+  }
+  if (groups.length > 0) {
+    bindSections.push({
+      label: '换班组',
+      kind: 'shift',
+      items: groups.map((group) => ({ value: `group:${group.id}`, label: group.name })),
+    })
+  }
+  if (balances.length > 0) {
+    bindSections.push({
+      label: '均衡组',
+      kind: 'balance',
+      items: balances.map((group) => ({ value: `balance:${group.id}`, label: group.name })),
+    })
+  }
 
   async function submit() {
     const name = draft.trim()
@@ -280,80 +491,50 @@ export default function DNSView({
 
                 <div className="dns-bind">
                   <label htmlFor={`bind-${record.record}`}>绑定到</label>
-                  <select
+                  <BindPicker
                     id={`bind-${record.record}`}
-                    className="select"
                     value={encode(record)}
+                    sections={bindSections}
                     disabled={working}
-                    onChange={(event) => {
-                      const { kind, id } = decode(event.target.value)
+                    onPick={(value) => {
+                      const { kind, id } = decode(value)
                       onBind(record.record, kind, id)
                     }}
-                  >
-                    <option value="">不绑定（这条记录不会被动）</option>
-                    {/* 第一项：所有实例，全量铺开（顺序沿用「实例管理」页里的手动排序）。
-                        记录名不稀缺，随便哪台机器都能挂一条域名，不必先编进保活或换班组。 */}
-                    {servers.length > 0 && (
-                      <optgroup label="所有实例">
-                        {servers.map((server) => (
-                          <option key={`all-${server.id}`} value={`server:${server.id}`}>
-                            {server.label}
-                          </option>
-                        ))}
-                      </optgroup>
-                    )}
-                    {keepaliveServers.length > 0 && (
-                      <optgroup label="单机保活">
-                        {keepaliveServers.map((server) => (
-                          <option key={`ka-${server.id}`} value={`server:${server.id}`}>
-                            {server.label}
-                          </option>
-                        ))}
-                      </optgroup>
-                    )}
-                    {groups.length > 0 && (
-                      <optgroup label="换班组">
-                        {groups.map((group) => (
-                          <option key={`g-${group.id}`} value={`group:${group.id}`}>
-                            {group.name}
-                          </option>
-                        ))}
-                      </optgroup>
-                    )}
-                    {balances.length > 0 && (
-                      <optgroup label="均衡组">
-                        {balances.map((group) => (
-                          <option key={`b-${group.id}`} value={`balance:${group.id}`}>
-                            {group.name}
-                          </option>
-                        ))}
-                      </optgroup>
-                    )}
-                  </select>
+                  />
                 </div>
 
                 <div className="dns-meta">
                   {target ? (
                     <span className="dns-target">
-                      {target.kind === 'group' ? (
-                        <Repeat size={11} />
-                      ) : target.kind === 'balance' ? (
-                        <Scale size={11} />
-                      ) : keepaliveIds.has(target.id) ? (
-                        <HeartPulse size={11} />
-                      ) : (
-                        <ServerIcon size={11} />
-                      )}
-                      {target.kind === 'group'
-                        ? `换班组「${target.label}」`
-                        : target.kind === 'balance'
-                          ? `均衡组「${target.label}」`
-                          : target.label}
-                      {(target.kind === 'group' || target.kind === 'balance') && target.duty
-                        ? ` · 当班 ${target.duty}`
-                        : ''}
-                      <span className={target.running ? 'dns-run on' : 'dns-run'}>
-                        {target.running ? '运行中' : '未运行'}
+                      {/* 图标和实例管理说同一件事：换班组=品牌绿、均衡组=蓝、保活=紫，
+                          没归属的机器（闲散手动）=手掌，颜色跟这行文字一样是中性灰。
+                          颜色由全局 .owner-icon-* 那四条给，组件本身只挑图标。 */}
+                      <OwnerIcon
+                        kind={
+                          target.kind === 'group'
+                            ? 'shift'
+                            : target.kind === 'balance'
+                              ? 'balance'
+                              : /* 单台机器看它的真实归属：编在组里就是组的颜色，
+                                   没归属就是手掌（ownerIcon 对空值返回 'free'） */
+                                ownerIcon(owners.get(target.id))
+                        }
+                        size={11}
+                      />
+                      {/* 名字单独包一层：这一层负责省略号截断。以前名字是裸文本节点，
+                          截断不了，只能整行换行，同排卡片就一高一低。
+                          这里不再放「运行中 / 未运行」胶囊：卡片第一行的状态徽标
+                          （未绑定 / 目标未运行 / 待同步 / 已同步 / 同步失败）已经说清了
+                          目标在不在，同一个信息写两遍反而抢这一行的位置。 */}
+                      <span className="dns-target-text">
+                        {target.kind === 'group'
+                          ? `换班组「${target.label}」`
+                          : target.kind === 'balance'
+                            ? `均衡组「${target.label}」`
+                            : target.label}
+                        {(target.kind === 'group' || target.kind === 'balance') && target.duty
+                          ? ` · 当班 ${target.duty}`
+                          : ''}
                       </span>
                     </span>
                   ) : (

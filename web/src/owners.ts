@@ -1,6 +1,14 @@
 import type { Managed } from './types'
 
 /**
+ * 归属图标类别：换班组 / 均衡组 / 单机保活 / 闲散手动（没归属）。
+ *
+ * 放这里而不是 components/ui.tsx：这是领域概念，ui 只是照着画图标。
+ * 反过来的话（owners → ui）会让底层工具依赖展示层，加个视图就多一条环。
+ */
+export type OwnerKind = 'shift' | 'balance' | 'keepalive' | 'free'
+
+/**
  * 「归属」文案。
  *
  * 服务器卡片、列表视图、换班组的成员选择器都显示这台机器现在归谁，
@@ -13,8 +21,10 @@ export function ownerBase(owner: Managed): string {
   return '单机保活'
 }
 
-/** 归属用的图标类别：卡片和列表按它挑图标，别在每处再写一串三元 */
-export function ownerIcon(owner: Managed): 'shift' | 'balance' | 'keepalive' {
+/** 归属用的图标类别：卡片和列表按它挑图标，别在每处再写一串三元。
+    没归属（闲散手动）算独立的一类，和另外三种一样有自己的图标。 */
+export function ownerIcon(owner: Managed | null | undefined): OwnerKind {
+  if (!owner) return 'free'
   if (owner.kind === 'group') return 'shift'
   if (owner.kind === 'balance') return 'balance'
   return 'keepalive'

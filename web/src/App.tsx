@@ -37,8 +37,8 @@ import GroupDialog from './components/GroupDialog'
 import SettingsView from './components/SettingsView'
 import ConfirmDialog from './components/ConfirmDialog'
 import DNSView from './components/DNSView'
-import { Badge, Modal } from './components/ui'
-import { ownerLabel, ownerTone } from './owners'
+import { Badge, Modal, OwnerIcon } from './components/ui'
+import { ownerIcon, ownerLabel, ownerTone } from './owners'
 import { syncClock } from './time'
 import { applyTheme, watchSystemTheme } from './theme'
 
@@ -915,6 +915,7 @@ export default function App() {
             keepalives={overview.keepalives}
             groups={overview.groups}
             balances={overview.balances}
+            owners={owners}
             busy={busyDns}
             syncingAll={dnsSyncingAll}
             onBind={bindDns}
@@ -1051,8 +1052,7 @@ export default function App() {
                     <span
                       className={`owner-tag ${ownerTone(display)}${display && !display.active ? ' paused' : ''}`}
                     >
-                      {display?.kind === 'group' ? <Repeat size={10} /> : null}
-                      {display?.kind === 'keepalive' ? <HeartPulse size={10} /> : null}
+                      <OwnerIcon kind={ownerIcon(display)} />
                       <span className="owner-tag-text">{ownerLabel(display)}</span>
                     </span>
                   </button>

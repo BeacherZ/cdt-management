@@ -1,9 +1,9 @@
 import { useState } from 'react'
-import { Check, HeartPulse, Repeat, Scale, TriangleAlert } from 'lucide-react'
+import { Check, HeartPulse, TriangleAlert } from 'lucide-react'
 import { del } from '../api'
-import { ownerBase, ownerLabel, ownerTone } from '../owners'
+import { ownerBase, ownerIcon, ownerLabel, ownerTone } from '../owners'
 import type { Server } from '../types'
-import { Modal } from './ui'
+import { Modal, OwnerIcon } from './ui'
 
 type Props = {
   servers: Server[]
@@ -167,9 +167,7 @@ export default function ServerPicker({
                   className={`owner-tag ${ownerTone(owner)}${owner && !owner.active ? ' paused' : ''}`}
                   title={ownerLabel(owner)}
                 >
-                  {owner?.kind === 'group' ? <Repeat size={10} /> : null}
-                  {owner?.kind === 'balance' ? <Scale size={10} /> : null}
-                  {owner?.kind === 'keepalive' ? <HeartPulse size={10} /> : null}
+                  <OwnerIcon kind={ownerIcon(owner)} />
                   <span className="owner-tag-text">{owner ? ownerBase(owner) : '闲散手动'}</span>
                 </span>
                 {used && <span className="server-pick-note">已在其他行</span>}
