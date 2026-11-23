@@ -55,7 +55,10 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  margin: 0 2px 18px;
+  /* 下边距 18→24：和第一段「控制台」标题再拉开一档（加上 .sidebar 的 2px gap，
+     实际是 26px）。18px 时 Logo 和标题几乎贴在一起，像标题属于 Logo 那一块；
+     再大就成两截了，所以只加这一点。 */
+  margin: 0 2px 24px;
   padding: 0 4px;
   /* button 重置：作为可点击的 Logo，去掉原生外观但保留点击反馈 */
   border: 0;
@@ -457,7 +460,9 @@
     min-width: 0;
     gap: 3px;
     overflow-x: auto;
-    padding-top: 6px;
+    /* 和上面的 Logo 行拉开一档：6→9，跟桌面那个 +6px 同向（手机上两行本来就
+       分得开，多给 3px 就够，再多顶栏会显得空） */
+    padding-top: 9px;
     scrollbar-width: none;
   }
 
