@@ -693,11 +693,15 @@ label {
 }
 
 .dns-list {
-  /* 一行两卡：记录少时并排；窄屏（≤700px，见下方媒体查询）回落成一列 */
+  /* 一行两卡：记录少时并排；窄屏（≤700px，见下方媒体查询）回落成一列。
+     默认的 align-items: stretch 会把同排卡片拉到一样高——以前这里写的是 start，
+     每张卡各自收在内容高度上，同排两张能差出整整一行（有错误提示的那张多一行，
+     旁边那张就矮 25px），底边参差。不要改用 grid-auto-rows: 1fr：那会把所有行
+     都拉成最高那一行，某条记录报错多一行时整页卡片都要跟着长高。
+     单列（手机）时每张卡独占一行，stretch 等于内容高度，高度仍是自然的。 */
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
   gap: 10px;
-  align-items: start;
 }
 
 .dns-row {
@@ -782,6 +786,10 @@ label {
 }
 
 .dns-meta {
+  /* 沉到卡底：被拉伸到等高后，多出来的空间留在上一行和这行之间，
+     而不是垫在卡片最下面——否则底边齐了，内容却浮在半空，看着像忘了填。
+     它是 .dns-row 的最后一个子元素，margin-top: auto 相当于把它按到内底边。 */
+  margin-top: auto;
   display: flex;
   align-items: center;
   gap: 12px;
