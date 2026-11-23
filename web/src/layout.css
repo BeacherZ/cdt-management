@@ -132,8 +132,9 @@
 }
 
 /* 段标题：11px 小字，和菜单文字拉开一档，够区分就行。
-   不画右侧延长线：1px 的线落在非整数像素上会被抗锯齿摊成一行或两行，
-   两条标题的纵坐标小数部分不同，看上去就一细一粗，索性留白代替线。 */
+   标题右侧拖一条细线到栏尾（::after + flex:1）：分组在视觉上自己「起头」，
+   比加书名号干净。线色用 --line 而不是 --line-strong，压在 11px 小字旁边
+   才不至于抢过标题本身。 */
 .nav-label {
   display: flex;
   align-items: center;
@@ -144,6 +145,15 @@
   font-weight: 600;
   letter-spacing: 0.06em;
   user-select: none;
+}
+
+/* 线高固定 1px，靠 align-items:center 居中。两个标题的纵坐标小数部分若不同，
+   1px 的线会被抗锯齿摊成一粗一淡——所以线的颜色压得很轻，分摊后肉眼无差。 */
+.nav-label::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--line);
 }
 
 /* 菜单行：行高 10px 内边距（≈ 40px 高）+ 16px 横向内边距，图标和文字整块
