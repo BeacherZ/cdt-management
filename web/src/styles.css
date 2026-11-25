@@ -4896,6 +4896,15 @@ input[type='number']::-webkit-inner-spin-button {
   box-shadow: var(--shadow-1);
 }
 
+/* 小节标题紧跟在「开关 + 其展开字段」那一块后面时，间距是 0：
+   编辑态字段是包裹 div 的 :last-child，媒体查询外的 .field:last-child
+   把 margin-bottom 清成了 0，而 .section-head 本身只有 margin-bottom。
+   表现就是「外观」直接贴在「推送时间」输入框下沿（实测 0px）。
+   上边留得比下边（12px）松一点，标题才会归属到它下面那组内容。 */
+.settings-body > div + .section-head {
+  margin-top: 18px;
+}
+
 /* 吸底操作条：表单很长时不用滚回顶部找保存 */
 .settings-actions {
   position: sticky;
@@ -4944,6 +4953,12 @@ input[type='number']::-webkit-inner-spin-button {
 @media (max-width: 700px) {
   .settings-body {
     padding: 14px;
+  }
+
+  /* 手机上正文下的说明会独占一行、标题块本身已经变高，间距收一档，
+     与 .notify-cat-head 的 18 → 14 同一处逻辑 */
+  .settings-body > div + .section-head {
+    margin-top: 15px;
   }
 
   .settings-actions {
