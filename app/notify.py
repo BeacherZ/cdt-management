@@ -224,6 +224,23 @@ def _send_telegram(config: dict[str, str], message: Message) -> None:
 # 邮件
 # --------------------------------------------------------------------------
 
+def _email_html(message: Message) -> str:
+    """把 Telegram 那份文案原样转成邮件正文，只补换行。
+
+    文案里用 `\\n` 分行（Telegram 认），但作为 `text/html` 发出去时 HTML 会把
+    换行折叠成空格，整封邮件挤成一行。这里逐行补 `<br>`，内容一字不改 ——
+    邮件看到的排版要和 Telegram 收到的完全一致，所以不加卡片、不加页脚。
+    容器只给字体、字号、行高：`┃` 和 `━━━` 这类制表符在默认行高下会挤在一起。
+    """
+    body = message.html.replace("\r\n", "\n").replace("\n", "<br>\n")
+    style = (
+        "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,"
+        "'PingFang SC','Microsoft YaHei',sans-serif;"
+        "font-size:14px;line-height:1.8;color:#1f2328"
+    )
+    return f'<div style="{style}">{body}</div>'
+
+
 def _send_email(config: dict[str, str], message: Message) -> None:
     host = config.get("notify_mail_host", "")
     port = int(config.get("notify_mail_port") or 465)
@@ -232,8 +249,12 @@ def _send_email(config: dict[str, str], message: Message) -> None:
     recipient = config.get("notify_mail_to", "")
     security = (config.get("notify_mail_security") or "ssl").lower()
 
-    mime = MIMEText(message.html, "html", "utf-8")
-    mime["Subject"] = Header(f"{settings.BRAND} · {message.title}", "utf-8")
+    mime = MIMEText(_email_html(message), "html", "utf-8")
+    # 标题里已经带品牌时不再前置，否则主题会变成「CDT-Management · CDT-Management 每日报告」
+    subject = message.title
+    if not subject.startswith(settings.BRAND):
+        subject = f"{settings.BRAND} · {subject}"
+    mime["Subject"] = Header(subject, "utf-8")
     # 没填用户名时用收件人兜底，否则 From 为空很多 SMTP 会直接拒信
     mime["From"] = formataddr((str(Header(settings.BRAND, "utf-8")), username or recipient))
     mime["To"] = recipient
