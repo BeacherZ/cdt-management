@@ -526,6 +526,23 @@ label {
   color: var(--muted-soft);
 }
 
+/* 地域下面那行全宽说明：小一号、贴紧上一排，读起来像「别名 + 地域」的脚注，
+   而不是独立一段，避免把两列布局撑出高低差 */
+.pool-note {
+  margin: -7px 0 14px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* 配额标签右侧的流量包提示：骑在标签行里，不额外增高一格 */
+.field > label .label-note {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted-soft);
+  white-space: nowrap;
+}
+
 /* -------------------------------------------------------------- 设置抽屉 */
 
 /* 区块标题里的 lucide 图标垂直对齐 */

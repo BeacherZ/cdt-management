@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react'
 import { Hand, HeartPulse, Repeat, Scale, X } from 'lucide-react'
 import type { OwnerKind } from '../owners'
+import { poolHint, poolOf } from '../regions'
 
 /* -------------------------------------------------------------- 徽章 */
 
@@ -166,17 +167,21 @@ export function Meter({
   used,
   quota,
   threshold,
+  region,
   compact = false,
 }: {
   used: number | null
   quota: number
   threshold: number
+  /** 实例所在地域：有值时把「哪个流量包」拼进 title，卡片本身不加字 */
+  region?: string | null
   /** 紧凑模式：只报「已用 + 百分比」，阈值只留刻度线，给列表行那种窄列用 */
   compact?: boolean
 }) {
-  // 分母只认配额（后端默认每台 200GB），和通知、概览流量圈一个口径；
+  // 分母只认配额（后端按地域的流量包写死 20 / 200），和通知、概览流量圈一个口径；
   // 阈值只用来定颜色和那条刻度线，不参与百分比。
-  const base = quota > 0 ? quota : 200
+  // 配额缺失时按地域推断，兜底也用 200 会把国内机的百分比算成 1/10。
+  const base = quota > 0 ? quota : poolOf(region).quota
   const rawPercent = used === null ? 0 : (used / base) * 100
   // 进度条画到 100% 就顶格，但标签照报真实值（超配额时能读到 103.4%，别糊成 100.0%）
   const percent = Math.min(100, rawPercent)
@@ -217,9 +222,15 @@ export function Meter({
     <div
       className={`meter${compact ? ' is-compact' : ''}`}
       title={
-        compact
-          ? `已用 ${used === null ? '未读取' : `${used.toFixed(2)} GB`} / 配额 ${base} GB · 阈值 ${threshold} GB`
-          : undefined
+        [
+          // 流量包放最前：compact 模式本来就有「已用 / 配额 / 阈值」，换行拼接而不是覆盖
+          region ? poolHint(region) : '',
+          compact
+            ? `已用 ${used === null ? '未读取' : `${used.toFixed(2)} GB`} / 配额 ${base} GB · 阈值 ${threshold} GB`
+            : '',
+        ]
+          .filter(Boolean)
+          .join('\n') || undefined
       }
     >
       <div className="meter-track" ref={trackRef} title={`阈值线 ${thresholdPercent.toFixed(0)}%`}>

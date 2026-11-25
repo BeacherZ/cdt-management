@@ -19,7 +19,7 @@ import {
   Server as ServerIcon,
   Trash2,
 } from 'lucide-react'
-import { regionLabel } from '../regions'
+import { poolHint, regionLabel } from '../regions'
 import {
   ownerActionHint,
   ownerBase,
@@ -370,7 +370,10 @@ export default function ServersView({
                   <span className="addr-chip" title="公网 IP">
                     {server.public_ip || '无公网 IP'}
                   </span>
-                  <span className="card-region meta-right" title={server.region_id}>
+                  <span
+                    className="card-region meta-right"
+                    title={`${regionLabel(server.region_id)} · ${poolHint(server.region_id)}`}
+                  >
                     <MapPin size={11} />
                     {regionLabel(server.region_id)}
                   </span>
@@ -380,6 +383,7 @@ export default function ServersView({
                   used={server.traffic_used}
                   quota={server.quota_gb}
                   threshold={server.threshold_gb}
+                  region={server.region_id}
                 />
 
                 <CostRow

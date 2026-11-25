@@ -32,7 +32,7 @@ import html as html_lib
 import re
 from typing import Any
 
-from . import notify
+from . import aliyun, notify
 
 SEP = "━━━━━━━━━━━━━━━"
 
@@ -961,9 +961,9 @@ def _balance_text(server: dict[str, Any]) -> str:
 
 
 def report_block(server: dict[str, Any]) -> str:
-    """脚本里的 build_report_block。额度取每台自己的配额，没填就按 200GB。"""
+    """脚本里的 build_report_block。额度取每台自己的配额，没填就按所在地域的流量包（20 / 200）。"""
     used = _used(server)
-    quota = float(server.get("quota_gb") or 0) or 200.0
+    quota = float(server.get("quota_gb") or 0) or aliyun.pool_quota_gb(server.get("region_id"))
     remain = quota - used
     percent = used / quota * 100 if quota > 0 else 0.0
     color = "🟢 正常" if percent < 60 else ("🟡 注意" if percent < 90 else "🔴 危险")

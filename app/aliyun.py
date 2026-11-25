@@ -170,6 +170,39 @@ CDT_DOMAIN = "cdt.aliyuncs.com"
 # CDT 是中心化接口，与实例所在地域无关，固定用香港
 CDT_REGION = "cn-hongkong"
 
+# CDT 免费额度按账号分两个池：中国内地 20 GB/月、非中国内地 200 GB/月。
+# 中国香港算「非中国内地」，和所有海外地域共用一个池。
+# 池内所有地域的用量合并累计（账号级），不是每台实例一份。
+# 前端的同一套规则在 web/src/regions.ts 的 poolOf()，改这里记得同步。
+CHINA_POOL = "china"
+INTERNATIONAL_POOL = "international"
+
+CHINA_POOL_QUOTA_GB = 20.0
+INTERNATIONAL_POOL_QUOTA_GB = 200.0
+
+
+def pool_of(region_id: str | None) -> str:
+    """地域所属的 CDT 流量包：中国香港（含可用区）与其余海外地域 → 海外包。
+
+    判定连同可用区一起认：`cn-hongkong-b` 这种带后缀的也归海外包。运行态会把
+    ECS 返回的 RegionId 回填进库里，万一拿到的是 ZoneId，前缀判断会把香港的可用区
+    误判成中国内地，于是配额从 200 掉到 20、阈值跟着压缩，机器会在远没到额度时
+    就被停机 —— 这种误判必须是「宁可判成海外」。
+    """
+    region = (region_id or "").strip()
+    if region.startswith("cn-hongkong"):
+        return INTERNATIONAL_POOL
+    if region.startswith("cn-"):
+        return CHINA_POOL
+    return INTERNATIONAL_POOL
+
+
+def pool_quota_gb(region_id: str | None) -> float:
+    """地域所属流量包的额度，实例的总配额就取这个值（不允许单独改）。"""
+    if pool_of(region_id) == CHINA_POOL:
+        return CHINA_POOL_QUOTA_GB
+    return INTERNATIONAL_POOL_QUOTA_GB
+
 BSS_ENDPOINTS: dict[str, tuple[str, str]] = {
     "china": ("cn-hangzhou", "business.aliyuncs.com"),
     "international": ("ap-southeast-1", "business.ap-southeast-1.aliyuncs.com"),
@@ -458,30 +491,83 @@ def _mock_advance(state: dict[str, Any]) -> None:
             state["stopped_mode"] = ""
 
 
-def get_traffic_gb(account: dict) -> float | None:
-    """CDT 当月出方向流量（GB）。与用户脚本一致：累加所有 TrafficDetails。
+def _cdt_traffic_details(client: Any) -> tuple[list[dict[str, Any]], bool]:
+    """拉全账号的 TrafficDetails，返回 (明细, 是否取全)。
 
-    返回 None 表示「接口调用成功，但一个明细都没给」。不在这里折算成 0.0：
-    月初流量包重置后确实是 0，接口抖动时也是空列表，两者在这一层分不开，
-    交给调用方结合上次读数判断（见 shift._resolve_empty_traffic）。
+    两点防御，都是「少算流量」的坑 —— 少算意味着保护失效，机器会一直开着烧钱：
+
+    1. 字段位置：多数返回是顶层 `TrafficDetails`，但也见过包在 `Data` 里的。
+       两种都认，找不到就当没有。
+    2. 分页：该接口若返回 `NextToken`，只取第一页会漏掉后面的地域；按 token
+       续拉（上限 5 页）。最后一页没取完时 `complete=False`，调用方据此拒绝
+       把「没有这个地域」解释成「用量为 0」。
+    """
+    details: list[dict[str, Any]] = []
+    token = ""
+    for _ in range(5):
+        request = CommonRequest()
+        request.set_domain(CDT_DOMAIN)
+        request.set_version("2021-08-13")
+        request.set_action_name("ListCdtInternetTraffic")
+        request.set_method("POST")
+        if token:
+            request.add_query_param("NextToken", token)
+        raw = client.do_action_with_exception(request)
+        data = json.loads(raw.decode("utf-8"))
+        nested = data.get("Data")
+        payload = nested if isinstance(nested, dict) else data
+        details.extend(payload.get("TrafficDetails") or [])
+        token = str(data.get("NextToken") or payload.get("NextToken") or "").strip()
+        if not token:
+            return details, True
+    return details, False
+
+
+def get_traffic_gb(account: dict) -> float | None:
+    """CDT 当月出方向流量（GB），取实例所属流量包在账号内的合计。
+
+    ListCdtInternetTraffic 只有地域维度（BusinessRegionId），没有实例维度；而阿里云
+    的免费额度是按账号的两个池计算的：中国内地 20 GB/月、非中国内地 200 GB/月，
+    同一池下所有地域的用量合并累计。所以这里把「同池地域」的明细全部相加：
+    香港 / 新加坡 / 硅谷的机器读到同一个海外包合计，张家口 / 北京 / 上海的机器读到
+    同一个国内包合计，两个池之间不串数。
+
+    不能只取本机地域那一条：同池跨地域时（张家口 16 + 北京 5）单看哪一条都没到
+    20 GB，包其实已经超了，保护会滞后。
+
+    返回 None 表示「读数不可用」：明细为空；地域缺失（分不清哪个池，绝不把两个池
+    加在一起）；分页没取全且一条同池明细都没看到。不在这里折算成 0.0，因为 0 的
+    含义是「这个月没跑流量、不用停机」，会把保护悄悄关掉；交给调用方结合上次读数
+    判断（见 shift._resolve_empty_traffic）。判空必须发生在过滤之前：先过滤的话，
+    某台机器本月还没跑流量就会被当成接口抖动，月初重置那条路就断了。
     """
     if settings.DRY_RUN:
         return float(_mock(account)["traffic"])
     client = _client(account, CDT_REGION)
-    request = CommonRequest()
-    request.set_domain(CDT_DOMAIN)
-    request.set_version("2021-08-13")
-    request.set_action_name("ListCdtInternetTraffic")
-    request.set_method("POST")
     try:
-        raw = client.do_action_with_exception(request)
-        data = json.loads(raw.decode("utf-8"))
+        details, complete = _cdt_traffic_details(client)
     except Exception as exc:
         raise AliyunError(f"CDT 流量查询失败：{brief_error(exc)}") from exc
-    details = data.get("TrafficDetails") or []
     if not details:
         return None
-    total_bytes = sum(float(item.get("Traffic", 0) or 0) for item in details)
+    region = str(account.get("region_id") or "").strip()
+    if not region:
+        # 没有地域就分不清国内 / 海外：全加会把两个池混成一个（国内机拿 200 池的
+        # 用量对 20 GB 配额，立刻误停）。宁可当读数不可用。
+        return None
+    pool = pool_of(region)
+    matched = []
+    for item in details:
+        # 字段名两个版本都认：文档写 BusinessRegionId，少数返回里是 RegionId
+        item_region = str(item.get("BusinessRegionId") or item.get("RegionId") or "").strip()
+        if not item_region:
+            continue
+        if pool_of(item_region) == pool:
+            matched.append(item)
+    # 没匹配到同池明细且分页没取全：可能就在没拉到的那几页里，不能当成 0
+    if not matched and not complete:
+        return None
+    total_bytes = sum(float(item.get("Traffic", 0) or 0) for item in matched)
     return total_bytes / (1024 ** 3)
 
 

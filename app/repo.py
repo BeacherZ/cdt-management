@@ -8,7 +8,7 @@ import threading
 import time
 from typing import Any
 
-from . import db, security
+from . import aliyun, db, security
 
 # 事件进度是「读-改-写」三段：对账线程与事件确认线程会同时追加同一条事件的进度，
 # 无锁会丢更新。这把锁只保护进程内这两条后台线程的互斥（架构是单进程多线程）。
@@ -244,6 +244,23 @@ def get_server(server_id: int, decrypt_secret: bool = False) -> dict[str, Any] |
     return _server_row(row, decrypt_secret) if row else None
 
 
+def _default_threshold(quota: float) -> float:
+    """新建实例的默认阈值：设置里的「新建实例默认阈值（% 配额）」，缺省 90%。
+
+    以前这里写死 quota*0.94（200→188），和设置页显示的 90% 不是一回事：
+    用户以为新实例按 90% 停机，实际是 94%。国内包只有 20 GB 时差 0.8 GB，
+    而阈值一旦超过配额就会被拒，所以默认值必须和设置页同一个口径。
+    """
+    row = db.query_one("SELECT value FROM settings WHERE key='traffic_threshold_pct'")
+    try:
+        pct = float(row["value"]) if row else 90.0
+    except (TypeError, ValueError):
+        pct = 90.0
+    if not 0 < pct <= 100:
+        pct = 90.0
+    return round(quota * pct / 100, 1)
+
+
 def _gb_value(raw: Any, default: float, label: str) -> float:
     """把配额 / 阈值转成有限浮点数。
 
@@ -270,8 +287,28 @@ def upsert_server(payload: dict[str, Any]) -> int:
     region = str(payload.get("region_id") or "").strip()
     site = normalize_site(payload.get("site"))
     instance = str(payload.get("instance_id") or "").strip()
-    quota = _gb_value(payload.get("quota_gb"), 200.0, "总配额")
-    threshold = _gb_value(payload.get("threshold_gb"), 188.0, "阈值")
+    # 配额不再取用户输入：由地域所属的 CDT 流量包决定（中国内地 20 GB、非中国内地 200 GB）。
+    # 前端已把那一格锁死，这里再兜一层，防止老前端或直接调接口写进别的值。
+    quota = aliyun.pool_quota_gb(region)
+    # 编辑时先把原记录读出来：阈值只在真的传了的时候才改。老前端 / 只改别处的
+    # 接口不带 threshold_gb，以前会被 `or 默认值` 静默重算（海外机 184 变 188、
+    # 国内机被写成 20），现在沿用原值，超过新配额才按百分比重算。
+    existing = (
+        db.query_one(
+            "SELECT access_key_id, access_key_secret, site, instance_id, stop_mode, threshold_gb "
+            "FROM servers WHERE id=?",
+            (server_id,),
+        )
+        if server_id
+        else None
+    )
+    if server_id and existing is None:
+        raise ValueError("服务器不存在")
+    raw_threshold = payload.get("threshold_gb")
+    if raw_threshold is None and existing is not None:
+        kept = float(existing["threshold_gb"] or 0)
+        raw_threshold = kept if 0 < kept <= quota else None
+    threshold = _gb_value(raw_threshold, _default_threshold(quota), "阈值")
     remark = str(payload.get("remark") or "").strip()
     stop_mode_raw = payload.get("stop_mode")
     # 没传（老前端 / 只改别处的接口）就保持原值；新建时落到默认的节省停机
@@ -281,20 +318,10 @@ def upsert_server(payload: dict[str, Any]) -> int:
 
     if not region:
         raise ValueError("地域不能为空")
-    # 显式区分「没传」与「传了 0/负数」：前端清空输入框会传 0 过来，之前被
-    # `or 200` 静默吞成默认值，导致用户以为改成了 0 实际还是 200。
-    if quota <= 0:
-        raise ValueError("总配额必须大于 0")
     if threshold <= 0 or threshold > quota:
-        raise ValueError("阈值必须大于 0 且不超过总配额")
+        raise ValueError(f"阈值必须大于 0 且不超过配额 {quota:g} GB")
 
     if server_id:
-        existing = db.query_one(
-            "SELECT access_key_id, access_key_secret, site, instance_id, stop_mode FROM servers WHERE id=?",
-            (server_id,),
-        )
-        if existing is None:
-            raise ValueError("服务器不存在")
         if not ak:
             ak = existing["access_key_id"]
         if payload.get("site") is None:
@@ -505,11 +532,22 @@ def update_server_runtime(
                 (status, stopped_mode or "", now, server_id),
             )
     if region_id:
-        # 从 ECS DescribeInstances 返回值动态回填真实地域，避免手工填错/漏填
-        db.execute(
-            "UPDATE servers SET region_id=? WHERE id=?",
-            (region_id, server_id),
+        # 从 ECS DescribeInstances 返回值动态回填真实地域，避免手工填错/漏填。
+        # 地域一变，配额就跟着流量包变（中国内地 20 / 非中国内地 200）：只改
+        # region_id 会让一台中国内地机器继续顶着 200 GB 配额，阈值也能填到 200，
+        # 流量保护等于失效。阈值超新配额时按百分比重算，否则保留用户填的值。
+        row = db.query_one(
+            "SELECT region_id, threshold_gb FROM servers WHERE id=?", (server_id,)
         )
+        if row is not None and str(row["region_id"] or "") != region_id:
+            quota = aliyun.pool_quota_gb(region_id)
+            threshold = float(row["threshold_gb"] or 0)
+            if threshold <= 0 or threshold > quota:
+                threshold = _default_threshold(quota)
+            db.execute(
+                "UPDATE servers SET region_id=?, quota_gb=?, threshold_gb=? WHERE id=?",
+                (region_id, quota, threshold, server_id),
+            )
 
 
 def add_sample(server_id: int, used: float, status: str) -> None:

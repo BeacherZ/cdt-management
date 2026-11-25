@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Globe2, KeyRound, MapPin, Server, TriangleAlert } from 'lucide-react'
 import { post } from '../api'
-import { DEFAULT_REGION, GROUP_ORDER, regionsFor } from '../regions'
+import { DEFAULT_REGION, GROUP_ORDER, poolOf, regionsFor } from '../regions'
 import type { Server as ServerType, SiteType, StopMode } from '../types'
 import { Modal, Segmented } from './ui'
 import ConfirmDialog from './ConfirmDialog'
@@ -38,16 +38,24 @@ export default function ServerDialog({
   onSaved,
 }: Props) {
   const editing = Boolean(server && server.id)
+  // 配额由地域所属的流量包决定（中国内地 20 GB、非中国内地 200 GB），不再让用户填，
+  // 打开编辑时也按地域重置一次，避免老数据里 200 GB 的国内机继续按 200 算百分比。
+  const initialRegion = server?.region_id ?? DEFAULT_REGION
+  const initialQuota = poolOf(initialRegion).quota
   const [form, setForm] = useState(() => ({
     id: server?.id ?? 0,
     label: server?.label ?? '',
     access_key_id: '',
     access_key_secret: '',
     site: (server?.site ?? 'china') as SiteType,
-    region_id: server?.region_id ?? DEFAULT_REGION,
+    region_id: initialRegion,
     instance_id: server?.instance_id ?? '',
-    quota_gb: server?.quota_gb ?? 200,
-    threshold_gb: server?.threshold_gb ?? Math.round((200 * defaultThresholdPercent) / 100),
+    quota_gb: initialQuota,
+    // 阈值自由设置，但不能超过配额；老数据超过时先压到配额上限，保存时不会被卡住
+    threshold_gb: Math.min(
+      server?.threshold_gb ?? Math.round((initialQuota * defaultThresholdPercent) / 100),
+      initialQuota,
+    ),
     stop_mode: (server?.stop_mode ?? 'StopCharging') as StopMode,
     remark: server?.remark ?? '',
   }))
@@ -63,15 +71,32 @@ export default function ServerDialog({
     if (error) setError('')
   }
 
+  // 切地域（含切站点导致地域回退到默认值）时强制换配额：中国内地 20 GB、非中国内地 200 GB。
+  // 配额真的变了，阈值就按设置里的「新建实例默认阈值（% 配额）」重算，比如 200→20 时
+  // 184 跟着变成 18；两个地域同属一个池（香港 ↔ 新加坡）时配额没变，不动用户手填的值。
+  function withPoolQuota<
+    T extends { region_id: string; quota_gb: number; threshold_gb: number },
+  >(current: T, regionId: string): T {
+    const quota = poolOf(regionId).quota
+    if (quota === current.quota_gb) return { ...current, region_id: regionId }
+    return {
+      ...current,
+      region_id: regionId,
+      quota_gb: quota,
+      threshold_gb: Math.round((quota * defaultThresholdPercent) / 100),
+    }
+  }
+
   function changeSite(site: SiteType) {
     setForm((current) => {
       const stillValid = regionsFor(site).some((region) => region.value === current.region_id)
-      return { ...current, site, region_id: stillValid ? current.region_id : DEFAULT_REGION }
+      return withPoolQuota({ ...current, site }, stillValid ? current.region_id : DEFAULT_REGION)
     })
   }
 
   // 存量数据里地域可能与站点不匹配（比如早期都是中国站），这里补一个选项免得下拉框显示空白
   const regionKnown = regionsFor(form.site).some((region) => region.value === form.region_id)
+  const pool = poolOf(form.region_id)
 
   // 提示条永远贴在正文底部，这里再把出事的那一格滚进视野并聚焦，
   // 让「点了保存没反应」变成「红框 + 光标停在该填的格子里」
@@ -202,7 +227,9 @@ export default function ServerDialog({
             id="region"
             className="select"
             value={form.region_id}
-            onChange={(event) => update('region_id', event.target.value)}
+            onChange={(event) =>
+              setForm((current) => withPoolQuota(current, event.target.value))
+            }
           >
             {groupedRegions(form.site).map((entry) => (
               <optgroup key={entry.group} label={entry.group}>
@@ -218,6 +245,11 @@ export default function ServerDialog({
         </div>
       </div>
 
+      {/* 地域说明压成一行全宽小字，跟在「别名 + 地域」这一排下面：
+          只讲共用额度和统计口径，具体包名由下方配额的标签点明，避免同一句说两遍 */}
+      <div className="hint pool-note">
+        流量包：同账号{pool.scope}共用 {pool.quota} GB/月，已用按该包合计。
+      </div>
       <div className="field">
         <label htmlFor="ak">
           <KeyRound size={12} /> AccessKey ID<span className="req" aria-hidden="true">*</span>
@@ -267,15 +299,21 @@ export default function ServerDialog({
         <div className="field">
           <label htmlFor="quota">
             总配额（GB）<span className="req" aria-hidden="true">*</span>
+            <span
+              className="label-note"
+              title={`${pool.label}：同账号${pool.scope}共用 ${pool.quota} GB/月，配额由地域决定、不单独修改`}
+            >
+              {pool.label} · 固定 {pool.quota} GB
+            </span>
           </label>
           <input
             id="quota"
             aria-invalid={badField === 'quota'}
             className="input"
             type="number"
-            min={1}
             value={form.quota_gb}
-            onChange={(event) => update('quota_gb', Number(event.target.value))}
+            readOnly
+            disabled
           />
         </div>
         <div className="field">
@@ -288,6 +326,7 @@ export default function ServerDialog({
             className="input"
             type="number"
             min={1}
+            max={form.quota_gb}
             value={form.threshold_gb}
             onChange={(event) => update('threshold_gb', Number(event.target.value))}
           />

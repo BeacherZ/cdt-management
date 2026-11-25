@@ -34,7 +34,7 @@ const INTERVAL_OPTIONS = [
   { value: 1440, label: '24 小时' },
 ]
 
-const DIFF_OPTIONS = [10, 30, 50]
+const DIFF_OPTIONS = [1, 5, 10, 30, 50]
 
 type Props = {
   group: BalanceGroup | null
@@ -65,6 +65,12 @@ export default function BalanceDialog({ group, servers, onClose, onSaved }: Prop
   const [picking, setPicking] = useState<number | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+
+  // 老数据可能是直接调接口写进来的任意值（1–200）：不在预设档里也补一颗，
+  // 否则分段控件一个都不亮，看起来像没设过。
+  const diffOptions = DIFF_OPTIONS.includes(diff)
+    ? DIFF_OPTIONS
+    : [...DIFF_OPTIONS, diff].sort((a, b) => a - b)
 
   // 下拉里只放「还没被别的目标占用」的记录 + 本组自己已绑的那条
   useEffect(() => {
@@ -222,7 +228,7 @@ export default function BalanceDialog({ group, servers, onClose, onSaved }: Prop
       <div className="field">
         <label>差值阈值</label>
         <div className="segmented">
-          {DIFF_OPTIONS.map((value) => (
+          {diffOptions.map((value) => (
             <button
               key={value}
               type="button"

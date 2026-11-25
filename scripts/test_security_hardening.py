@@ -78,20 +78,6 @@ class SecurityHardening(unittest.TestCase):
         self.assertTrue(second.get("duplicate"))
         self.assertEqual(len(repo.list_events()), 1)
 
-    def test_upsert_server_quota_guard(self):
-        with self.assertRaises(ValueError):
-            repo.upsert_server(
-                {
-                    "label": "配额0",
-                    "access_key_id": "LTAI5tFakeKeyForTest",
-                    "access_key_secret": "fake-secret-for-test",
-                    "region_id": "cn-hongkong",
-                    "instance_id": "i-quota0",
-                    "quota_gb": 0,
-                    "threshold_gb": 188,
-                }
-            )
-
     def _server_payload(self, **overrides):
         payload = {
             "label": "配额非法",
@@ -105,26 +91,34 @@ class SecurityHardening(unittest.TestCase):
         payload.update(overrides)
         return payload
 
-    def test_upsert_server_rejects_non_finite_quota(self):
-        # inf 能绕过 quota>0 / threshold<=quota 落库，之后所有返回服务器的接口
-        # 都会因为 JSON 不接受 Infinity 变成 400；nan 会触发 NOT NULL → 500。
-        for raw in ("inf", "-inf", "nan", "1e309", float("inf"), float("nan")):
-            with self.subTest(quota=raw), self.assertRaises(ValueError):
-                repo.upsert_server(self._server_payload(quota_gb=raw))
+    def test_upsert_server_quota_is_derived_from_region(self):
+        """配额不再取用户输入：无论传什么，都按地域所属的流量包写 20 / 200。
+
+        老前端、curl、第三方脚本都还可能带 quota_gb；传 0 / inf / nan / 字符串
+        都不能落库，也不能报错（报错只会让升级后的旧前端存不了任何一台机器）。
+        这条同时替代了以前的「quota 必须 >0 且有限」——现在压根不读它，
+        inf 也进不了库。
+        """
+        for raw in (0, -1, "inf", "nan", "1e309", "abc", {"a": 1}, [1], float("inf")):
+            with self.subTest(quota=raw):
+                sid = repo.upsert_server(self._server_payload(quota_gb=raw))
+                self.assertEqual(repo.get_server(sid)["quota_gb"], 200)
+        sid = repo.upsert_server(
+            self._server_payload(
+                region_id="cn-zhangjiakou", instance_id="i-cn-quota", quota_gb=200, threshold_gb=18
+            )
+        )
+        self.assertEqual(repo.get_server(sid)["quota_gb"], 20)
 
     def test_upsert_server_rejects_non_finite_threshold(self):
         for raw in ("inf", "nan", float("inf")):
             with self.subTest(threshold=raw), self.assertRaises(ValueError):
                 repo.upsert_server(self._server_payload(threshold_gb=raw))
 
-    def test_upsert_server_rejects_non_numeric_quota(self):
-        for raw in ("abc", {"a": 1}, [1]):
-            with self.subTest(quota=raw), self.assertRaises(ValueError):
-                repo.upsert_server(self._server_payload(quota_gb=raw))
-
     def test_upsert_server_accepts_string_numbers(self):
         sid = repo.upsert_server(self._server_payload(quota_gb="200", threshold_gb="188"))
         self.assertEqual(repo.get_server(sid)["quota_gb"], 200)
+        self.assertEqual(repo.get_server(sid)["threshold_gb"], 188)
 
     def test_server_summary_survives_legacy_infinite_values(self):
         """老库里已有的 inf / nan 不能让服务器页和仪表盘整页 400。"""

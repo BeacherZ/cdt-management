@@ -23,7 +23,7 @@ import {
 import { useState } from 'react'
 import type { EventItem, Overview } from '../types'
 import { clockText, timeAgo } from '../time'
-import { regionLabel } from '../regions'
+import { poolHint, regionLabel } from '../regions'
 import { ownerBase, ownerIcon, ownerLabel } from '../owners'
 import { Badge, Empty, Meter, OwnerIcon, Ring, money, statusLabel, statusTone } from './ui'
 
@@ -292,7 +292,10 @@ export default function DashboardView({
                       {/* 这一格只留地域：站点（中国站 / 国际站）在「实例管理」里看得到，
                           概览要的是「这台在哪个机房」——少一个胶囊，这一列干净很多 */}
                       <td data-label="地域">
-                        <span className="inst-region" title={server.region_id}>
+                        <span
+                          className="inst-region"
+                          title={`${regionLabel(server.region_id)} · ${poolHint(server.region_id)}`}
+                        >
                           <MapPin size={11} />
                           <span className="inst-region-text">{regionLabel(server.region_id)}</span>
                         </span>
@@ -338,6 +341,7 @@ export default function DashboardView({
                             used={server.traffic_used}
                             quota={server.quota_gb}
                             threshold={server.threshold_gb}
+                            region={server.region_id}
                             compact
                           />
                         </div>

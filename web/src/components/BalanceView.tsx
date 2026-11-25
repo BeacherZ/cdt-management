@@ -219,6 +219,7 @@ export default function BalanceView({
                           used={member.traffic_used}
                           quota={member.quota_gb}
                           threshold={member.threshold_gb}
+                          region={member.region_id}
                         />
                       </div>
                     </div>
