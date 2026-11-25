@@ -17,8 +17,6 @@
 
 **实例不限抢占式**：流量保护和流量均衡只看用量、不看计费方式，按量付费与包年包月同样适用。
 
-**自动识别流量包**：按实例地域自动判定中国内地 20 GB / 非中国内地（含中国香港）200 GB 两个 CDT 免费额度。
-
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 ![python](https://img.shields.io/badge/python-3.13-blue)
 ![docker](https://img.shields.io/badge/docker-amd64%20%7C%20arm64-2496ed)
