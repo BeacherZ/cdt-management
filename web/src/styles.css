@@ -4742,6 +4742,11 @@ input[type='number']::-webkit-inner-spin-button {
     grid-template-columns: 1fr;
     gap: 0;
   }
+  /* 单列后 gap 归零、最后一格又被 .field:last-child 抹掉下边距，
+     紧跟其后的地域说明再套 -7px 上边距就会压进下拉框。这里补回桌面的 8px。 */
+  .grid-2 + .pool-note {
+    margin-top: 8px;
+  }
   .stat-grid {
     grid-template-columns: 1fr 1fr;
   }
