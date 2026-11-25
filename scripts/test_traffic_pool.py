@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
 """回归测试：CDT 两个流量包（中国内地 20 GB / 非中国内地 200 GB）的整套口径。
 
-背景：配额以前是用户自己填的一个数，默认 200 GB。现在改成「由实例所在地域决定」：
-中国内地 20 GB、非中国内地（含中国香港）200 GB，阈值自由填但不得超过配额。
-这个改动会一路影响流量保护、单机保活、联合换班、流量均衡、故障转移 —— 它们全靠
-`threshold_gb` 判断，一旦配额/阈值被写错，结果就是「该停不停」（烧钱）或
-「没到额度就停」（误停）。
+背景：免费额度按账号分两个池——中国内地 / 非中国内地（含中国香港）。实例的「总配额」
+只是**推荐值**：新增时按所在地域给池额度打底，之后用户可改（阿里调政策、账号单独谈配额
+都靠这一格）。改地域时只有「还是老地域默认值」的配额才跟着走，手改过的一概保留。
+阈值自由填但不得超过配额。这套口径一路影响流量保护、单机保活、联合换班、流量均衡、
+故障转移 —— 它们全靠 `threshold_gb` 判断，一旦配额/阈值被写错，结果就是
+「该停不停」（烧钱）或「没到额度就停」（误停）。
 
 这里锁死四件事：
-  1. 地域 → 额度：cn- 开头且不是 cn-hongkong 的 20 GB，其余 200 GB；
+  1. 地域 → 默认额度：cn- 开头且不是 cn-hongkong 的 20 GB，其余 200 GB；
      带可用区后缀的 cn-hongkong-b 必须是 200（判成 20 会误停香港机器）。
   2. 流量读数是「本池合计」：同池各地域相加（阿里按账号共享额度），
      国内 / 海外两个池互不串数；明细为空 / 地域缺失 / 分页没取全
      一律返回 None（当成 0 会把流量保护关掉）。
-  3. 写入侧：配额不取用户输入、阈值不得超配额、编辑不带阈值时沿用原值、
-     运行态回填地域时配额跟着变。
-  4. 迁移：只修「阈值 > 配额」这种非法值，用户主动填的合法阈值不能每次启动都被压。
+  3. 写入侧：配额可改、手改值跨地域保留、阈值不得超配额、编辑不带阈值时沿用原值、
+     运行态回填地域时只有默认配额跟着变。
+  4. 迁移：只修「配额 <= 0」和「阈值 > 配额」这种非法值，用户主动填的合法值不能每次启动都被改。
 
 跑法：python scripts/test_traffic_pool.py
 """
@@ -202,11 +203,24 @@ class ServerQuotaTest(unittest.TestCase):
         self.assertEqual(self._row(zj)["quota_gb"], 20.0)
         self.assertEqual(self._row(zj)["threshold_gb"], 18.0)
 
-    def test_quota_from_payload_is_ignored(self) -> None:
+    def test_quota_from_payload_is_used(self) -> None:
+        """配额是普通可改字段：阿里调额度、账号单独谈过配额，用户传什么就存什么。"""
         sid = repo.upsert_server(
-            _payload(region_id="cn-zhangjiakou", instance_id="i-dom", quota_gb=200, threshold_gb=20)
+            _payload(region_id="cn-zhangjiakou", instance_id="i-dom", quota_gb=50, threshold_gb=20)
         )
-        self.assertEqual(self._row(sid)["quota_gb"], 20.0)
+        row = self._row(sid)
+        self.assertEqual(row["quota_gb"], 50.0)
+        self.assertEqual(row["threshold_gb"], 20.0)
+
+    def test_custom_quota_survives_region_change(self) -> None:
+        """手改过的配额不能被「切地域」重算掉，只有默认值才跟着走。"""
+        sid = repo.upsert_server(
+            _payload(region_id="cn-hongkong", instance_id="i-custom", quota_gb=500, threshold_gb=450)
+        )
+        repo.upsert_server(_payload(id=sid, region_id="cn-shanghai", instance_id="i-custom"))
+        row = self._row(sid)
+        self.assertEqual(row["quota_gb"], 500.0)
+        self.assertEqual(row["threshold_gb"], 450.0)
 
     def test_threshold_above_quota_is_rejected(self) -> None:
         with self.assertRaises(ValueError):
@@ -253,7 +267,7 @@ class ServerQuotaTest(unittest.TestCase):
         self.assertEqual(row["threshold_gb"], 18.0)
 
     def test_migration_keeps_legal_thresholds(self) -> None:
-        """迁移只修「阈值 > 配额」，否则用户主动填的 190 / 200 每次重启都会被压到 180。"""
+        """迁移只修「阈值 > 配额」和坏掉的配额，用户填的合法值每次重启都不能被改。"""
         db.execute(
             "INSERT INTO servers(label,access_key_id,access_key_secret,region_id,site,instance_id,"
             "quota_gb,threshold_gb,stop_mode,created_at) VALUES(?,?,?,?,?,?,?,?,?,0)",
@@ -270,6 +284,18 @@ class ServerQuotaTest(unittest.TestCase):
             "quota_gb,threshold_gb,stop_mode,created_at) VALUES(?,?,?,?,?,?,?,?,?,0)",
             ("香港可用区", "LTAIfake", "x", "cn-hongkong-b", "china", "i-hkz", 200, 180, "StopCharging"),
         )
+        # 手改过的配额（账号单独谈过额度）：迁移不能把它拉回 20 / 200
+        db.execute(
+            "INSERT INTO servers(label,access_key_id,access_key_secret,region_id,site,instance_id,"
+            "quota_gb,threshold_gb,stop_mode,created_at) VALUES(?,?,?,?,?,?,?,?,?,0)",
+            ("自定义额度", "LTAIfake", "x", "cn-hongkong", "china", "i-cus", 500, 450, "StopCharging"),
+        )
+        # 早期写坏的配额（0）：按地域默认值补齐
+        db.execute(
+            "INSERT INTO servers(label,access_key_id,access_key_secret,region_id,site,instance_id,"
+            "quota_gb,threshold_gb,stop_mode,created_at) VALUES(?,?,?,?,?,?,?,?,?,0)",
+            ("坏数据", "LTAIfake", "x", "cn-zhangjiakou", "china", "i-zero", 0, 0, "StopCharging"),
+        )
         db._migrate(db.connect())
         rows = {
             r["instance_id"]: (r["quota_gb"], r["threshold_gb"])
@@ -278,6 +304,8 @@ class ServerQuotaTest(unittest.TestCase):
         self.assertEqual(rows["i-max"], (200.0, 200.0))
         self.assertEqual(rows["i-old"], (20.0, 18.0))
         self.assertEqual(rows["i-hkz"], (200.0, 180.0))
+        self.assertEqual(rows["i-cus"], (500.0, 450.0))
+        self.assertEqual(rows["i-zero"], (20.0, 18.0))
 
 
 class NotificationTest(unittest.TestCase):

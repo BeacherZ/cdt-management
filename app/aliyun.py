@@ -198,7 +198,11 @@ def pool_of(region_id: str | None) -> str:
 
 
 def pool_quota_gb(region_id: str | None) -> float:
-    """地域所属流量包的额度，实例的总配额就取这个值（不允许单独改）。"""
+    """地域所属流量包的**默认**额度，用来给实例配额的初始值。
+
+    只是个默认值：阿里调额度、或账号单独谈过配额时，用户在实例设置里直接改，
+    这里不参与写入校验（改小配额时仍要保证阈值不超过它）。
+    """
     if pool_of(region_id) == CHINA_POOL:
         return CHINA_POOL_QUOTA_GB
     return INTERNATIONAL_POOL_QUOTA_GB

@@ -526,23 +526,6 @@ label {
   color: var(--muted-soft);
 }
 
-/* 地域下面那行全宽说明：小一号、贴紧上一排，读起来像「别名 + 地域」的脚注，
-   而不是独立一段，避免把两列布局撑出高低差 */
-.pool-note {
-  margin: -7px 0 14px;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-/* 配额标签右侧的流量包提示：骑在标签行里，不额外增高一格 */
-.field > label .label-note {
-  margin-left: auto;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--muted-soft);
-  white-space: nowrap;
-}
-
 /* -------------------------------------------------------------- 设置抽屉 */
 
 /* 区块标题里的 lucide 图标垂直对齐 */
@@ -2902,8 +2885,8 @@ input[type='number']::-webkit-inner-spin-button {
    数字是这一行里唯一会动的、也是扫卡片时第一眼要找的东西，所以加重到正文色 + 700
    （原来是 --ink-soft / 620，压在灰标签旁不够跳）。标签仍留 --muted：靠「灰标签 +
    重数字」的明暗差把数字顶出来，两截一起加粗反而没有层次。
-   只动颜色、字重和 1px 字号，不加底色/内边距，整块宽度只多 5px 上下 —— 窄屏组名
-   本来就在省略，不会被挤到换行。 */
+   字号 15px、与卡片标题（14px）同级偏上一档：手机端这枚倒计时落在元信息行（周围全是
+   12px 灰字），13px 在窄屏被上下文压得看不出来；电脑端也跟着统一到 15px，两端观感一致。 */
 .group-countdown {
   display: inline-flex;
   align-items: center;
@@ -2916,7 +2899,7 @@ input[type='number']::-webkit-inner-spin-button {
 
 .group-countdown b {
   font-family: var(--mono);
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 700;
   letter-spacing: 0;
   font-variant-numeric: tabular-nums;
@@ -4742,11 +4725,6 @@ input[type='number']::-webkit-inner-spin-button {
     grid-template-columns: 1fr;
     gap: 0;
   }
-  /* 单列后 gap 归零、最后一格又被 .field:last-child 抹掉下边距，
-     紧跟其后的地域说明再套 -7px 上边距就会压进下拉框。这里补回桌面的 8px。 */
-  .grid-2 + .pool-note {
-    margin-top: 8px;
-  }
   .stat-grid {
     grid-template-columns: 1fr 1fr;
   }
@@ -4759,6 +4737,12 @@ input[type='number']::-webkit-inner-spin-button {
   }
   .stat .ring {
     display: none;
+  }
+  /* 单列后网格里最后一格的下边距被 .field:last-child 抹成 0，紧跟其后的下一格会直接
+     贴上（下拉框底边和下一个标签零间距）。补回桌面的 15px；只作用于弹窗内的网格，
+     设置页那几处 grid-2 的节奏不受影响。 */
+  .modal-body .grid-2 + .field {
+    margin-top: 15px;
   }
   /* minmax(0, 1fr) 而不是 1fr：1fr 的下限是 min-content，卡片里只要有一句
      不能断行的长内容（长组名的归属胶囊、超长实例 ID），整列会被顶到比屏幕还宽，

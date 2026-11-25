@@ -961,7 +961,7 @@ def _balance_text(server: dict[str, Any]) -> str:
 
 
 def report_block(server: dict[str, Any]) -> str:
-    """脚本里的 build_report_block。额度取每台自己的配额，没填就按所在地域的流量包（20 / 200）。"""
+    """脚本里的 build_report_block。额度取每台自己的配额，没填（坏数据）才按地域的默认额度兜底。"""
     used = _used(server)
     quota = float(server.get("quota_gb") or 0) or aliyun.pool_quota_gb(server.get("region_id"))
     remain = quota - used

@@ -429,22 +429,20 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # 升级前的行为（超时按 ts 算），不会因为升级把在跑的事件一次性判超时。
     conn.execute("UPDATE events SET pending_ts=ts WHERE pending_ts=0 AND status='running'")
 
-    # 配额改由地域所属的 CDT 流量包决定（中国内地 20 GB、非中国内地 200 GB），
-    # 不再是用户输入。老库里自定义过的配额在这里一次性收敛，否则卡片百分比、
-    # 通知里的占比会继续按旧分母算。规则与 aliyun.pool_of() 保持一致：`cn-` 开头
-    # 且**不是 cn-hongkong 开头**才是国内包。写成 `!= 'cn-hongkong'` 会把可用区
-    # `cn-hongkong-b` 判成国内，香港机的 200/180 被压成 20/18，远没到额度就停机。
+    # 配额现在是用户可改的普通字段（默认值按地域取 20 / 200 GB），迁移**不能**再把它
+    # 拉回流量包额度：阿里以后调免费额度、或者账号单独谈过配额，重启一次就被改回去
+    # 等于这个字段白给。这里只保证数据自洽：老库里配额 <= 0 的（早期手填写坏）补齐。
     conn.execute(
         "UPDATE servers SET quota_gb = CASE WHEN region_id LIKE 'cn-%' "
         "AND region_id NOT LIKE 'cn-hongkong%' THEN 20 ELSE 200 END "
-        "WHERE quota_gb != CASE WHEN region_id LIKE 'cn-%' "
-        "AND region_id NOT LIKE 'cn-hongkong%' THEN 20 ELSE 200 END"
+        "WHERE quota_gb IS NULL OR quota_gb <= 0"
     )
     # 阈值不能超过配额。**只在超配额（非法值）时**按「新建实例默认阈值（% 配额）」重算，
     # 不能按「超过 pct% 就压」：阈值在 (pct%, 配额] 之间是用户主动填的合法值
     # （比如海外机填满 200 GB），每次启动都压到 90% 等于悄悄把保护提前、还改不回来。
     # 用 pct 而不是直接压到 100%：国内机老阈值 180 该变成 18，而不是 20，
     # 否则等于把流量保护放宽到烧穿整个包。
+    # 阈值为 0 / 负数是坏数据（任何用量都判超限，机器一启动就被停），一并补默认值。
     row = conn.execute(
         "SELECT value FROM settings WHERE key='traffic_threshold_pct'"
     ).fetchone()
@@ -456,7 +454,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
         pct = 90.0
     conn.execute(
         "UPDATE servers SET threshold_gb = ROUND(quota_gb * ? / 100.0) "
-        "WHERE threshold_gb > quota_gb",
+        "WHERE threshold_gb <= 0 OR threshold_gb > quota_gb",
         (pct,),
     )
 

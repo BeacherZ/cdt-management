@@ -55,34 +55,27 @@ export const REGIONS: RegionOption[] = [
 export const GROUP_ORDER = ['中国大陆', '港澳与海外', '亚太', '北美', '南美', '欧洲', '中东']
 
 /**
- * 阿里云 CDT 公网流量的免费额度只有两个池：中国内地 20 GB/月、
- * 非中国内地 200 GB/月。中国香港算「非中国内地」，和所有海外地域共用一个池。
+ * 阿里云 CDT 公网流量的免费额度按账号分两个池：中国内地、非中国内地（含中国香港）。
  *
- * 判定按地域 ID 前缀（cn- 且不是 cn-hongkong），不看 group —— group 只是下拉框
- * 的分组标题，把中国香港放在「港澳与海外」里纯属菜单排版。
+ * 这里的额度只是**默认值**，用来给新增实例的配额打底；配额本身用户可改，阿里调额度
+ * 或账号单独谈过配额都靠那一格，所以不要拿它当校验依据。
+ * 判定按地域 ID 前缀（cn- 且不是 cn-hongkong），不看 group —— group 只是下拉框的
+ * 分组标题，把中国香港放在「港澳与海外」里纯属菜单排版。
  */
 export type TrafficPool = {
   key: 'china' | 'international'
-  /** 界面上的短名：国内包 / 海外包 */
-  label: string
   /** 这个池的月度免费额度，新增实例的默认配额取它 */
   quota: number
-  /** 说明文案里的范围描述，和 label 分开是为了读起来像人话 */
-  scope: string
 }
 
 const CHINA_POOL: TrafficPool = {
   key: 'china',
-  label: '国内包',
   quota: 20,
-  scope: '中国内地地域',
 }
 
 const INTERNATIONAL_POOL: TrafficPool = {
   key: 'international',
-  label: '海外包',
   quota: 200,
-  scope: '非中国内地地域',
 }
 
 export function poolOf(regionId?: string | null): TrafficPool {
@@ -94,12 +87,6 @@ export function poolOf(regionId?: string | null): TrafficPool {
     : key.startsWith('cn-')
       ? CHINA_POOL
       : INTERNATIONAL_POOL
-}
-
-/** 悬浮提示文案：海外包 · 同账号非中国内地地域共用 200 GB/月 */
-export function poolHint(regionId?: string | null): string {
-  const pool = poolOf(regionId)
-  return `${pool.label} · 同账号${pool.scope}共用 ${pool.quota} GB/月`
 }
 
 export const DEFAULT_REGION = 'cn-hongkong'

@@ -91,24 +91,35 @@ class SecurityHardening(unittest.TestCase):
         payload.update(overrides)
         return payload
 
-    def test_upsert_server_quota_is_derived_from_region(self):
-        """配额不再取用户输入：无论传什么，都按地域所属的流量包写 20 / 200。
+    def test_upsert_server_quota_is_user_editable_but_validated(self):
+        """配额是普通可改字段，默认按地域 20 / 200；显式传的值要能落库，非法值仍要拒绝。
 
-        老前端、curl、第三方脚本都还可能带 quota_gb；传 0 / inf / nan / 字符串
-        都不能落库，也不能报错（报错只会让升级后的旧前端存不了任何一台机器）。
-        这条同时替代了以前的「quota 必须 >0 且有限」——现在压根不读它，
-        inf 也进不了库。
+        阿里以后调免费额度、或账号单独谈过配额，都靠这一格，所以不能再像以前那样
+        「无论传什么都按地域覆盖」。但 0 / 负数 / inf / nan / 字符串照样不能落库：
+        inf 会污染 JSON（整页 400），nan 触发 NOT NULL（500），0 会让百分比除零。
         """
         for raw in (0, -1, "inf", "nan", "1e309", "abc", {"a": 1}, [1], float("inf")):
-            with self.subTest(quota=raw):
-                sid = repo.upsert_server(self._server_payload(quota_gb=raw))
-                self.assertEqual(repo.get_server(sid)["quota_gb"], 200)
+            with self.subTest(quota=raw), self.assertRaises(ValueError):
+                repo.upsert_server(self._server_payload(quota_gb=raw))
+        # 不传 quota：按地域给默认值（香港 200、张家口 20）
+        sid = repo.upsert_server(self._server_payload(instance_id="i-default", quota_gb=None))
+        self.assertEqual(repo.get_server(sid)["quota_gb"], 200)
         sid = repo.upsert_server(
             self._server_payload(
-                region_id="cn-zhangjiakou", instance_id="i-cn-quota", quota_gb=200, threshold_gb=18
+                region_id="cn-zhangjiakou",
+                instance_id="i-cn-quota",
+                quota_gb=None,
+                threshold_gb=18,
             )
         )
         self.assertEqual(repo.get_server(sid)["quota_gb"], 20)
+        # 显式传就存用户的值（账号单独谈过额度）
+        sid = repo.upsert_server(
+            self._server_payload(
+                region_id="cn-zhangjiakou", instance_id="i-custom", quota_gb=50, threshold_gb=18
+            )
+        )
+        self.assertEqual(repo.get_server(sid)["quota_gb"], 50)
 
     def test_upsert_server_rejects_non_finite_threshold(self):
         for raw in ("inf", "nan", float("inf")):

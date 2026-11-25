@@ -38,10 +38,11 @@ export default function ServerDialog({
   onSaved,
 }: Props) {
   const editing = Boolean(server && server.id)
-  // 配额由地域所属的流量包决定（中国内地 20 GB、非中国内地 200 GB），不再让用户填，
-  // 打开编辑时也按地域重置一次，避免老数据里 200 GB 的国内机继续按 200 算百分比。
+  // 配额默认按地域的流量包额度给（中国内地 20 GB、非中国内地 200 GB），但可以手改：
+  // 阿里以后调免费额度、或者账号单独谈过配额，都靠这一格。
+  // 编辑时用库里存的值，不会被地域默认值悄悄盖掉。
   const initialRegion = server?.region_id ?? DEFAULT_REGION
-  const initialQuota = poolOf(initialRegion).quota
+  const initialQuota = server?.quota_gb ?? poolOf(initialRegion).quota
   const [form, setForm] = useState(() => ({
     id: server?.id ?? 0,
     label: server?.label ?? '',
@@ -71,20 +72,36 @@ export default function ServerDialog({
     if (error) setError('')
   }
 
-  // 切地域（含切站点导致地域回退到默认值）时强制换配额：中国内地 20 GB、非中国内地 200 GB。
-  // 配额真的变了，阈值就按设置里的「新建实例默认阈值（% 配额）」重算，比如 200→20 时
-  // 184 跟着变成 18；两个地域同属一个池（香港 ↔ 新加坡）时配额没变，不动用户手填的值。
+  // 切地域（含切站点导致地域回退到默认值）时：配额还是老地域的默认额度（或本来就没填）
+  // 就换成新地域的默认额度（中国内地 20 GB、非中国内地 200 GB），阈值跟着按「新建实例
+  // 默认阈值（% 配额）」重算；手改过配额则只换地域，配额和阈值都保留。
+  // 判据与后端 upsert_server / update_server_runtime 一致：值 == 老地域默认值即视为没改过。
   function withPoolQuota<
     T extends { region_id: string; quota_gb: number; threshold_gb: number },
   >(current: T, regionId: string): T {
+    const customized = current.quota_gb > 0 && current.quota_gb !== poolOf(current.region_id).quota
     const quota = poolOf(regionId).quota
-    if (quota === current.quota_gb) return { ...current, region_id: regionId }
+    if (customized || quota === current.quota_gb) return { ...current, region_id: regionId }
     return {
       ...current,
       region_id: regionId,
       quota_gb: quota,
       threshold_gb: Math.round((quota * defaultThresholdPercent) / 100),
     }
+  }
+
+  // 手改配额：把阈值改到配额以下时按默认百分比压回，不然保存时才报错更难受
+  function changeQuota(value: number) {
+    setForm((current) => ({
+      ...current,
+      quota_gb: value,
+      threshold_gb:
+        value > 0 && current.threshold_gb > value
+          ? Math.round((value * defaultThresholdPercent) / 100)
+          : current.threshold_gb,
+    }))
+    if (badField) setBadField('')
+    if (error) setError('')
   }
 
   function changeSite(site: SiteType) {
@@ -96,7 +113,6 @@ export default function ServerDialog({
 
   // 存量数据里地域可能与站点不匹配（比如早期都是中国站），这里补一个选项免得下拉框显示空白
   const regionKnown = regionsFor(form.site).some((region) => region.value === form.region_id)
-  const pool = poolOf(form.region_id)
 
   // 提示条永远贴在正文底部，这里再把出事的那一格滚进视野并聚焦，
   // 让「点了保存没反应」变成「红框 + 光标停在该填的格子里」
@@ -245,11 +261,6 @@ export default function ServerDialog({
         </div>
       </div>
 
-      {/* 地域说明压成一行全宽小字，跟在「别名 + 地域」这一排下面：
-          只讲共用额度和统计口径，具体包名由下方配额的标签点明，避免同一句说两遍 */}
-      <div className="hint pool-note">
-        流量包：同账号{pool.scope}共用 {pool.quota} GB/月，已用按该包合计。
-      </div>
       <div className="field">
         <label htmlFor="ak">
           <KeyRound size={12} /> AccessKey ID<span className="req" aria-hidden="true">*</span>
@@ -299,21 +310,15 @@ export default function ServerDialog({
         <div className="field">
           <label htmlFor="quota">
             总配额（GB）<span className="req" aria-hidden="true">*</span>
-            <span
-              className="label-note"
-              title={`${pool.label}：同账号${pool.scope}共用 ${pool.quota} GB/月，配额由地域决定、不单独修改`}
-            >
-              {pool.label} · 固定 {pool.quota} GB
-            </span>
           </label>
           <input
             id="quota"
             aria-invalid={badField === 'quota'}
             className="input"
             type="number"
+            min={1}
             value={form.quota_gb}
-            readOnly
-            disabled
+            onChange={(event) => changeQuota(Number(event.target.value))}
           />
         </div>
         <div className="field">

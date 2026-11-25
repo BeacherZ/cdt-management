@@ -287,16 +287,13 @@ def upsert_server(payload: dict[str, Any]) -> int:
     region = str(payload.get("region_id") or "").strip()
     site = normalize_site(payload.get("site"))
     instance = str(payload.get("instance_id") or "").strip()
-    # 配额不再取用户输入：由地域所属的 CDT 流量包决定（中国内地 20 GB、非中国内地 200 GB）。
-    # 前端已把那一格锁死，这里再兜一层，防止老前端或直接调接口写进别的值。
-    quota = aliyun.pool_quota_gb(region)
-    # 编辑时先把原记录读出来：阈值只在真的传了的时候才改。老前端 / 只改别处的
-    # 接口不带 threshold_gb，以前会被 `or 默认值` 静默重算（海外机 184 变 188、
-    # 国内机被写成 20），现在沿用原值，超过新配额才按百分比重算。
+    # 编辑时先把原记录读出来：配额和阈值都只在真的传了的时候才改。老前端 / 只改
+    # 别处的接口不带这两个字段，以前会被 `or 默认值` 静默重算（海外机 184 变 188、
+    # 国内机被写成 20），现在一律沿用原值。
     existing = (
         db.query_one(
-            "SELECT access_key_id, access_key_secret, site, instance_id, stop_mode, threshold_gb "
-            "FROM servers WHERE id=?",
+            "SELECT access_key_id, access_key_secret, site, instance_id, stop_mode, "
+            "region_id, quota_gb, threshold_gb FROM servers WHERE id=?",
             (server_id,),
         )
         if server_id
@@ -304,6 +301,24 @@ def upsert_server(payload: dict[str, Any]) -> int:
     )
     if server_id and existing is None:
         raise ValueError("服务器不存在")
+    # 配额默认为地域所属流量包的额度（中国内地 20 GB、非中国内地 200 GB），但不再是
+    # 死值：阿里以后调免费额度、或者账号单独谈过配额，用户自己改就行。
+    default_quota = aliyun.pool_quota_gb(region)
+    raw_quota = payload.get("quota_gb")
+    if raw_quota is None and existing is not None:
+        kept_quota = float(existing["quota_gb"] or 0)
+        old_region = str(existing["region_id"] or "")
+        # 用户手改过的配额一概保留；只有「还是老地域的默认值」时才跟着新地域走。
+        # 否则老前端（或 curl）只改地域、不带配额，会把一台中国内地机器留在
+        # 200 GB 配额上，阈值 180 也照样合法，流量保护等于失效。
+        follows_default = kept_quota <= 0 or (
+            region != old_region
+            and abs(kept_quota - aliyun.pool_quota_gb(old_region)) < 1e-6
+        )
+        raw_quota = default_quota if follows_default else kept_quota
+    quota = _gb_value(raw_quota, default_quota, "配额")
+    if quota <= 0:
+        raise ValueError("配额必须是大于 0 的数字")
     raw_threshold = payload.get("threshold_gb")
     if raw_threshold is None and existing is not None:
         kept = float(existing["threshold_gb"] or 0)
@@ -533,14 +548,17 @@ def update_server_runtime(
             )
     if region_id:
         # 从 ECS DescribeInstances 返回值动态回填真实地域，避免手工填错/漏填。
-        # 地域一变，配额就跟着流量包变（中国内地 20 / 非中国内地 200）：只改
-        # region_id 会让一台中国内地机器继续顶着 200 GB 配额，阈值也能填到 200，
-        # 流量保护等于失效。阈值超新配额时按百分比重算，否则保留用户填的值。
+        # 配额只在「还是老地域的默认额度」或缺失时才跟着新地域走：用户按账号实际
+        # 额度手改过的值不能被巡检覆盖，否则每次回填都还原一次。
+        # 阈值超过配额（含改小配额的情况）时按百分比重算，合法值保留。
         row = db.query_one(
-            "SELECT region_id, threshold_gb FROM servers WHERE id=?", (server_id,)
+            "SELECT region_id, quota_gb, threshold_gb FROM servers WHERE id=?", (server_id,)
         )
         if row is not None and str(row["region_id"] or "") != region_id:
-            quota = aliyun.pool_quota_gb(region_id)
+            old_region = str(row["region_id"] or "")
+            quota = float(row["quota_gb"] or 0)
+            if quota <= 0 or abs(quota - aliyun.pool_quota_gb(old_region)) < 1e-6:
+                quota = aliyun.pool_quota_gb(region_id)
             threshold = float(row["threshold_gb"] or 0)
             if threshold <= 0 or threshold > quota:
                 threshold = _default_threshold(quota)

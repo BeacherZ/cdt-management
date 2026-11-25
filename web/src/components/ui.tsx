@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react'
 import { Hand, HeartPulse, Repeat, Scale, X } from 'lucide-react'
 import type { OwnerKind } from '../owners'
-import { poolHint, poolOf } from '../regions'
+import { poolOf } from '../regions'
 
 /* -------------------------------------------------------------- 徽章 */
 
@@ -173,12 +173,12 @@ export function Meter({
   used: number | null
   quota: number
   threshold: number
-  /** 实例所在地域：有值时把「哪个流量包」拼进 title，卡片本身不加字 */
+  /** 实例所在地域：只在配额缺失时用来兜底分母，卡片和悬浮提示都不再提流量包 */
   region?: string | null
   /** 紧凑模式：只报「已用 + 百分比」，阈值只留刻度线，给列表行那种窄列用 */
   compact?: boolean
 }) {
-  // 分母只认配额（后端按地域的流量包写死 20 / 200），和通知、概览流量圈一个口径；
+  // 分母只认配额（后端按地域给默认额度，用户可改），和通知、概览流量圈一个口径；
   // 阈值只用来定颜色和那条刻度线，不参与百分比。
   // 配额缺失时按地域推断，兜底也用 200 会把国内机的百分比算成 1/10。
   const base = quota > 0 ? quota : poolOf(region).quota
@@ -218,22 +218,22 @@ export function Meter({
     return () => observer.disconnect()
   }, [thresholdPercent])
 
+  // 悬浮提示挂在整条 meter 上，不再只挂 7px 的轨道：轨道太细，鼠标稍微偏一点就落在
+  // 外层（没有 title）上，看起来就是「提示没了」。阈值线百分比是最常被问的那个数——
+  // 它决定这条线后面还剩多少余量，所以每个界面、两种模式都带上它。
+  // 紧凑模式（列表窄列）本来就靠 title 报「已用 / 配额 / 阈值」，两段换行拼接。
+  const meterTitle = [
+    compact
+      ? `已用 ${used === null ? '未读取' : `${used.toFixed(2)} GB`} / 配额 ${base} GB · 阈值 ${threshold} GB`
+      : '',
+    `阈值线 ${thresholdPercent.toFixed(0)}%`,
+  ]
+    .filter(Boolean)
+    .join('\n')
+
   return (
-    <div
-      className={`meter${compact ? ' is-compact' : ''}`}
-      title={
-        [
-          // 流量包放最前：compact 模式本来就有「已用 / 配额 / 阈值」，换行拼接而不是覆盖
-          region ? poolHint(region) : '',
-          compact
-            ? `已用 ${used === null ? '未读取' : `${used.toFixed(2)} GB`} / 配额 ${base} GB · 阈值 ${threshold} GB`
-            : '',
-        ]
-          .filter(Boolean)
-          .join('\n') || undefined
-      }
-    >
-      <div className="meter-track" ref={trackRef} title={`阈值线 ${thresholdPercent.toFixed(0)}%`}>
+    <div className={`meter${compact ? ' is-compact' : ''}`} title={meterTitle}>
+      <div className="meter-track" ref={trackRef}>
         <div className={`meter-fill ${tone}`} style={{ width: `${percent}%` }} />
         {/* 内联百分比只是首帧兜底，挂载后由上面那段 effect 改成整像素 */}
         <i className="meter-mark" ref={markRef} style={{ left: `${thresholdPercent}%` }} />
