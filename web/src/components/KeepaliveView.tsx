@@ -168,6 +168,7 @@ export default function KeepaliveView({
                   used={item.traffic_used}
                   quota={item.quota_gb}
                   threshold={item.threshold_gb}
+                  region={item.region_id}
                 />
 
                 {(item.dns_record || schedule) && (

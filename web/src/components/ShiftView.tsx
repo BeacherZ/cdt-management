@@ -245,6 +245,7 @@ export default function ShiftView({
                             used={server.traffic_used}
                             quota={server.quota_gb}
                             threshold={server.threshold_gb}
+                            region={server.region_id}
                           />
                         </div>
                       </div>

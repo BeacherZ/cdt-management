@@ -91,6 +91,11 @@ export function poolOf(regionId?: string | null): TrafficPool {
 
 export const DEFAULT_REGION = 'cn-hongkong'
 
+/** 流量包的中文名，只给悬浮提示用；配额仍以实例设置里那一格为准 */
+export function poolName(regionId?: string | null): string {
+  return poolOf(regionId).key === 'china' ? '国内包' : '海外包'
+}
+
 const LABELS = new Map(REGIONS.map((region) => [region.value, region.label]))
 
 /** 地域代码 → 中文名。清单外的代码原样返回，不做猜测。 */

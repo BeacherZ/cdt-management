@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react'
 import { Hand, HeartPulse, Repeat, Scale, X } from 'lucide-react'
 import type { OwnerKind } from '../owners'
-import { poolOf } from '../regions'
+import { poolName, poolOf } from '../regions'
 
 /* -------------------------------------------------------------- 徽章 */
 
@@ -173,7 +173,7 @@ export function Meter({
   used: number | null
   quota: number
   threshold: number
-  /** 实例所在地域：只在配额缺失时用来兜底分母，卡片和悬浮提示都不再提流量包 */
+  /** 实例所在地域：配额缺失时兜底分母，也决定下方文字的「国内包 / 海外包」 */
   region?: string | null
   /** 紧凑模式：只报「已用 + 百分比」，阈值只留刻度线，给列表行那种窄列用 */
   compact?: boolean
@@ -218,18 +218,17 @@ export function Meter({
     return () => observer.disconnect()
   }, [thresholdPercent])
 
-  // 悬浮提示挂在整条 meter 上，不再只挂 7px 的轨道：轨道太细，鼠标稍微偏一点就落在
-  // 外层（没有 title）上，看起来就是「提示没了」。阈值线百分比是最常被问的那个数——
-  // 它决定这条线后面还剩多少余量，所以每个界面、两种模式都带上它。
-  // 紧凑模式（列表窄列）本来就靠 title 报「已用 / 配额 / 阈值」，两段换行拼接。
-  const meterTitle = [
-    compact
-      ? `已用 ${used === null ? '未读取' : `${used.toFixed(2)} GB`} / 配额 ${base} GB · 阈值 ${threshold} GB`
-      : '',
-    `阈值线 ${thresholdPercent.toFixed(0)}%`,
-  ]
-    .filter(Boolean)
-    .join('\n')
+  // 两处提示分工，五个界面用同一套说法：
+  //   条上 —— 阈值线画在哪、后面还剩多少余量（百分比 + 绝对 GB）；
+  //   文字那行 —— 这台机器算哪个流量包、总配额多少。
+  // 以前两套混在一个 title 里（紧凑模式把「已用 / 配额 / 阈值」和阈值线拼成两行），
+  // 同一组数字在不同界面说法不一样，读起来才觉得乱。
+  // 提示仍挂在整条 meter 而不是 7px 的轨道上：轨道太细，鼠标偏一点就落空。
+  const fmtGb = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1))
+  const meterTitle = `阈值线 ${thresholdPercent.toFixed(0)}% · ${fmtGb(threshold)} GB`
+  // 文字那行写「总配额」而不是「配额」：这一格是实例设置里填的总量，和阈值/剩余
+  // 区分开，避免读成「本包还剩多少」。
+  const labelTitle = `${poolName(region)} · 总配额 ${fmtGb(base)} GB`
 
   return (
     <div className={`meter${compact ? ' is-compact' : ''}`} title={meterTitle}>
@@ -238,9 +237,12 @@ export function Meter({
         {/* 内联百分比只是首帧兜底，挂载后由上面那段 effect 改成整像素 */}
         <i className="meter-mark" ref={markRef} style={{ left: `${thresholdPercent}%` }} />
       </div>
-      <div className="meter-labels">
+      {/* 自己的 title 会盖住外层，所以悬停这行数字给的是包信息，不是阈值信息 */}
+      <div className="meter-labels" title={labelTitle}>
         <span>{used === null ? '未读取' : `${used.toFixed(2)} GB`}</span>
-        <span>{compact ? `${rawPercent.toFixed(1)}%` : `${rawPercent.toFixed(1)}% / 阈值 ${threshold} GB`}</span>
+        {/* 只留百分比：分母是总配额这件事由悬浮提示说明（「海外包 · 总配额 200 GB」），
+            一行里再挤一串配额数字，窄卡上容易折行，信息也重复。 */}
+        <span>{rawPercent.toFixed(1)}%</span>
       </div>
     </div>
   )
