@@ -210,6 +210,20 @@
   color: var(--blue-line);
 }
 
+/* 看数据的三项（运行概览 / 实例管理 / DNS解析）：图标统一成均衡那套蓝，
+   不再和灰字一起沉在侧栏里。选中行是实心蓝底，图标跟着文字走才看得清。 */
+.nav-item.nav-tone-data svg {
+  color: var(--blue-line);
+}
+
+.nav-item.on.nav-tone-data svg {
+  color: var(--accent);
+}
+
+:root[data-theme='dark'] .nav-item.on.nav-tone-data svg {
+  color: var(--status-ink);
+}
+
 /* 悬停时只提不亮，颜色还是归属色，鼠标准星扫过去不会一片闪。
    必须限定真指针：触屏上 :hover 会在 tap 后一直挂着，松手了那层灰底还在，
    手指划过去就像「方块卡在菜单上」 */
@@ -238,11 +252,12 @@
   }
 }
 
-/* 选中行：和运行中胶囊同一块蓝 + 同一档深字、**不铺渐变、不挂蓝色外发光**。
-   蓝外晕叠在透蓝玻璃上会把整块菜单染得更蓝，这里只留一层极淡内高光。 */
+/* 选中行：回到 v1.8.6 那块浅天蓝实心 + 深蓝字，**不铺渐变、不挂蓝色外发光**。
+   蓝外晕叠在透蓝玻璃上会把整块菜单染得更蓝，这里只留一层极淡内高光。
+   状态胶囊后来单独减淡成 0.13，所以这里显式用 --sky-fill（v1.8.6 的原色）。 */
 .nav-item.on {
-  background: var(--status-fill);
-  color: var(--status-ink);
+  background: var(--sky-fill);
+  color: var(--sky-ink);
   box-shadow: inset 0 1px 0 var(--glass-hilite);
 }
 
@@ -256,6 +271,8 @@
 /* 深色下选中块和运行中胶囊同一套：实心亮蓝 + 深墨字。
    原先是 18% 半透明蓝玻璃 + 亮蓝字，和运行中那枚实心胶囊不是一个东西。 */
 :root[data-theme='dark'] .nav-item.on {
+  /* 深色下回到 v1.8.6 的实心亮蓝 + 深墨字（深色 --status-* 未被减淡） */
+  background: var(--status-fill);
   color: var(--status-ink);
   box-shadow: inset 0 1px 0 var(--glass-hilite);
 }

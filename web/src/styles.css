@@ -2075,6 +2075,13 @@ input[type='number']::-webkit-inner-spin-button {
   opacity: 1;
 }
 
+/* 非当班成员的归属胶囊：图标也去掉归属色，跟胶囊一起回到中性灰。
+   只覆盖 .owner-tag.free 这一档（闲散手动 + 非当班），图标形状保留，
+   DNS 页那几行归属图标不在这个容器里，继续按类型上色。 */
+.owner-tag.free .owner-icon {
+  color: var(--muted);
+}
+
 .owner-tag.kind-shift {
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 26%, transparent);

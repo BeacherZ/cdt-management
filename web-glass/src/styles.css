@@ -81,8 +81,9 @@
   --run-solid-1: #2aa862;
   --run-solid-2: #1b7c47;
 
-  /* 状态胶囊：和登录按钮同一块浅天蓝，不另造绿，避免与联合换班的绿撞色 */
-  --status-fill: var(--sky-fill);
+  /* 状态胶囊：底色用 13% 半透明淡蓝，比菜单/按钮那块实心 --sky-fill 轻一档，
+     免得运行中/完成胶囊在白灰玻璃卡上显得厚重；文字、圆点、光晕都不动 */
+  --status-fill: rgba(37, 137, 194, 0.13);
   --status-ink: var(--sky-ink);
   --status-border: color-mix(in srgb, var(--accent) 28%, transparent);
   --status-dot: var(--accent);
@@ -715,9 +716,11 @@ label {
   box-shadow: inset 0 1px 0 var(--glass-hilite);
 }
 
-/* 浅天蓝块两套主题都是深字 */
+/* 深色下和侧栏主菜单、设置页左侧子菜单完全同一档：实心亮蓝 + 深墨字。
+   原来只改字色、底还是 18% 半透明蓝，通知渠道/类别这类子菜单就比上面两级淡一档。 */
 :root[data-theme='dark'] .sub-tabs button.on {
-  color: var(--sky-ink);
+  background: var(--status-fill);
+  color: var(--status-ink);
 }
 
 /* 测试按钮行，避免和下面内容贴死 */
@@ -1327,6 +1330,29 @@ input[type='number']::-webkit-inner-spin-button {
   border-color: var(--status-border);
 }
 
+/* 概览页右上那两颗（DNS 记录 / telegram）坐在偏蓝的页头背景上：
+   淡蓝底怎么调都和背景糊在一起，干脆换成卡片同款白磨砂玻璃，一眼能从页头里跳出来。
+   只换底材质，状态色（绿/琥珀/灰）的文字和圆点仍按各自 tone 走。 */
+.page-actions .badge {
+  background: var(--panel);
+  backdrop-filter: blur(10px) saturate(1.25);
+  -webkit-backdrop-filter: blur(10px) saturate(1.25);
+  border-color: var(--line);
+  box-shadow:
+    inset 0 1px 0 var(--glass-hilite),
+    var(--shadow-1);
+}
+
+/* 正常态文字/圆点用主题亮蓝；圆点走 currentColor，跟着一起亮。
+   深色下磨砂底是深灰玻璃，亮蓝字仍然清楚，不再用深墨字。 */
+.page-actions .badge.green {
+  color: var(--accent);
+}
+
+:root[data-theme='dark'] .page-actions .badge.green {
+  color: var(--accent);
+}
+
 /* 均衡页状态徽章不再用归属色主题蓝，回落到 .badge.green 那套通用状态色
    （正常态的浅蓝底深墨字），和换班页同一语义的状态用同一个颜色。 */
 
@@ -1356,10 +1382,11 @@ input[type='number']::-webkit-inner-spin-button {
   border-color: color-mix(in srgb, var(--amber) 26%, transparent);
 }
 
-/* 均衡页状态徽标（均衡中 / 等待到位）：淡底 + 主题蓝字，和均衡族统一 */
+/* 均衡页状态徽标（均衡中 / 等待到位）：淡底 + 主题蓝字，和均衡族统一。
+   底色压到和 --status-fill 同一档半透明，免得子界面这一类胶囊比概览那几颗重 */
 .badge.blue {
   color: var(--blue-line);
-  background: color-mix(in srgb, var(--blue-line) 10%, transparent);
+  background: rgba(37, 137, 194, 0.13);
   border-color: color-mix(in srgb, var(--blue-line) 26%, transparent);
 }
 
@@ -5033,9 +5060,11 @@ body:has(.overlay) .main-area {
   opacity: 1;
 }
 
-/* 浅天蓝块两套主题都是深字，这里只留一条兜底 */
+/* 深色下和侧栏主菜单选中完全同一档：实心亮蓝 + 深墨字。
+   原来这里只改字色、底还是 18% 半透明蓝，子菜单就比主菜单淡了一档。 */
 :root[data-theme='dark'] .settings-nav button.on {
-  color: var(--sky-ink);
+  background: var(--status-fill);
+  color: var(--status-ink);
 }
 
 .settings-main {

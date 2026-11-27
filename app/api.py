@@ -1134,7 +1134,7 @@ def register(app: FastAPI) -> None:
             # 外观：light / dark / system，实测值存在 settings 表里。
             # 未配置（老版本升级上来的库）默认「跟随系统」，不再写死浅色
             "theme": config.get("theme") or "system",
-            # 皮肤：classic（青色沉浸）/ glass（蓝色玻璃）。未配置默认 classic，
+            # 皮肤：classic（绿色沉浸）/ glass（蓝色玻璃）。未配置默认 classic，
             # 老版本升级上来的库不会突然变成另一套 UI
             "skin": config.get("skin") or "classic",
             "timezone": config.get("timezone"),

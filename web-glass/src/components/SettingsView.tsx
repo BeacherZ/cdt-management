@@ -57,7 +57,7 @@ function makeDraft(settings: Settings): Settings {
   if (!draft.reconcile_offset) draft.reconcile_offset = '0'
   // 老后端 / 老配置没有 theme：默认跟随系统，别让分段控件空着
   if (draft.theme !== 'dark' && draft.theme !== 'light') draft.theme = 'system'
-  // 老后端 / 老配置没有 skin：默认青色沉浸，别让分段控件空着
+  // 老后端 / 老配置没有 skin：默认绿色沉浸，别让分段控件空着
   if (draft.skin !== 'classic' && draft.skin !== 'glass') draft.skin = 'classic'
   return draft
 }
@@ -452,13 +452,13 @@ export default function SettingsView({ settings, onSaved, onDirtyChange }: Props
                   <Segmented
                     value={form.skin}
                     options={[
-                      { value: 'classic', label: '青色沉浸' },
+                      { value: 'classic', label: '绿色沉浸' },
                       { value: 'glass', label: '蓝色玻璃' },
                     ]}
                     onChange={(value) => patch((draft) => (draft.skin = value))}
                   />
                   <div className="hint">
-                    青色沉浸是默认界面；蓝色玻璃是半透明玻璃 + 淡蓝背景。切换会整页刷新以更新标签图标。
+                    绿色沉浸是默认界面；蓝色玻璃是半透明玻璃 + 淡蓝背景。切换会整页刷新以更新标签图标。
                   </div>
                 </div>
                 <div className="field">

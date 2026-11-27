@@ -127,7 +127,7 @@ export default function DashboardView({
           onClick={() => onNavigate('servers')}
         >
           <div className="stat-main">
-            <span className="label">
+            <span className="label blue">
               <ServerIcon size={11} /> 实例
             </span>
             <span className="value">{overview.servers.length}</span>

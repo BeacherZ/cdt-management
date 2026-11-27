@@ -70,8 +70,8 @@ type NavEntry = {
   label: string
   hint: string
   icon: typeof Gauge
-  /** 归属色只在需要区分的两项上覆盖（保活紫 / 均衡蓝），其余统一品牌绿 */
-  tone?: 'shift' | 'keepalive' | 'balance'
+  /** 归属色：看数据的三项统一均衡蓝，托管方式三项各走保活紫 / 换班绿 / 均衡蓝 */
+  tone?: 'data' | 'shift' | 'keepalive' | 'balance'
 }
 
 /**
@@ -88,9 +88,9 @@ type NavEntry = {
  * 判断不出它是按时段轮换几台机器；一句 11px 的说明比排得再整齐都管用。
  */
 const NAV_PAGES: NavEntry[] = [
-  { key: 'dashboard', label: '运行概览', hint: '运行状态与事件', icon: Gauge },
-  { key: 'servers', label: '实例管理', hint: '全部实例与流量', icon: ServerIcon },
-  { key: 'dns', label: 'DNS解析', hint: '解析记录与绑定', icon: Globe2 },
+  { key: 'dashboard', label: '运行概览', hint: '运行状态与事件', icon: Gauge, tone: 'data' },
+  { key: 'servers', label: '实例管理', hint: '全部实例与流量', icon: ServerIcon, tone: 'data' },
+  { key: 'dns', label: 'DNS解析', hint: '解析记录与绑定', icon: Globe2, tone: 'data' },
 ]
 
 const NAV_MODES: NavEntry[] = [

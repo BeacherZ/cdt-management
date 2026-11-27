@@ -248,7 +248,7 @@ export type Overview = {
 /** 外观：存在后端，light / dark 固定，system 才跟随客户端系统主题 */
 export type ThemeMode = 'light' | 'dark' | 'system'
 
-/** 皮肤：classic 青色沉浸 / glass 蓝色玻璃，整份前端 bundle 切换 */
+/** 皮肤：classic 绿色沉浸 / glass 蓝色玻璃，整份前端 bundle 切换 */
 export type SkinMode = 'classic' | 'glass'
 
 export type Settings = {
