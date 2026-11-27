@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { ArrowRight, LoaderCircle, LockKeyhole, ShieldCheck, TriangleAlert, UserCog } from 'lucide-react'
+import { ArrowRight, LoaderCircle, LockKeyhole, Repeat, TriangleAlert, UserCog } from 'lucide-react'
 import { post } from '../api'
 
 type Props = {
@@ -50,7 +50,7 @@ export default function Auth({ mode, brand, onDone }: Props) {
       <form className="card auth-card" onSubmit={submit}>
         <div className="auth-brand">
           <div className="brand-mark">
-            {isSetup ? <ShieldCheck size={21} /> : <LockKeyhole size={20} />}
+            <Repeat size={18} />
           </div>
           <div className="brand-text">
             <strong>{brand}</strong>

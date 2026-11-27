@@ -1,7 +1,6 @@
 import {
   Activity,
   AlertTriangle,
-  BellRing,
   CheckCircle2,
   ChevronDown,
   Cloud,
@@ -78,11 +77,6 @@ export default function DashboardView({
   const balanceGroups = overview.balances ?? []
   const activeBalances = balanceGroups.filter((group) => group.enabled)
   const activeShifts = overview.groups.filter((group) => group.enabled).length
-  // 阈值告警数：和后端 shift._over_threshold 同一口径，阈值没配（0）的机器不算超限。
-  // 少了 threshold_gb > 0，0 >= 0 永远成立，概览会报「N 台超阈值」而引擎根本不动作。
-  const alarms = overview.servers.filter(
-    (server) => server.threshold_gb > 0 && (server.traffic_used || 0) >= server.threshold_gb,
-  ).length
   const recentEvents = overview.events.slice(0, eventCount)
   const hiddenEvents = overview.events.length - recentEvents.length
 
@@ -216,11 +210,6 @@ export default function DashboardView({
         <div className="section-head">
           <h2>实例状态</h2>
           <span className="section-desc">全部实例的在线状态、归属、费用与流量</span>
-          <div className="section-actions">
-            <Badge tone={alarms > 0 ? 'amber' : 'gray'}>
-              {overview.servers.length} 台 · {running} 台运行中
-            </Badge>
-          </div>
         </div>
         {overview.servers.length === 0 ? (
           <div className="card">
@@ -356,12 +345,6 @@ export default function DashboardView({
         <div className="section-head">
           <h2>最近事件</h2>
           <span className="section-desc">换班、故障转移、熔断、保活与手动操作</span>
-          <div className="section-actions">
-            <Badge tone="gray">
-              <BellRing size={11} style={{ marginRight: 2 }} />
-              {overview.events.length}
-            </Badge>
-          </div>
         </div>
         <div className="card card-pad">
           {recentEvents.length === 0 ? (

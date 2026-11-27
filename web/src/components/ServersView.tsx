@@ -61,14 +61,15 @@ function OwnerTag({ owner }: { owner: Managed | null }) {
     )
   }
   const duty = ownerDutyText(owner)
+  const asFree = duty === '非当班'
   return (
     <span
-      className={`owner-tag ${ownerTone(owner)}${owner.active ? '' : ' paused'}`}
+      className={`owner-tag ${asFree ? 'free' : ownerTone(owner)}${owner.active ? '' : ' paused'}`}
       title={ownerLabel(owner)}
     >
       <OwnerIcon kind={ownerIcon(owner)} />
       <span className="owner-tag-text">{ownerBase(owner)}</span>
-      {duty && <span className="owner-duty">· {duty}</span>}
+      {duty && !asFree && <span className="owner-duty">· {duty}</span>}
     </span>
   )
 }
