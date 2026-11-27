@@ -7,6 +7,13 @@ RUN npm ci --ignore-scripts
 COPY web ./
 RUN npm run build
 
+# 蓝色玻璃皮肤：第二套完整前端，输出到 ../app/static/glass（base=/glass/）
+WORKDIR /src/web-glass
+COPY web-glass/package.json web-glass/package-lock.json ./
+RUN npm ci --ignore-scripts
+COPY web-glass ./
+RUN npm run build
+
 # runtime 阶段**不能**写 --platform=$BUILDPLATFORM：那是构建机（amd64）的平台，
 # 会在 arm64 构建里塞进 amd64 的 python 镜像，产物标着 arm64 一跑就是
 # 「exec failed: Exec format error」。让它跟随 TARGETPLATFORM，arm64 镜像才是真 arm64。

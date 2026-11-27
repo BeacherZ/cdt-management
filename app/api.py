@@ -1134,6 +1134,9 @@ def register(app: FastAPI) -> None:
             # 外观：light / dark / system，实测值存在 settings 表里。
             # 未配置（老版本升级上来的库）默认「跟随系统」，不再写死浅色
             "theme": config.get("theme") or "system",
+            # 皮肤：classic（青色沉浸）/ glass（蓝色玻璃）。未配置默认 classic，
+            # 老版本升级上来的库不会突然变成另一套 UI
+            "skin": config.get("skin") or "classic",
             "timezone": config.get("timezone"),
             "traffic_threshold_pct": config.get("traffic_threshold_pct"),
             "reconcile_interval": config.get("reconcile_interval"),
@@ -1217,6 +1220,12 @@ def register(app: FastAPI) -> None:
             if text not in ("light", "dark", "system"):
                 raise ValueError("外观只能是 light / dark / system")
             updates["theme"] = text
+        skin = payload.get("skin")
+        if skin is not None:
+            text = str(skin).strip()
+            if text not in ("classic", "glass"):
+                raise ValueError("皮肤只能是 classic / glass")
+            updates["skin"] = text
         if payload.get("traffic_threshold_pct") is not None:
             percent = _as_int(payload["traffic_threshold_pct"], "流量阈值百分比")
             if not 50 <= percent <= 100:

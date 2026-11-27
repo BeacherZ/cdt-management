@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import api, db, dns, repo, scheduler, security, settings
@@ -48,9 +49,28 @@ def create_app() -> FastAPI:
 
     static = _static_dir()
     if static is not None:
-        assets = static / "assets"
-        if assets.exists():
-            app.mount("/assets", StaticFiles(directory=str(assets)), name="assets")
+        # 两套皮肤各自带 assets：classic 在 static/assets，glass 在 static/glass/assets。
+        # 都挂出来，index.html 按皮肤引用各自那份（/assets/... 或 /glass/assets/...）
+        for prefix, folder in (("/assets", static / "assets"), ("/glass/assets", static / "glass" / "assets")):
+            if folder.exists():
+                app.mount(prefix, StaticFiles(directory=str(folder)), name=prefix.strip("/").replace("/", "_"))
+
+        def _boot_script() -> str:
+            """把后端真实设置注入 index.html，首屏直接用它，避免刷新时主题/皮肤闪一下。"""
+            try:
+                config = repo.get_settings()
+                theme = config.get("theme") or "system"
+                skin = config.get("skin") or "classic"
+                if theme not in ("light", "dark", "system"):
+                    theme = "system"
+                if skin not in ("classic", "glass"):
+                    skin = "classic"
+            except Exception:
+                theme, skin = "system", "classic"
+            return (
+                "<script>window.__BOOT_THEME__=" + json.dumps(theme)
+                + ";window.__BOOT_SKIN__=" + json.dumps(skin) + ";</script>"
+            )
 
         @app.get("/{full_path:path}")
         def spa(full_path: str):  # noqa: ANN202
@@ -60,7 +80,17 @@ def create_app() -> FastAPI:
             # is_relative_to 才是真正的目录包含判断；字符串 startswith 会放过 static2/ 这类同前缀目录
             if full_path and candidate.is_file() and candidate.is_relative_to(static.resolve()):
                 return FileResponse(candidate)
-            return FileResponse(static / "index.html")
+            # SPA 入口：按后端 skin 设置选 classic 或 glass 那份 index.html，
+            # 并注入 __BOOT_THEME__ / __BOOT_SKIN__ 供首屏防闪
+            try:
+                skin = repo.get_settings().get("skin") or "classic"
+            except Exception:
+                skin = "classic"
+            entry = static / "glass" / "index.html" if skin == "glass" else static / "index.html"
+            if not entry.exists():
+                entry = static / "index.html"
+            html = entry.read_text(encoding="utf-8")
+            return HTMLResponse(html.replace("<head>", "<head>" + _boot_script(), 1))
     else:
 
         @app.get("/")

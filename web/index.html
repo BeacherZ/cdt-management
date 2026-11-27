@@ -6,19 +6,32 @@
     <!-- 默认浅色：主题由后端设置决定，由 theme.ts 在运行时改写这两个 meta -->
     <meta name="color-scheme" content="light" />
     <meta name="theme-color" content="#eceff3" />
-    <!-- 首屏防白闪：后端设置要等一次请求，那几百毫秒里深色用户会看到整页白底。
-         这里先用上次真正呈现过的主题（localStorage）或系统偏好把属性写上，
-         theme.ts 拿到后端设置后再纠正 —— 大多数情况下两者一致，不会闪。 -->
+    <!-- 首屏防主题闪变：后端在返回 index.html 时把真实主题写进 __BOOT_THEME__
+         （见 app/main.py 的 spa 路由），首屏直接用它，不再靠 localStorage 猜。
+         localStorage / 系统偏好只作兜底：Vite 开发模式没有后端注入，仍走原逻辑。 -->
+    <script>
+      /* 后端注入的真实主题由 spa 路由在 <head> 最前面写入；这里只兜开发模式 */
+      if (typeof window.__BOOT_THEME__ === 'undefined') window.__BOOT_THEME__ = null
+    </script>
     <script>
       (function () {
         try {
+          var boot = window.__BOOT_THEME__
           var saved = localStorage.getItem('cdt_theme')
+          var mode =
+            boot === 'light' || boot === 'dark' || boot === 'system'
+              ? boot
+              : saved === 'dark' || saved === 'light'
+                ? saved
+                : 'system'
           var theme =
-            saved === 'dark' || saved === 'light'
-              ? saved
-              : window.matchMedia('(prefers-color-scheme: dark)').matches
-                ? 'dark'
-                : 'light'
+            mode === 'dark'
+              ? 'dark'
+              : mode === 'light'
+                ? 'light'
+                : window.matchMedia('(prefers-color-scheme: dark)').matches
+                  ? 'dark'
+                  : 'light'
           if (theme === 'dark') document.documentElement.dataset.theme = 'dark'
           var scheme = document.querySelector('meta[name="color-scheme"]')
           if (scheme) scheme.setAttribute('content', theme)

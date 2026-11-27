@@ -1,0 +1,595 @@
+/* ============================================================================
+   应用外壳：左侧导航 + 主内容区
+   ========================================================================== */
+
+.app-shell {
+  display: grid;
+  grid-template-columns: 244px minmax(0, 1fr);
+  /* 100dvh 是「地址栏收起后」的真实可视高度；iOS Safari 上 100vh 比可视区高，
+     整页会多出一截滚动。不认识 dvh 的浏览器自动忽略第二行，用回 100vh。 */
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+/* -------------------------------------------------------------- 侧栏 */
+
+.sidebar {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  height: 100vh;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 18px 14px 14px;
+  border-right: 1px solid var(--line);
+  /* 玻璃质感：上浓下淡，透出背景的环境光。
+     上一行是给不支持 color-mix 的浏览器兜底（Chrome < 111 / Safari < 16.2 /
+     Firefox < 113，Win7/8.1 上的 Chrome 109 就在此列）：那条渐变会整条失效，
+     侧栏直接变全透明，只剩一条右边线。留着纯色至少还是块实心面板。 */
+  /* 和卡片完全同一档玻璃：白灰半透 + 同款模糊，不用菜单专用白度 */
+  background: var(--panel);
+  backdrop-filter: blur(10px) saturate(1.25);
+  -webkit-backdrop-filter: blur(10px) saturate(1.25);
+  z-index: 20;
+}
+
+/* 右边缘一道竖向渐变细线，代替死板的 1px 边框 */
+.sidebar::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -1px;
+  width: 1px;
+  background: linear-gradient(180deg, transparent, var(--line-strong) 18%, var(--line) 82%, transparent);
+  pointer-events: none;
+}
+
+.sidebar .brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  /* 下边距 18→24：和第一段「控制台」标题再拉开一档（加上 .sidebar 的 2px gap，
+     实际是 26px）。18px 时 Logo 和标题几乎贴在一起，像标题属于 Logo 那一块；
+     再大就成两截了，所以只加这一点。 */
+  margin: 0 2px 24px;
+  padding: 0 4px;
+  /* button 重置：作为可点击的 Logo，去掉原生外观但保留点击反馈 */
+  border: 0;
+  background: transparent;
+  width: auto;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 10px;
+  transition: background var(--t-base) var(--ease);
+}
+
+.sidebar .brand:hover {
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
+
+.sidebar .brand:focus-visible {
+  outline: 2px solid var(--line-strong);
+  outline-offset: 2px;
+}
+
+.brand-mark {
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  display: grid;
+  place-items: center;
+  /* 实心主题蓝底 + 单层白色循环箭头。底色固定 #2589c2，不跟随 --accent ——
+     网页标签 favicon 是静态图无法跟随主题，要三者（浅色Logo/深色Logo/标签）
+     完全一致，品牌 Logo 也必须钉死这个色。深色亮蓝 --accent 只用于界面元素。 */
+  color: #ffffff;
+  background: #2589c2;
+  border-color: transparent;
+  box-shadow: var(--shadow-1);
+  flex-shrink: 0;
+}
+
+.brand-text {
+  min-width: 0;
+}
+
+.brand-text strong {
+  display: block;
+  font-size: 14px;
+  font-weight: 660;
+  letter-spacing: -0.024em;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.brand-text span {
+  display: block;
+  font-size: 12px;
+  color: var(--muted-soft);
+  letter-spacing: 0.01em;
+}
+
+/* 桌面端：导航整体纵向排，两段之间靠间距断开（不再画一条通栏横线，
+   横线会被读成文档里的段落分隔；改为分组标题自己拖一条延长线） */
+.sidebar .nav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* 一组菜单项：项与项之间 2px，组与组之间由 .nav-list 的 gap 拉开 */
+.nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* 段标题：11px 小字，和菜单文字拉开一档，够区分就行。
+   标题右侧拖一条细线到栏尾（::after + flex:1）：分组在视觉上自己「起头」，
+   比加书名号干净。线色用 --line 而不是 --line-strong，压在 11px 小字旁边
+   才不至于抢过标题本身。 */
+.nav-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  user-select: none;
+}
+
+/* 线高固定 1px，靠 align-items:center 居中。两个标题的纵坐标小数部分若不同，
+   1px 的线会被抗锯齿摊成一粗一淡——所以线的颜色压得很轻，分摊后肉眼无差。 */
+.nav-label::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+
+/* 菜单行：行高 10px 内边距（≈ 40px 高）+ 16px 横向内边距，图标和文字整块
+   从侧栏边缘往里收一档，看着是「一块块」而不是「贴着左边的一串字」。
+   图标列保持固定 x 轴、不逐项居中：菜单是靠这一列扫视的，
+   每一行各自居中会让图标左右游走，反而更乱。
+   字重压在 500：这个字号下 550 以上会明显发胖，中文尤甚。 */
+.nav-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 16px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--ink-soft);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: -0.008em;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+
+.nav-item svg {
+  flex-shrink: 0;
+  opacity: 0.72;
+  transition:
+    opacity var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+
+/* 菜单图标未选中统一中性灰；联合换班绿、保活紫、流量均衡蓝按归属色单独覆盖。 */
+.nav-list .nav-item svg {
+  color: var(--muted);
+  opacity: 0.9;
+}
+
+/* 归属色只在需要区分的几项上覆盖：换班绿、保活紫、均衡蓝 */
+.nav-item.nav-tone-shift svg {
+  color: var(--green);
+}
+
+.nav-item.nav-tone-keepalive svg {
+  color: var(--violet);
+}
+
+/* 归属图标是"看得见"的纯色（和换班绿、保活紫同档），用可见的主题蓝；
+   --blue 是浅底上的深字色，拿来做未选中图标会发黑。选中态 .nav-item.on svg
+   会覆盖成 currentColor，不受这里影响。 */
+.nav-item.nav-tone-balance svg {
+  color: var(--blue-line);
+}
+
+/* 悬停时只提不亮，颜色还是归属色，鼠标准星扫过去不会一片闪。
+   必须限定真指针：触屏上 :hover 会在 tap 后一直挂着，松手了那层灰底还在，
+   手指划过去就像「方块卡在菜单上」 */
+/* 悬停时只提不亮，颜色还是归属色，鼠标准星扫过去不会一片闪。
+   必须限定真指针：触屏上 :hover 会在 tap 后一直挂着，松手了那层灰底还在，
+   手指划过去就像「方块卡在菜单上」 */
+@media (hover: hover) and (pointer: fine) {
+  .nav-item:hover svg {
+    opacity: 1;
+  }
+
+  /* 悬停底色用 --panel-inset，和概览页「实例状态」表格行、「最近事件」条目
+     是同一层灰。原来用 --fill-subtle(#f7f8f9)，但侧栏自身的白渐变叠完背景
+     就落在 #f7f8fa 一带——同色，等于没有高亮，看着就是一片白。
+     --panel-inset 是压上去的半透明层，比背景深一档，这才看得见那条。
+     排除 .on：选中行是实心绿药丸，不该被悬停灰盖掉。 */
+  .nav-item:hover:not(.on) {
+    background: var(--panel-inset);
+    color: var(--ink);
+  }
+
+  /* 深色下 hover 也用 --panel-inset，和概览页「实例状态」表格行 hover 同一层灰，
+     不再单独用 --fill-subtle 那档实色深灰（那层比表格行重，两处看着不是一个层级）。 */
+  :root[data-theme='dark'] .nav-item:hover:not(.on) {
+    background: var(--panel-inset);
+  }
+}
+
+/* 选中行：和运行中胶囊同一块蓝 + 同一档深字、**不铺渐变、不挂蓝色外发光**。
+   蓝外晕叠在透蓝玻璃上会把整块菜单染得更蓝，这里只留一层极淡内高光。 */
+.nav-item.on {
+  background: var(--status-fill);
+  color: var(--status-ink);
+  box-shadow: inset 0 1px 0 var(--glass-hilite);
+}
+
+/* 选中行的底色已经是实心蓝块，图标再留自己的色相（紫 / 蓝）会显得脏，
+   跟着文字走 currentColor，整块只有一个色相 */
+.nav-item.on svg {
+  color: currentColor;
+  opacity: 1;
+}
+
+/* 深色下选中块和运行中胶囊同一套：实心亮蓝 + 深墨字。
+   原先是 18% 半透明蓝玻璃 + 亮蓝字，和运行中那枚实心胶囊不是一个东西。 */
+:root[data-theme='dark'] .nav-item.on {
+  color: var(--status-ink);
+  box-shadow: inset 0 1px 0 var(--glass-hilite);
+}
+
+.nav-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 数量：右侧一颗小胶囊（不可点）。底色用 --ink 的 8% 半透明层：浅色是压深一档
+   的灰、深色是提亮一档的灰，都跟主题走。不用 --fill-subtle —— 它和侧栏白渐变
+   几乎同色，胶囊会隐形。等宽数字 + 最小宽度，2 位和 3 位切换时胶囊不会一抽一抽。 */
+.nav-count {
+  flex-shrink: 0;
+  min-width: 24px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  color: var(--muted-soft);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+
+/* 选中行是绿药丸：灰胶囊嵌在绿底上会显脏，换成一层半透明白当底 */
+.nav-item.on .nav-count {
+  background: rgba(255, 255, 255, 0.38);
+  color: var(--sky-ink);
+}
+
+/* 深色下选中块已换成实心亮蓝，数量胶囊跟着用深墨字，才不会亮底亮字糊成一片 */
+:root[data-theme='dark'] .nav-item.on .nav-count {
+  background: rgba(4, 33, 47, 0.14);
+  color: var(--status-ink);
+}
+
+.sidebar-foot {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.sidebar-foot .meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+/* -------------------------------------------------------------- 主区域 */
+
+.main-area {
+  padding: 26px 30px 72px;
+  width: 100%;
+  max-width: 1320px;
+  margin-inline: auto;
+  min-width: 0;
+}
+
+.page-head {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.page-head h1 {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  font-size: 24px;
+  font-weight: 660;
+  letter-spacing: -0.032em;
+  line-height: 1.2;
+}
+
+/* 标题前一根中性细竖条，给每个页面标题一个统一的识别锚点。
+   颜色跟标题字走（currentColor），浅色下近黑、深色下自动跟随字色，
+   不再用淡色 --line-strong —— 那根在蓝背景上会泛蓝、和黑字不同色。 */
+.page-head h1::before {
+  content: '';
+  width: 4px;
+  height: 22px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  background: currentColor;
+  box-shadow: none;
+}
+
+.page-head p {
+  margin-top: 5px;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.page-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.section {
+  margin-top: 26px;
+}
+
+.section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.section-head h2 {
+  font-size: 16px;
+  font-weight: 640;
+  letter-spacing: -0.014em;
+}
+
+.section-head > span {
+  font-size: 13px;
+  color: var(--muted-soft);
+}
+
+.section-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* -------------------------------------------------------------- 小屏：侧栏收成顶栏 */
+
+@media (max-width: 860px) {
+  /* 单列改成竖向 flex，不再用单列 grid：grid 的自动行会被 min-height:100dvh 撑高，
+     而侧栏是 align-self:start，正文上方就会多出一大截空白；flex 下顶栏还能真正
+     sticky 到整页（grid 行只有自身高度时，粘住的范围也只有那一行）。 */
+  .app-shell {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .sidebar {
+    position: sticky;
+    top: 0;
+    height: auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    overflow: visible;
+    padding: 10px 12px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    min-width: 0;
+    max-width: 100vw;
+    flex-shrink: 0;
+    /* 桌面端是 align-self:start（靠左贴边、不拉满），收成顶栏后必须改回 stretch：
+       否则顶栏按内容取宽（横屏 844 下只有 762），右边空一截，
+       设置/退出图标也会停在半空中而不是贴到屏幕右边 */
+    align-self: stretch;
+    width: 100%;
+    /* 和卡片完全同一档玻璃：手机顶栏也不再用单独的白度/模糊，
+       桌面与窄屏保持同一套白灰半透 + blur(10px) saturate(1.25)。 */
+    background: var(--panel);
+    backdrop-filter: blur(10px) saturate(1.25);
+    -webkit-backdrop-filter: blur(10px) saturate(1.25);
+  }
+
+  .sidebar::after {
+    display: none;
+  }
+
+  .sidebar .brand {
+    margin: 0 8px 0 0;
+    flex-shrink: 0;
+  }
+
+  .sidebar .brand-mark {
+    width: 30px;
+    height: 30px;
+    border-radius: 9px;
+  }
+
+  .sidebar .brand-text {
+    display: none;
+  }
+
+  /* 第一行：品牌 + 设置/退出图标；第二行：导航整行可横向滚动 */
+  .sidebar .nav-list {
+    order: 3;
+    display: flex;
+    flex-direction: row;
+    width: 100%;
+    /* flex 子项的 min-width 默认是 auto，这里不压成 0 会按内容顶宽整页 */
+    min-width: 0;
+    gap: 3px;
+    overflow-x: auto;
+    /* 和上面的 Logo 行拉开一档：6→9，跟桌面那个 +6px 同向（手机上两行本来就
+       分得开，多给 3px 就够，再多顶栏会显得空） */
+    padding-top: 9px;
+    scrollbar-width: none;
+  }
+
+  .sidebar .nav-list::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* 窄屏把导航摊成一排横滑的颗粒：分组标题没有位置，藏掉；
+     分组容器改成 display:contents，让六项直接成为横排的 flex 子项 */
+  .sidebar .nav-group {
+    display: contents;
+  }
+
+  .sidebar .nav-label {
+    display: none;
+  }
+
+  .nav-item {
+    width: auto;
+    flex-shrink: 0;
+    padding: 7px 10px;
+  }
+
+  /* 窄屏把导航颗粒压紧：760px 下七项刚好铺满一行，不用横滑；
+     再窄（<720 左右）放不下就交给横向滚动，别硬挤成两行。
+     纵向内边距单独放到 9px：手指点的目标从 29px 抬到 33px，
+     横向仍是 8px，760px 那一行的总宽不变 */
+  .sidebar .nav-list .nav-item {
+    padding: 9px 8px;
+    font-size: 13px;
+    gap: 4px;
+    border-radius: 9px;
+  }
+
+  .sidebar .nav-list .nav-count {
+    font-size: 11.5px;
+  }
+
+  /* 顶栏的 .nav-list 是 overflow-x:auto（横滑），纵向也被算成 auto，
+     药丸那颗 0 6px 14px 的外阴影正好落在容器边缘上、会被切掉半截。
+     窄屏只留顶部内高光：实心绿底本身已经够醒目，不差这层晕。 */
+  .sidebar .nav-list .nav-item.on {
+    box-shadow: inset 0 1px 0 var(--glass-hilite);
+  }
+
+  /* 设置 / 退出收成图标留在右侧，不再整块隐藏 */
+  .sidebar-foot {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 2px;
+    margin-top: 0;
+    margin-left: auto;
+    padding-top: 0;
+    padding-left: 6px;
+    border-top: 0;
+    flex-shrink: 0;
+  }
+
+  .sidebar-foot .nav-item {
+    padding: 7px 8px;
+  }
+
+  .sidebar-foot .nav-text,
+  .sidebar-foot .meta {
+    display: none;
+  }
+
+  .main-area {
+    padding: 18px 14px 64px;
+  }
+
+  .page-head {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .page-head h1 {
+    font-size: 24px;
+  }
+
+  .page-head .page-actions {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .member-row {
+    flex-wrap: wrap;
+  }
+}
+
+/* 手机：区块标题别和说明文字抢同一行 ——
+   「实例状态」被挤成两行、后面的说明也跟着断成三行，看着很碎。
+   标题 + 右侧计数钉在第一行，说明整行落到第二行。 */
+@media (max-width: 700px) {
+  .section-head {
+    flex-wrap: wrap;
+    align-items: center;
+    row-gap: 3px;
+  }
+
+  .section-head h2 {
+    white-space: nowrap;
+  }
+
+  .section-head > span {
+    order: 3;
+    flex: 1 0 100%;
+    font-size: 12.5px;
+  }
+}
+
+/* 手机上把「实例状态」「最近事件」两块的说明收起来：
+   这两句在小屏要独占一整行，字又小、信息量为零，
+   留着只是把标题和下面的卡片往下推。
+   用 section-desc 点名，别把其他区块的说明一起干掉 */
+@media (max-width: 820px) {
+  .section-head > span.section-desc {
+    display: none;
+  }
+}

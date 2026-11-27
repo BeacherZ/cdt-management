@@ -57,6 +57,8 @@ function makeDraft(settings: Settings): Settings {
   if (!draft.reconcile_offset) draft.reconcile_offset = '0'
   // 老后端 / 老配置没有 theme：默认跟随系统，别让分段控件空着
   if (draft.theme !== 'dark' && draft.theme !== 'light') draft.theme = 'system'
+  // 老后端 / 老配置没有 skin：默认青色沉浸，别让分段控件空着
+  if (draft.skin !== 'classic' && draft.skin !== 'glass') draft.skin = 'classic'
   return draft
 }
 
@@ -130,9 +132,14 @@ export default function SettingsView({ settings, onSaved, onDirtyChange }: Props
   async function save() {
     setError('')
     setBusy(true)
+    // 外观（主题 / 皮肤）变了就要整页刷新：皮肤是整份前端 bundle + favicon，
+    // 主题防闪脚本也只在页面加载时跑一次，光改 state 看不到新标签图标
+    const oldTheme = settings.theme
+    const oldSkin = settings.skin
     try {
       await post('/api/v1/settings', {
         theme: form.theme,
+        skin: form.skin,
         timezone: form.timezone,
         traffic_threshold_pct: Number(form.traffic_threshold_pct),
         reconcile_interval: Number(form.reconcile_interval),
@@ -189,7 +196,13 @@ export default function SettingsView({ settings, onSaved, onDirtyChange }: Props
       // 密码不回显：保存成功后清空，否则密码框一直是「有输入」状态，
       // 明明已经保存完了，切页还会被判成有未保存的改动
       setNewPassword('')
-      onSaved('设置已保存')
+      if (form.theme !== oldTheme || form.skin !== oldSkin) {
+        onSaved('设置已保存，正在刷新页面…')
+        // 留一帧让提示渲染出来，再整页刷新以更新 favicon / bundle
+        window.setTimeout(() => window.location.reload(), 120)
+      } else {
+        onSaved('设置已保存')
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存失败')
     } finally {
@@ -433,6 +446,23 @@ export default function SettingsView({ settings, onSaved, onDirtyChange }: Props
                   <span className="section-sub">存在后端；仅「跟随系统」会随客户端变化</span>
                 </div>
                 <div className="field">
+                  <label>
+                    <Palette size={12} /> 界面皮肤
+                  </label>
+                  <Segmented
+                    value={form.skin}
+                    options={[
+                      { value: 'classic', label: '青色沉浸' },
+                      { value: 'glass', label: '蓝色玻璃' },
+                    ]}
+                    onChange={(value) => patch((draft) => (draft.skin = value))}
+                  />
+                  <div className="hint">
+                    青色沉浸是默认界面；蓝色玻璃是半透明玻璃 + 淡蓝背景。切换会整页刷新以更新标签图标。
+                  </div>
+                </div>
+                <div className="field">
+                  <label>深浅模式</label>
                   <Segmented
                     value={form.theme}
                     options={[

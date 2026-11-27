@@ -10,6 +10,8 @@ master.key
 app/static/
 web/node_modules/
 web/dist/
+web-glass/node_modules/
+web-glass/dist/
 .env
 *.log
 .DS_Store

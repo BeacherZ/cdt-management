@@ -1,0 +1,5148 @@
+/* ============================================================================
+   CDT-Management · 设计系统
+   ----------------------------------------------------------------------------
+   取向：克制的深绿主色 + 冷灰中性色，靠层次、细边、柔和阴影和克制的渐变
+   做出质感，而不是靠高饱和色块堆砌。浅色像陶瓷，深色像磨砂玻璃。
+   ========================================================================== */
+
+/* 字体阶梯（全项目统一，只允许用这 6 档，禁止再加 12.5 / 13.5 之类中间值）：
+   11px 微标签（纯徽标/角标：类型标签、状态点、计数角标）
+   12px 辅助（说明、表单标签、meta、表格次要、时间戳、等宽代码/IP）
+   13px 正文（默认正文、导航、按钮、输入框、卡片内容）
+   14px 强调（卡片标题、弹窗标题、小节标题、主状态文字）
+   16px 标题（页面标题、区块标题、品牌名）
+   24px 展示（统计大数字、登录页主标题）
+   要改整体字号就整档平移，保持层级关系。 */
+
+:root {
+  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI',
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  color-scheme: light;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+
+  /* 表面：白灰玻璃，不染蓝。天空蓝只出现在按钮 / 选中态 / 图标这些「点」上 */
+  --bg: #eef2f5;
+  /* 背景照片：用真实图片，不加任何滤镜；白灰玻璃靠自身半透压住蓝，
+     樱花花纹照样透得上来。可读性用文字颜色解决，不再靠加白面板。 */
+  --bg-photo: url('/bg-blossom.webp');
+  --panel: rgba(255, 255, 255, 0.56);
+  /* 卡片 / 侧栏 / 设置子菜单 / 弹窗共用这一档玻璃，必须保持 0.56：
+     0.68/0.78 会把樱花压没，变成用户说的「特别白、没有玻璃感」。 */
+  --panel-solid: #ffffff;
+  --panel-soft: rgba(247, 249, 251, 0.88);
+  --panel-inset: rgba(16, 24, 40, 0.028);
+  /* --panel-inset 是 2.8% 的极淡填充，叠在白卡上只差 7 个色阶。安卓合成器对这种
+     极小的 alpha 会做 8×8 有序抖动（ordered dithering）防色带，结果浅灰块里浮出
+     一层方格噪点——域名胶囊、输入框这类小面积填充最明显。下面两个是它合成成实色
+     后的取值，像素一致但没有 alpha，专给「大面积填充」用，也就不触发抖动。 */
+  --fill-subtle: #f7f8f9;
+  /* 与卡片白至少差 8 个色阶。原先取 #fcfdfd（只差 2 阶），肉眼看着一样，
+     但这么小的色差既撑不起层次，又最经不起折腾：截图转 JPG 时这段色阶差
+     会被 DCT 量化掉，在文字边缘晕出一片方块噪点（蚊式噪声）。差 8 阶才是
+     一个「说得清」的灰，压缩后也不会散。 */
+  --fill-field: #f7f8f9;
+
+  /* 文字 */
+  --ink: #101318;
+  --ink-soft: #343b45;
+  --muted: #4d545f;
+  --muted-soft: #4d545f;
+
+  /* 线 */
+  --line: rgba(24, 38, 52, 0.085);
+  --line-strong: rgba(24, 38, 52, 0.14);
+  /* 玻璃上沿顶光：原来 55~70% 的白高光在白灰玻璃上会勾出一条突兀白边，
+     统一压到这一档，只留几乎看不见的厚度感 */
+  --glass-hilite: rgba(255, 255, 255, 0.14);
+
+  /* 主色：清雅天空蓝（sky）。只做点缀 —— 文字 / 图标 / 链接 / 描边，
+     以及选中菜单、主按钮、二级 tab 这些「可点」的实心面。
+     背景、卡片、侧栏、边框、阴影一律保持白灰中性，不跟着染蓝。 */
+  --accent: #2589c2;
+  --accent-soft: rgba(37, 137, 194, 0.1);
+  --accent-ring: rgba(37, 137, 194, 0.22);
+  --sky-fill: #a4d1f2;
+  --sky-fill-hi: #bce0f8;
+  --sky-ink: #1b3a52;
+
+  /* 绿：柔和的低饱和正绿（与探针参考图同色相），不是荧光绿、也不是偏青的绿。
+     正绿和背景的天空蓝是冷暖对比，放一起才和谐、不发青。
+     --green 是压在白灰玻璃上的文字/图标色，压得够深才清晰；
+     --run-1/--run-2 用于填充（运行中胶囊圆点、进度条、时间轴）；
+     --run-solid-* 是「当班」实心胶囊，同一族里压深一档配白字。 */
+  --green: #1fb85d;
+  --green-soft: rgba(40, 184, 96, 0.14);
+  --green-line: rgba(40, 184, 96, 0.32);
+  --run-1: #52cf85;
+  --run-2: #1fb85d;
+  --run-ink: #10351e;
+  --run-solid-1: #2aa862;
+  --run-solid-2: #1b7c47;
+
+  /* 状态胶囊：和登录按钮同一块浅天蓝，不另造绿，避免与联合换班的绿撞色 */
+  --status-fill: var(--sky-fill);
+  --status-ink: var(--sky-ink);
+  --status-border: color-mix(in srgb, var(--accent) 28%, transparent);
+  --status-dot: var(--accent);
+
+  /* 状态色 */
+  /* 流量均衡归属色：直接复用「运行中」那套浅天蓝底 + 深墨蓝字（--status-*），
+     不再单造一个 #2589c2 纯蓝 —— 那个比主菜单/运行中明显暗一档，不是一种蓝。 */
+  --blue: var(--status-ink);
+  --blue-soft: var(--status-fill);
+  /* 均衡的"可见描边/图标"蓝：胶囊底上的深字不能拿来画描边，单独用主题蓝 */
+  --blue-line: var(--accent);
+  --red: #bd3645;
+  --red-soft: rgba(189, 54, 69, 0.1);
+  --amber: #a06408;
+  --amber-soft: rgba(168, 102, 8, 0.14);
+  /* 单机保活的归属色：紫。绿=换班、蓝=均衡，再取紫才不会和它们撞色 */
+  --violet: #6b4fbd;
+  --violet-soft: rgba(107, 79, 189, 0.11);
+  /* 站点标记（中国站 / 国际站）：静态属性，不占状态色。
+     两枚统一中性灰，把彩色名额让给归属 / 状态胶囊。 */
+  /* 站点/DNS 这类中性胶囊和 IP 胶囊（.addr-chip）同一档深浅：
+     之前这里是 10% 底 + 22% 边，比 IP 的 2.8%/8.6% 深近 4 倍，
+     直接复用 --ink-soft/--panel-inset/--line，深浅主题自动跟随。 */
+  --site-ink: var(--ink-soft);
+  --site-fill: var(--panel-inset);
+  --site-line: var(--line);
+
+  /* 形状 */
+  --radius-xl: 22px;
+  --radius-lg: 16px;
+  --radius-md: 11px;
+  --radius-sm: 8px;
+
+  /* 阴影：三层叠加，近处实、远处虚 */
+  --shadow-1: 0 1px 1px rgba(20, 34, 48, 0.035), 0 2px 6px -2px rgba(20, 34, 48, 0.06);
+  --shadow-2: 0 1px 2px rgba(20, 34, 48, 0.045), 0 10px 24px -14px rgba(20, 34, 48, 0.14);
+  --shadow-3: 0 2px 4px rgba(20, 34, 48, 0.05), 0 28px 56px -30px rgba(20, 34, 48, 0.24);
+  --shadow-pop: 0 8px 16px -8px rgba(20, 34, 48, 0.12), 0 44px 88px -36px rgba(20, 34, 48, 0.28);
+
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-snap: cubic-bezier(0.34, 1.4, 0.64, 1);
+  --t-fast: 130ms;
+  --t-base: 240ms;
+
+  --mono: ui-monospace, 'SF Mono', 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
+}
+
+/* 深色：由 <html data-theme="dark"> 开启 —— 主题存在后端设置里，
+   不跟随系统；「跟随系统」是前端把 prefers-color-scheme 解析成
+   light / dark 之后再写这个属性，所以这里不再用 media query */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #0a0e14;
+  /* 深色下照片外面压一层深色蒙层，白花不会把整页照亮 */
+  --bg-veil: rgba(9, 13, 19, 0.62);
+  --panel: rgba(20, 26, 35, 0.5);
+  --panel-solid: #14181e;
+  --panel-soft: rgba(29, 35, 44, 0.72);
+  --panel-inset: rgba(255, 255, 255, 0.035);
+  /* 同浅色主题：3.5% 白叠在 #14181e 上合成值，深色下抖动更明显（OLED 低亮度） */
+  --fill-subtle: #1c2026;
+  /* 深色下也和 --panel-solid(#14181e) 拉开 8 阶，理由同浅色主题 */
+  --fill-field: #1c2026;
+
+  --ink: #e9eef5;
+  --ink-soft: #c2cbd6;
+  --muted: #aab4c1;
+  --muted-soft: #828c9a;
+
+  --line: rgba(255, 255, 255, 0.09);
+  --line-strong: rgba(255, 255, 255, 0.16);
+
+  --accent: #55bce8;
+  --accent-soft: rgba(85, 188, 232, 0.16);
+  --accent-ring: rgba(85, 188, 232, 0.3);
+  /* 深色下面积大的实心面用半透明蓝玻璃 + 亮蓝字：
+     亮蓝实心块铺成半屏宽的二级 tab 会炸成一条荧光带 */
+  --sky-fill: rgba(85, 188, 232, 0.18);
+  --sky-fill-hi: rgba(85, 188, 232, 0.28);
+  --sky-ink: #a4dcf7;
+  --glass-hilite: rgba(255, 255, 255, 0.09);
+
+  --green: #35c072;
+  --green-soft: rgba(60, 200, 110, 0.2);
+  --green-line: rgba(60, 200, 110, 0.36);
+  --run-1: #5fd694;
+  --run-2: #35c072;
+  --run-ink: #0d2618;
+  --run-solid-1: #238f58;
+  --run-solid-2: #166b3d;
+
+  /* 深色状态胶囊：登录按钮在深色下是实心亮蓝 + 深字，状态胶囊跟随同一套 */
+  --status-fill: var(--accent);
+  --status-ink: #04212f;
+  --status-border: transparent;
+  --status-dot: #04212f;
+
+  /* 深色下和「运行中」同一套：实心亮蓝底 + 深墨字（--status-*），不再单造蓝 */
+  --blue: var(--status-ink);
+  --blue-soft: var(--status-fill);
+  --blue-line: var(--accent);
+  --red: #f0707e;
+  --red-soft: rgba(240, 112, 126, 0.14);
+  --amber: #e0a13a;
+  --amber-soft: rgba(224, 161, 58, 0.16);
+  --violet: #a992ff;
+  --violet-soft: rgba(169, 146, 255, 0.16);
+  --site-ink: var(--ink-soft);
+  --site-fill: var(--panel-inset);
+  --site-line: var(--line);
+
+  --shadow-1: 0 1px 1px rgba(0, 0, 0, 0.4), 0 2px 6px -2px rgba(0, 0, 0, 0.5);
+  --shadow-2: 0 1px 2px rgba(0, 0, 0, 0.45), 0 10px 24px -14px rgba(0, 0, 0, 0.8);
+  --shadow-3: 0 2px 6px rgba(0, 0, 0, 0.5), 0 28px 56px -30px rgba(0, 0, 0, 0.9);
+  --shadow-pop: 0 10px 20px -10px rgba(0, 0, 0, 0.6), 0 48px 96px -36px rgba(0, 0, 0, 0.95);
+}
+
+/* 登录 / 注册页固定亮色：作为品牌门面不跟随系统深色模式，始终是同一套浅色外观 */
+:root[data-theme='dark'] .auth {
+  color-scheme: light;
+  --bg: #e9eef2;
+  --panel: rgba(255, 255, 255, 0.56);
+  --panel-solid: #ffffff;
+  --panel-soft: rgba(244, 246, 248, 0.9);
+  --panel-inset: rgba(16, 24, 40, 0.028);
+  --ink: #101318;
+  --ink-soft: #343b45;
+  --muted: #666e7a;
+  --muted-soft: #8b929c;
+  --line: rgba(24, 38, 52, 0.085);
+  --line-strong: rgba(24, 38, 52, 0.14);
+  /* 玻璃上沿顶光：原来 55~70% 的白高光在白灰玻璃上会勾出一条突兀白边，
+     统一压到这一档，只留几乎看不见的厚度感 */
+  --glass-hilite: rgba(255, 255, 255, 0.14);
+  --accent: #2589c2;
+  --accent-soft: rgba(37, 137, 194, 0.1);
+  --accent-ring: rgba(37, 137, 194, 0.22);
+  --sky-fill: #a4d1f2;
+  --sky-fill-hi: #bce0f8;
+  --sky-ink: #1b3a52;
+  --green: #1fb85d;
+  --green-soft: rgba(40, 184, 96, 0.14);
+  --green-line: rgba(40, 184, 96, 0.32);
+  --run-1: #52cf85;
+  --run-2: #1fb85d;
+  --run-ink: #10351e;
+  --run-solid-1: #2aa862;
+  --run-solid-2: #1b7c47;
+  --red: #bd3645;
+  --red-soft: rgba(189, 54, 69, 0.1);
+  --amber: #a06408;
+  --amber-soft: rgba(168, 102, 8, 0.14);
+  --shadow-1: 0 1px 1px rgba(20, 34, 48, 0.035), 0 2px 6px -2px rgba(20, 34, 48, 0.06);
+  --shadow-2: 0 1px 2px rgba(20, 34, 48, 0.045), 0 10px 24px -14px rgba(20, 34, 48, 0.14);
+  --shadow-3: 0 2px 4px rgba(20, 34, 48, 0.05), 0 28px 56px -30px rgba(20, 34, 48, 0.24);
+  --shadow-pop: 0 8px 16px -8px rgba(20, 34, 48, 0.12), 0 44px 88px -36px rgba(20, 34, 48, 0.28);
+  background: var(--bg);
+}
+
+/* -------------------------------------------------------------- 基础 */
+
+* {
+  box-sizing: border-box;
+  /* 安卓 Chrome 点按链接/按钮会刷一层半透明蓝块，在深绿药丸上就是一个「方块闪」；
+     页面自己已经有 hover/active 反馈，这层系统高亮纯属干扰 */
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+  /* 手机浏览器在横竖屏切换、或系统字号偏大时会把正文放大一档，
+     字形跟着拉扯发虚。锁死 100% 让字号只由我们的档位决定 */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* 触控目标去掉 300ms 双击缩放等待：点菜单立刻响应，不再有「按下去顿一下」 */
+button,
+a,
+label,
+.nav-item,
+.btn,
+.input,
+.select,
+.textarea,
+.tab {
+  touch-action: manipulation;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.55;
+  position: relative;
+  overflow-x: hidden;
+}
+
+/* 环境光：两团极淡的径向渐变，让纯色背景有纵深 */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image: var(--bg-photo);
+  background-size: cover;
+  background-position: center 38%;
+  background-repeat: no-repeat;
+}
+
+/* 深色：叠一层深色蒙层把照片压暗（浅色不加，完全透） */
+:root[data-theme='dark'] body::before {
+  background-image: linear-gradient(var(--bg-veil), var(--bg-veil)), var(--bg-photo);
+  background-size: cover, cover;
+  background-position: center 38%, center 38%;
+  background-repeat: no-repeat, no-repeat;
+}
+
+/* 极细颗粒，避免大面积纯色出现色带 */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.035;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+#root {
+  position: relative;
+  z-index: 1;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  font-weight: 640;
+  letter-spacing: -0.018em;
+  color: var(--ink);
+}
+
+p {
+  margin: 0;
+}
+
+code,
+.mono {
+  font-family: var(--mono);
+  font-variant-ligatures: none;
+}
+
+a {
+  color: var(--ink-soft);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--ink) 12%, transparent);
+  color: var(--ink);
+}
+
+:focus-visible {
+  outline: 2px solid var(--line-strong);
+  outline-offset: 2px;
+}
+
+.spin {
+  animation: spin 900ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.grow {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.spacer {
+  flex: 1 1 auto;
+}
+
+/* -------------------------------------------------------------- 按钮 */
+
+.btn {
+  /* 按钮也走玻璃：纯白实底压在玻璃卡上会像贴了张纸片。
+     74% 白 + 自身模糊，和卡片是同一块材质；primary / disabled 各自覆盖 --btn-bg */
+  --btn-bg: color-mix(in srgb, var(--panel-solid) 74%, transparent);
+  --btn-border: var(--line-strong);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 33px;
+  padding: 0 13px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--btn-border);
+  background: var(--btn-bg);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 550;
+  font-family: inherit;
+  letter-spacing: -0.005em;
+  cursor: pointer;
+  white-space: nowrap;
+  backdrop-filter: blur(8px) saturate(1.3);
+  -webkit-backdrop-filter: blur(8px) saturate(1.3);
+  box-shadow:
+    inset 0 1px 0 var(--glass-hilite),
+    var(--shadow-1);
+  transition:
+    background var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow-2);
+  transform: translateY(-1px);
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(0) scale(0.985);
+  box-shadow: var(--shadow-1);
+}
+
+/* 禁用态不用整体 opacity：深色主题下 45% 的红字在卡片上只有 2.1:1、绿底深字只有
+   1.7:1，「开机 / 关机」这种按钮等于凭空消失（实例管理页最明显）。改成中性灰块：
+   文字 --muted 压在 --fill-subtle 上，浅色 7.2:1 / 深色 7.8:1 —— 看得见，但没阴影、
+   没 hover 抬升、光标是 not-allowed，仍一眼看出点不动。 */
+.btn:disabled {
+  --btn-bg: var(--fill-subtle);
+  --btn-border: var(--line-strong);
+  opacity: 1;
+  cursor: not-allowed;
+  color: var(--muted);
+  box-shadow: none;
+}
+
+/* 主按钮禁用了就不该留绿色渐变和扫光，否则看着还像能点 */
+.btn.primary:disabled {
+  --btn-bg: var(--fill-subtle);
+  --btn-border: var(--line-strong);
+  color: var(--muted);
+  box-shadow: none;
+}
+
+.btn.primary:disabled::after {
+  display: none;
+}
+
+.btn.danger:disabled {
+  background: var(--fill-subtle);
+  border-color: var(--line-strong);
+  color: var(--muted);
+  box-shadow: none;
+}
+
+/* 图标按钮（编辑 / 删除 / 刷新）禁用时保持无底色，只把字与图标调成中性灰 */
+.btn.ghost:disabled {
+  --btn-bg: transparent;
+  --btn-border: transparent;
+  color: var(--muted);
+}
+
+.btn.primary {
+  /* 浅天蓝实心 + 深蓝字，纯色不要渐变（深蓝底压白字就是「墨蓝」） */
+  --btn-bg: var(--sky-fill);
+  --btn-border: color-mix(in srgb, var(--accent) 30%, transparent);
+  color: var(--sky-ink);
+  position: relative;
+  overflow: hidden;
+  /* 顶部内高光 + 外层色晕，比纯色块显得有厚度 */
+  box-shadow:
+    inset 0 1px 0 var(--glass-hilite),
+    0 1px 2px color-mix(in srgb, var(--accent) 14%, transparent),
+    0 10px 20px -12px color-mix(in srgb, var(--accent) 26%, transparent);
+}
+
+/* 深色下 --sky-fill 是半透明蓝玻璃（大面积选中块要柔和），但主按钮是「动作」，
+   半透明会像次要按钮 —— 这里单独给一档实心亮蓝 + 深字。
+   必须带 :not(:disabled)：带 :root 前缀优先级高一级，会把禁用态的中性灰字盖回去，
+   灰底上压深蓝只有 1.1:1，卡片里的「开机」就看不见了。 */
+:root[data-theme='dark'] .btn.primary:not(:disabled) {
+  --btn-bg: var(--accent);
+  color: #04212f;
+}
+
+/* hover 时一道光从左扫到右，给主按钮一点「活」的质感 */
+.btn.primary::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -130%;
+  width: 55%;
+  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.18), transparent);
+  transform: skewX(-20deg);
+  transition: left 520ms var(--ease);
+  pointer-events: none;
+}
+
+.btn.primary:hover:not(:disabled)::after {
+  left: 135%;
+}
+
+.btn.primary:hover:not(:disabled) {
+  --btn-bg: var(--sky-fill-hi);
+  box-shadow:
+    inset 0 1px 0 var(--glass-hilite),
+    0 2px 4px color-mix(in srgb, var(--accent) 18%, transparent),
+    0 16px 28px -14px color-mix(in srgb, var(--accent) 32%, transparent);
+}
+
+/* 深色主按钮是实心亮蓝，hover 再提一档（--sky-fill-hi 是半透明，会变淡） */
+:root[data-theme='dark'] .btn.primary:hover:not(:disabled) {
+  --btn-bg: #5ec6f0;
+}
+
+.btn.danger {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 30%, transparent);
+  background: var(--red-soft);
+  box-shadow: none;
+}
+
+.btn.ghost {
+  --btn-bg: transparent;
+  --btn-border: transparent;
+  box-shadow: none;
+  color: var(--ink-soft);
+}
+
+.btn.ghost:hover:not(:disabled) {
+  background: var(--panel-inset);
+  border-color: var(--line);
+  box-shadow: none;
+}
+
+.btn.sm {
+  height: 27px;
+  padding: 0 10px;
+  font-size: 12px;
+  border-radius: var(--radius-sm);
+  gap: 5px;
+}
+
+.btn.icon {
+  width: 31px;
+  padding: 0;
+}
+
+.btn.icon.sm {
+  width: 27px;
+  height: 27px;
+  padding: 0;
+}
+
+/* 纯图标动作按钮（刷新 / 编辑 / 删除 / 关闭）：去掉 74% 白的胶囊底，
+   只留图标本身。hover 不给白底，只把图标颜色加深，仍然看得出可点。 */
+.btn.ghost.icon.sm {
+  --btn-bg: transparent;
+  --btn-border: transparent;
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.btn.ghost.icon.sm:hover:not(:disabled) {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--ink);
+}
+
+.btn.block {
+  width: 100%;
+  height: 40px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+/* 登录 / 提交这类主按钮给足高度和字重，作为页面视觉重心 */
+.auth-form .btn.block {
+  margin-top: 4px;
+}
+
+/* -------------------------------------------------------------- 表单 */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-bottom: 15px;
+  min-width: 0;
+}
+
+.field:last-child {
+  margin-bottom: 0;
+}
+
+.field > label,
+label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+.field > label .req {
+  color: var(--red);
+  font-weight: 700;
+}
+
+.hint {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--muted-soft);
+}
+
+/* -------------------------------------------------------------- 设置抽屉 */
+
+/* 区块标题里的 lucide 图标垂直对齐 */
+.section-head h2 svg {
+  vertical-align: -2px;
+  color: var(--muted);
+}
+
+/* 纯文字区块标题前加一个小圆点，和带图标的标题对齐成同一套节奏。
+   颜色跟标题字走（currentColor），和页面标题前那根竖条同一个逻辑：
+   浅色下近黑、深色下近白。之前用 --muted-soft 固定灰，深色下圆点灰、
+   竖条白，两个锚点不同色。 */
+.section-head h2:not(:has(svg))::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  margin-right: 7px;
+  vertical-align: 1px;
+}
+
+/* 账号区：一块带浅底的分组卡片 */
+.account-card {
+  padding: 14px 14px 12px;
+  margin-bottom: 18px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  background: var(--panel-soft);
+}
+
+.account-card .field {
+  margin-bottom: 10px;
+}
+
+.account-card .hint {
+  margin-top: 2px;
+}
+
+/* 通知页内部的二级 tab：渠道 / 类别 */
+.sub-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  margin-bottom: 16px;
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  backdrop-filter: blur(10px) saturate(1.25);
+  -webkit-backdrop-filter: blur(10px) saturate(1.25);
+}
+
+.sub-tabs button {
+  flex: 1;
+  border: 0;
+  padding: 7px 10px;
+  border-radius: calc(var(--radius-md) - 4px);
+  background: transparent;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color var(--t-fast) var(--ease), background var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease);
+}
+
+/* 悬停和侧栏主菜单同一层灰底：只在真指针上生效，
+   触屏 tap 完不会留下一块灰斑；选中那颗是实心绿药丸，不叠灰 */
+@media (hover: hover) and (pointer: fine) {
+  .sub-tabs button:hover:not(.on) {
+    color: var(--ink);
+    background: var(--panel-inset);
+  }
+
+  :root[data-theme='dark'] .sub-tabs button:hover:not(.on) {
+    background: var(--fill-subtle);
+  }
+}
+
+/* 选中项和侧栏主菜单一样是登录按钮同款浅天蓝，去掉蓝色外发光，
+   只留一层极淡内高光，避免透蓝玻璃上的选中块显得过蓝。 */
+.sub-tabs button.on {
+  color: var(--sky-ink);
+  background: var(--sky-fill);
+  box-shadow: inset 0 1px 0 var(--glass-hilite);
+}
+
+/* 浅天蓝块两套主题都是深字 */
+:root[data-theme='dark'] .sub-tabs button.on {
+  color: var(--sky-ink);
+}
+
+/* 测试按钮行，避免和下面内容贴死 */
+.test-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 12px;
+}
+
+/* ------------------------------------------------- 设置里可增删的 DDNS 记录名 */
+
+/* -------------------------------------------------------------- DNS 页 */
+
+.muted {
+  color: var(--muted-soft);
+}
+
+/* 只读值：绑定结果这类「能看不能在这里改」的东西 */
+.readonly-value {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--panel-inset);
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+.readonly-value code {
+  font-size: 13px;
+  color: var(--ink);
+}
+
+/* 提示条：DDNS 关着 / 没配 Token */
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 9px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  background: var(--panel-inset);
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.notice.amber {
+  border-color: color-mix(in srgb, var(--amber) 28%, var(--line));
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
+.notice > span {
+  flex: 1;
+  min-width: 0;
+}
+
+.dns-add {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+
+.dns-add-actions {
+  display: flex;
+  gap: 8px;
+  padding-top: 22px;
+  flex: none;
+}
+
+.dns-list {
+  /* 一行两卡：记录少时并排；窄屏（≤700px，见下方媒体查询）回落成一列。
+     默认的 align-items: stretch 会把同排卡片拉到一样高——以前这里写的是 start，
+     每张卡各自收在内容高度上，同排两张能差出整整一行（有错误提示的那张多一行，
+     旁边那张就矮 25px），底边参差。不要改用 grid-auto-rows: 1fr：那会把所有行
+     都拉成最高那一行，某条记录报错多一行时整页卡片都要跟着长高。
+     单列（手机）时每张卡独占一行，stretch 等于内容高度，高度仍是自然的。 */
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  gap: 10px;
+}
+
+.dns-row {
+  /* 内边距四边对称 + 圆角比通用卡小一档（16 → 12）：DNS 卡内容就三行，
+     16px 圆角在 330×135 的尺寸上显得圆滚滚的，收一档更「方正」。
+     注意别改 .card 的 --radius-lg，那会影响所有页面的卡片。 */
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  /* 拖拽排序：整行可拖动，卡片尺寸与内容不变 */
+  cursor: grab;
+}
+
+.dns-row.dragging {
+  opacity: 0.45;
+  cursor: grabbing;
+}
+
+.dns-row.drag-over {
+  border-color: var(--line-strong);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ink) 10%, transparent);
+}
+
+.dns-row:hover {
+  border-color: var(--line-strong);
+}
+
+.dns-row-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* 域名和 IP 都是静态标识，不占状态色 —— 和实例页的「中国站 / 国际站」
+   同一套中性灰胶囊，整页彩色只留给状态徽标。 */
+.dns-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--site-ink);
+  min-width: 0;
+  max-width: 100%;
+  padding: 1px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--site-line);
+  background: var(--site-fill);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dns-tag {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel-inset);
+  font-size: 11px;
+  color: var(--muted-soft);
+}
+
+.dns-row-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 2px;
+  flex: none;
+}
+
+.dns-bind {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dns-bind > label {
+  flex: none;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.dns-bind .select {
+  flex: 1;
+  min-width: 0;
+  /* 不设上限：下拉右侧要顶到卡片内边距，和下面「解析到 / 时间」那条线的
+     右端齐平。以前限 340px，宽卡上右边空出一截，四行看着参差。 */
+  max-width: none;
+  height: 32px;
+}
+
+/* 自绘的「绑定到」下拉（原生 <option> 放不进彩色图标）。
+   收起状态沿用 .select 的边框/底色/高度，看不出和普通下拉有差别，
+   点开才多出图标和分组标题。 */
+.dns-bind .bind-picker {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+
+.bind-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* 触发器借了 .select 的边框/底色/字号，但**不要**它那支原生箭头：
+   .select 用 background-image 画好了一支、padding-right 还留了 32px，
+   而 .bind-caret 是真实 DOM 的 lucide 图标 —— 两套叠在一起就是并排两个 ⌄。
+   这里把背景箭头清掉、右内边距收到 10px（箭头到边 10px，比原来 11px 略紧）。
+   深色主题那条 :root[data-theme='dark'] .select 权重 0,3,0，必须一起压住，
+   否则切到深色箭头又冒出来。 */
+.dns-bind .select.bind-trigger,
+:root[data-theme='dark'] .dns-bind .select.bind-trigger {
+  padding-right: 10px;
+  background-image: none;
+}
+
+.bind-trigger:disabled {
+  cursor: not-allowed;
+}
+
+.bind-trigger-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bind-caret {
+  flex: none;
+  color: var(--muted);
+  transition: transform var(--t-fast) var(--ease);
+}
+
+.bind-picker.is-open .bind-caret {
+  transform: rotate(180deg);
+}
+
+.bind-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 400px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 5px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line-strong);
+  background: var(--panel-solid);
+  box-shadow: var(--shadow-3);
+}
+
+/* 分组之间一条极淡的分隔线：11px 的组标题和 13px 的选项挨着排时，
+   不加线看起来就是一串同级的条目，四个归属组分不出层次 */
+.bind-section {
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+}
+
+.bind-section + .bind-section,
+.bind-menu > .bind-option + .bind-section {
+  margin-top: 4px;
+}
+
+/* 分组标题：11px 小字 + 语义色图标，和主菜单那组标题一个调子 */
+.bind-section-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  user-select: none;
+}
+
+.bind-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-soft);
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.bind-option:hover {
+  background: var(--fill-subtle);
+  color: var(--ink);
+}
+
+.bind-option.is-active {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.bind-option.is-active svg {
+  flex: none;
+  color: var(--ink-soft);
+}
+
+.bind-option-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 展开时把这张卡抬到邻居之上：.card 的 backdrop-filter 会自己生成层叠上下文，
+   不抬 z-index 的话，DOM 里排在后面的下一张卡会盖住菜单 */
+.dns-row:has(.bind-picker.is-open) {
+  z-index: 6;
+}
+
+/* 卡片贴着视口底部时向上展开（JS 在打开时判断，见 BindPicker）：
+   朝上时代码里会同时把 max-height 收到上方可用空间，两个方向都不出屏 */
+.bind-picker.is-flip .bind-menu {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+
+.dns-meta {
+  /* 沉到卡底：被拉伸到等高后，多出来的空间留在上一行和这行之间，
+     而不是垫在卡片最下面——否则底边齐了，内容却浮在半空，看着像忘了填。
+     它是 .dns-row 的最后一个子元素，margin-top: auto 相当于把它按到内底边。 */
+  margin-top: auto;
+  /* 固定两行网格，不再是 flex-wrap：
+     第一行「归属目标」独占整行，第二行「解析到 … / 时间」左右两端对齐。
+     以前是 flex-wrap，目标名一长就把「解析到」顶到下一行——同排四张卡
+     里两张两行、两张一行，底边虽然被 stretch 拉齐了，卡里却错位。
+     现在内容再长也只在行内省略，行数永远一样。 */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 12px;
+  row-gap: 3px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.dns-target {
+  /* 归属那行占满两列；行内只有「图标 + 名字」，名字按剩余宽度省略 */
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+/* 名字这一层负责省略号：裸文本节点截不断，一长就只能换行 */
+.dns-target-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dns-target svg {
+  flex: none;
+  /* 图标带语义色了（换班绿 / 均衡蓝 / 保活紫 / 闲散灰），不再压 0.75，
+     否则紫和蓝在小尺寸下会糊成同一片灰 */
+}
+
+/* 归属图标的四种配色，直接挂在图标类上（不再按容器逐个复制）。
+   归属行的文字多是中性灰，图标不靠父级 color 传递，必须自己带色；
+   胶囊里那些本来就从 .owner-tag.* 继承到同一个值，写上等于没变。
+   闲散手动刻意用 --muted：它和正文完全同色，一眼就知道「没人管」。 */
+.owner-icon-shift {
+  color: var(--green);
+}
+
+.owner-icon-balance {
+  color: var(--blue-line);
+}
+
+.owner-icon-keepalive {
+  color: var(--violet);
+}
+
+.owner-icon-free {
+  color: var(--muted);
+}
+
+/* 归属行原先还有一颗「运行中 / 未运行」小胶囊（.dns-meta .badge 压到 11px），
+   2026-11-23 按用户要求删掉：目标在不在，卡片第一行的状态徽标已经说了，
+   同一行再写一遍会把「换班组「X」·当班 Y」挤成省略号。 */
+.dns-ip {
+  /* 第二行左端；「该指向 vs 现在指向」并排时超宽就整段省略，
+     不能让箭头把时间挤下去 */
+  grid-column: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.dns-ip code {
+  font-size: 12px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--site-fill);
+  border: 1px solid var(--site-line);
+  color: var(--site-ink);
+  font-family: ui-monospace, Consolas, monospace;
+  white-space: nowrap;
+  /* flex 子项默认 min-width: auto 不会缩，空间不够时整块被容器 overflow 硬切，
+     连省略号都没有。允许收缩 + 省略号，至少能看出「这里被截了」 */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 该指向 vs 现在指向：还没同步时用琥珀色提醒 */
+.dns-ip code.want {
+  border-color: color-mix(in srgb, var(--amber) 34%, var(--line));
+  color: var(--amber);
+}
+
+.dns-time {
+  /* 第二行右端对齐：和左边的「解析到」形成一条两端齐的表格线 */
+  grid-column: 2;
+  justify-self: end;
+  color: var(--muted-soft);
+  white-space: nowrap;
+}
+
+.dns-error {
+  /* 出错信息独占一行（只有报错时才多出这一行），
+     单行截断，不让一句长错误把卡片撑高 */
+  grid-column: 1 / -1;
+  color: var(--red);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.input,
+.select,
+.textarea {
+  width: 100%;
+  height: 36px;
+  padding: 0 11px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line-strong);
+  background: var(--panel-solid);
+  color: var(--ink);
+  font-size: 13px;
+  font-family: inherit;
+  /* 原本有一条 inset 0 1px 2px 的 2.7% 阴影：太淡，实机上根本看不出「陷下去」，
+     却给整块填充塞进一个低 alpha 图层，压缩后和填充色一起糊成方块（同上一条注释）。 */
+  box-shadow: none;
+  transition:
+    border-color var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease);
+}
+
+/* 输入框默认留一点浅灰底，跟纯白卡片拉开层次，避免「只有两条边线」的塌陷感 */
+.input:not([type='color']):not([type='checkbox']):not([type='radio']),
+.select,
+.textarea {
+  /* 实色而不是「白 + 2.8% inset」的混色：混色结果仍带 alpha，
+     手机上会触发 dithering（见 --fill-subtle 的说明） */
+  background: var(--panel-soft);
+  background: var(--fill-field);
+}
+
+.input.mono {
+  font-family: var(--mono);
+  font-size: 13px;
+  letter-spacing: -0.01em;
+}
+
+/* 占位符不再叠 0.75 透明度：--muted-soft 本身是 4.8:1（深）/ 5.1:1（浅），
+   再打七五折只剩 3.1:1，深色下几乎读不出提示语 */
+.input::placeholder,
+.textarea::placeholder {
+  color: var(--muted-soft);
+}
+
+.input:hover:not(:disabled),
+.select:hover:not(:disabled),
+.textarea:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: var(--panel-solid);
+}
+
+.input:focus,
+.select:focus,
+.textarea:focus {
+  outline: none;
+  border-color: var(--line-strong);
+  background: var(--panel-solid);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink) 10%, transparent);
+}
+
+/* 必填校验没过的那一格：描红 + 红环。聚焦态一并写进来，
+   否则光标落进去以后 .input:focus 的强调色会把红框盖掉，
+   就看不出到底哪一格还欠着东西 */
+.field .input[aria-invalid='true'],
+.field .select[aria-invalid='true'],
+.field .input[aria-invalid='true']:focus,
+.field .select[aria-invalid='true']:focus {
+  border-color: var(--red);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--red) 14%, transparent);
+}
+
+.input:disabled,
+.select:disabled,
+.textarea:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* 数字输入框去掉上下箭头，用更干净的观感（浏览器默认 spinner 在窄框里很挤） */
+input[type='number'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+input[type='number']::-webkit-outer-spin-button,
+input[type='number']::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.textarea {
+  height: auto;
+  min-height: 84px;
+  padding: 9px 11px;
+  resize: vertical;
+  line-height: 1.6;
+}
+
+/* 原生 select 去掉系统箭头，自己画一个，和输入框视觉统一 */
+.select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 32px;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2366707a' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 11px center;
+  background-size: 12px;
+}
+
+:root[data-theme='dark'] .select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238d97a5' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+}
+
+/* DNS「绑定到」下拉：和域名 / IP 胶囊同一套中性灰，整页只剩状态徽标有彩。
+   借 .select 的骨架和箭头，只把填充/描边/字色换成 --site-*；
+   这里必须盖住 .select:hover / :focus 的 --panel-solid，否则一悬停就跳回白块。 */
+.dns-bind .select,
+.dns-bind .select:hover:not(:disabled),
+.dns-bind .select:focus {
+  color: var(--site-ink);
+  background-color: var(--site-fill);
+  border-color: var(--site-line);
+}
+
+.dns-bind .select:focus {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--site-ink) 12%, transparent);
+}
+
+.select optgroup {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.select option {
+  color: var(--ink);
+  background: var(--panel-solid);
+}
+
+/* -------------------------------------------------------------- 徽章 */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel-soft);
+  color: var(--ink-soft);
+  font-size: 13px;
+  font-weight: 550;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+.badge .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.badge.green {
+  color: var(--status-ink);
+  background: var(--status-fill);
+  border-color: var(--status-border);
+}
+
+/* 均衡页状态徽章不再用归属色主题蓝，回落到 .badge.green 那套通用状态色
+   （正常态的浅蓝底深墨字），和换班页同一语义的状态用同一个颜色。 */
+
+/* 「运行中」专用：和登录按钮同一块浅天蓝，靠 600 字重 + 深蓝圆点
+   与「已停止」的白灰底拉开差距；不再另起一套绿。 */
+.badge.live {
+  color: var(--status-ink);
+  background: var(--status-fill);
+  border-color: var(--status-border);
+  font-weight: 600;
+}
+
+.badge.live .dot {
+  background: var(--status-dot);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--status-dot) 16%, transparent);
+}
+
+.badge.red {
+  color: var(--red);
+  background: var(--red-soft);
+  border-color: color-mix(in srgb, var(--red) 26%, transparent);
+}
+
+.badge.amber {
+  color: var(--amber);
+  background: var(--amber-soft);
+  border-color: color-mix(in srgb, var(--amber) 26%, transparent);
+}
+
+/* 均衡页状态徽标（均衡中 / 等待到位）：淡底 + 主题蓝字，和均衡族统一 */
+.badge.blue {
+  color: var(--blue-line);
+  background: color-mix(in srgb, var(--blue-line) 10%, transparent);
+  border-color: color-mix(in srgb, var(--blue-line) 26%, transparent);
+}
+
+/* 停机 / 未知这类中性状态：不做成亮白药丸，不铺底也不描边，
+   但文字必须保持实心深墨色——淡灰字压在亮蓝背景上会读不清。 */
+.badge.gray {
+  color: var(--ink-soft);
+  background: transparent;
+  border-color: transparent;
+  font-weight: 500;
+}
+
+.badge.pulse .dot {
+  animation: badge-pulse 1.6s var(--ease) infinite;
+}
+
+@keyframes badge-pulse {
+  0% {
+    box-shadow: 0 0 0 0 currentColor;
+    opacity: 1;
+  }
+  70% {
+    box-shadow: 0 0 0 5px transparent;
+    opacity: 0.6;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+    opacity: 1;
+  }
+}
+
+/* 站点标记（中国站 / 国际站）：静态属性，不表示状态或归属。
+   两枚统一中性灰，同档透度；彩色名额留给运行中 / 换班 / 均衡 / 保活这些胶囊，
+   否则同屏绿蓝梅紫四色加站点色，卡片会花。 */
+.site-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--site-ink);
+  background: var(--site-fill);
+  border: 1px solid var(--site-line);
+  flex-shrink: 0;
+}
+
+/* 国际站不再单独上色：和「中国站」同款灰，只靠文字区分。 */
+.site-tag.intl {
+  color: var(--site-ink);
+  background: var(--site-fill);
+  border-color: var(--site-line);
+}
+
+/* -------------------------------------------------------------- 环形进度 */
+
+.ring {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.ring svg {
+  display: block;
+  overflow: visible;
+}
+
+.ring .ring-track {
+  /* 老浏览器兜底：stroke 失效的话整个底槽消失，只剩一段进度弧看不出占比 */
+  stroke: var(--line);
+  stroke: color-mix(in srgb, var(--ink) 10%, transparent);
+}
+
+.ring .ring-bar {
+  stroke: color-mix(in srgb, var(--ink) 34%, transparent);
+  filter: none;
+  transition: stroke-dashoffset 600ms var(--ease);
+}
+
+.ring.amber .ring-bar {
+  stroke: var(--amber);
+}
+
+.ring.red .ring-bar {
+  stroke: var(--red);
+}
+
+/* 实例卡用主题蓝，和均衡归属色同一块主题色 */
+.ring.accent .ring-bar {
+  stroke: var(--accent);
+  filter: none;
+}
+
+/* 均衡环描边用可见的主题蓝 --accent，而不是 --blue（后者是浅底上的深字色，
+   压在深色背景上会看不见）。两主题下都和「运行中」圆点同一块蓝。 */
+.ring.blue .ring-bar {
+  stroke: var(--blue-line);
+  filter: none;
+}
+
+/* 联合换班：和归属胶囊、当班胶囊、流量条同一个绿 */
+.ring.green .ring-bar {
+  stroke: var(--green);
+  filter: drop-shadow(0 0 5px var(--green-soft));
+}
+
+/* 单机保活：和「归属」胶囊里的紫色同一个色，四个模块各自一色，扫一眼分得清 */
+.ring.violet .ring-bar {
+  stroke: var(--violet);
+  filter: drop-shadow(0 0 5px var(--violet-soft));
+}
+
+.ring-text {
+  position: absolute;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* -------------------------------------------------------------- 流量条 */
+
+.meter {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+/* 紧凑流量条（列表那种窄列用）：标签只报「已用 + 百分比」，字号和轨道都收一档 */
+.meter.is-compact {
+  gap: 5px;
+}
+
+.meter.is-compact .meter-track {
+  height: 6px;
+}
+
+.meter.is-compact .meter-labels {
+  font-size: 11px;
+}
+
+.meter-track {
+  position: relative;
+  height: 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  overflow: hidden;
+}
+
+.meter-fill {
+  height: 100%;
+  border-radius: 999px;
+  /* 正常状态就是探针那条进度条的绿 rgb(0,201,80)；warn / danger 见下 */
+  background: linear-gradient(90deg, var(--run-1), var(--run-2));
+  transition: width 500ms var(--ease);
+}
+
+/* 到阈值前后才转黄转红，档位由组件按阈值算（不是固定 60/85） */
+.meter-fill.warn {
+  background: linear-gradient(90deg, #ffd24a, #f5b301);
+}
+
+.meter-fill.danger {
+  background: linear-gradient(90deg, #ff8a7a, #e5484d);
+}
+
+/* 阈值刻度：压在轨道上的细竖线，一眼看出「这条线到了就换班」 */
+.meter-mark {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  /* 整数宽度 + 组件里把 left 取整到整像素，三者配合才能保证每张卡片都是 2px 实心；
+     用 1.5px 时亚像素对齐会让有的卡片渲染成 1px、有的 2px（粗细不一） */
+  width: 2px;
+  margin-left: -1px;
+  /* 老浏览器兜底：这条阈值线消失就看不出「用到哪就该换班」 */
+  background: var(--muted-soft);
+  background: color-mix(in srgb, var(--ink) 46%, transparent);
+  border-radius: 2px;
+  /* 刻度线不做位移过渡：它标的是「到哪就该换班」这个静态事实，不是随时间变化的量。
+     原先的 transition: left 会把首帧百分比 → 整像素的落位、窗口缩放、数据刷新
+     全画成 400ms 的滑动，切页面时看着就是竖条自己跳一下。 */
+}
+
+.meter-labels {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  /* 用量和「百分比 / 阈值」各自是一句话，绝不能断成「12.06」/「GB」两行。
+     只靠 nowrap 不够：容器真放不下时文本会顶出右边界，所以换班槽位那一列
+     同时留了量好的余量（见上面 .slot-body）。overflow: hidden 不能加，
+     宁可露出来也不能把用量数字截掉 */
+  white-space: nowrap;
+}
+
+/* -------------------------------------------------------------- 开关 / 分段 */
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.toggle-row:last-child {
+  border-bottom: 0;
+}
+
+.toggle-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+/* 通知类别分成「流程完成 / 流程异常 / 实例与保护」三组：
+   七项平铺时看不出哪条属于哪套逻辑，分组后扫一眼就知道在配什么 */
+.switch-group + .switch-group > .switch-group-label {
+  margin-top: 18px;
+}
+
+/* 通知类别顶部标题与它下面的第一个分组标题之间留一口气：
+   标题是 16px + 右侧说明同行，紧接一个 12.5px 粗体分组标题时，
+   两行的行盒几乎贴在一起，读起来像一句被硬拆成两截；
+   拉开到 18px 后层级才分得开（组与组之间也是 18px，节奏一致）。
+   写成 .section-head.notify-cat-head 两级：layout.css 里的 .section-head 在
+   main.tsx 中后导入，同权重的单类规则会被它的 margin-bottom: 12px 盖掉。 */
+.section-head.notify-cat-head {
+  margin-bottom: 18px;
+}
+
+@media (max-width: 700px) {
+  /* 手机上说明文字独占一行，标题块本身已经多出一行高度，
+     再留 18px 会显得空，收到 14px */
+  .section-head.notify-cat-head {
+    margin-bottom: 14px;
+  }
+}
+
+/* 通知类别的分组标题：之前 11.5px 灰字，和下面的开关名几乎分不出层级。
+   现在加一条主色竖条 + 右侧延伸的分隔线，扫一眼就知道换组了。 */
+.switch-group-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 2px;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--ink);
+}
+
+.switch-group-label::before {
+  content: '';
+  flex: 0 0 auto;
+  width: 3px;
+  height: 12px;
+  border-radius: 2px;
+  background: var(--line-strong);
+}
+
+.switch-group-label::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--line-strong);
+}
+
+.toggle-text strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.toggle-text span {
+  font-size: 13px;
+  color: var(--muted-soft);
+  line-height: 1.55;
+}
+
+.switch {
+  position: relative;
+  width: 40px;
+  height: 23px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: color-mix(in srgb, var(--ink) 9%, transparent);
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0;
+  transition:
+    background var(--t-base) var(--ease),
+    border-color var(--t-base) var(--ease),
+    box-shadow var(--t-base) var(--ease);
+}
+
+.switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: var(--panel-solid);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.28);
+  transition: transform var(--t-base) var(--ease-snap);
+}
+
+.switch.on {
+  /* 轨道里没有文字，直接用主色本身（浅天蓝块配白圆钮会糊成一片） */
+  background: var(--accent);
+  border-color: transparent;
+  box-shadow: 0 2px 8px -2px var(--accent-ring);
+}
+
+.switch.on::after {
+  transform: translateX(17px);
+}
+
+/* 开关禁用：0.4 时轨道与底色只差 2.6:1，深色下几乎看不出是开还是关。
+   留 0.55 保「不可用」的观感，同时让开/关两种轨道仍能分辨 */
+.switch:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.switch:disabled::after {
+  box-shadow: none;
+}
+
+.segmented {
+  display: inline-flex;
+  /* 装不下时整颗换行，而不是把「1 小时」拆成「1 小 / 时」 */
+  flex-wrap: wrap;
+  max-width: 100%;
+  padding: 3px;
+  gap: 2px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
+  align-self: flex-start;
+}
+
+.segmented button {
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 550;
+  /* 选项文案一律不折行：按钮再窄也只是整体换行，词不会被劈开 */
+  white-space: nowrap;
+  padding: 5px 15px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition:
+    color var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease);
+}
+
+.segmented button:hover {
+  color: var(--ink);
+}
+
+.segmented button.on {
+  background: var(--panel-solid);
+  color: var(--accent);
+  box-shadow: var(--shadow-1);
+}
+
+/* -------------------------------------------------------------- 卡片 */
+
+.card {
+  position: relative;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line);
+  background: var(--panel);
+  backdrop-filter: blur(10px) saturate(1.25);
+  -webkit-backdrop-filter: blur(10px) saturate(1.25);
+  box-shadow: var(--shadow-2);
+  transition:
+    border-color var(--t-base) var(--ease),
+    box-shadow var(--t-base) var(--ease),
+    transform var(--t-base) var(--ease);
+}
+
+.card-pad {
+  padding: 18px;
+}
+
+/* -------------------------------------------------------------- 指标区 */
+
+.stat-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
+}
+
+.stat {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 18px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line);
+  background: var(--panel);
+  backdrop-filter: blur(10px) saturate(1.25);
+  -webkit-backdrop-filter: blur(10px) saturate(1.25);
+  box-shadow: var(--shadow-2);
+  transition:
+    transform var(--t-base) var(--ease),
+    box-shadow var(--t-base) var(--ease),
+    border-color var(--t-base) var(--ease);
+}
+
+.stat:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    var(--shadow-3),
+    0 -10px 28px -14px color-mix(in srgb, var(--ink) 10%, transparent);
+  border-color: var(--line-strong);
+}
+
+/* 可跳转的指标卡：按钮要抹掉原生外观，但保留 .stat 的整套视觉 */
+.stat-link {
+  appearance: none;
+  -webkit-appearance: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  position: relative;
+}
+
+.stat-link:focus-visible {
+  outline: 2px solid var(--line-strong);
+  outline-offset: 2px;
+}
+
+/* 右上角一个很轻的箭头，暗示「点得进去」，不抢数字的注意力 */
+.stat-link::after {
+  content: '›';
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--muted-soft);
+  opacity: 0;
+  transform: translateX(-3px);
+  transition:
+    opacity var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease);
+}
+
+.stat-link:hover::after {
+  opacity: 0.85;
+  transform: translateX(0);
+}
+
+.stat-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.stat .label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+/* 指标卡标签里的小图标跟着文字走深墨色；均衡仍是蓝色，换班绿、保活紫按归属色走 */
+.stat .label svg {
+  color: var(--ink-soft);
+}
+
+/* 但归属模块那两张（单机保活 / 流量均衡）用各自的归属色，
+   和实例管理顶上的筛选胶囊、侧栏的归属提示保持同一套语义 */
+.stat .label.violet svg {
+  color: var(--violet);
+}
+
+/* 图标是要"看得见"的描边色（深色背景上 --blue 那套深字色会隐没） */
+.stat .label.blue svg {
+  color: var(--blue-line);
+}
+
+.stat .label.green svg {
+  color: var(--green);
+}
+
+.stat .value {
+  font-size: 24px;
+  font-weight: 660;
+  line-height: 1.15;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.stat .value em {
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 550;
+  color: var(--muted);
+  margin-left: 3px;
+  letter-spacing: 0;
+}
+
+.stat .sub {
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+/* -------------------------------------------------------------- 服务器卡片 */
+
+.server-grid {
+  display: grid;
+  gap: 13px;
+  grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+  /* 同一行卡片等高：内容少的卡也被拉到行高，底部操作区靠
+     .card-foot 的 margin-top:auto 沉底，整排看起来齐平 */
+  grid-auto-rows: 1fr;
+}
+
+.server-card {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.server-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-3);
+  border-color: var(--line-strong);
+}
+
+.server-card .head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.server-card .head strong {
+  font-size: 14px;
+  font-weight: 620;
+  letter-spacing: -0.012em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.server-card .head .actions {
+  margin-left: auto;
+  display: flex;
+  gap: 2px;
+}
+
+.meta-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  color: var(--muted);
+  min-width: 0;
+}
+
+/* 域名胶囊行：一行放不下就换行，别把域名压成几个字母 */
+.meta-line.dns-line {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+.meta-line.dns-line .dns-chip {
+  flex: none;
+  max-width: 100%;
+}
+
+.meta-line code {
+  font-size: 12px;
+  padding: 1.5px 6px;
+  border-radius: 6px;
+  background: var(--panel-inset);
+  border: 1px solid var(--line);
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meta-line .grow {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 地域给中文名 + 定位图标 */
+.card-region {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-region svg {
+  flex: none;
+  opacity: 0.75;
+}
+
+/* 身份行里靠右的那一项（地域 / 站点类型） */
+.meta-right {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+}
+
+/* 地域跟 ID 同行靠右时，仍要能在窄卡里收缩出省略号 */
+.card-region.meta-right {
+  flex: 0 1 auto;
+}
+
+/* 卡片上的域名 / IP 小标签：域名带图标，IP 用同一套框 */
+.dns-chip,
+.addr-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel-inset);
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dns-chip svg {
+  flex: none;
+  opacity: 0.7;
+}
+
+/* 换班组头部的「DDNS + 域名胶囊」 */
+.ddns-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* 域名 / IP 太长时省略号要落在文字上（flex 容器直接写 text-overflow 不生效） */
+.dns-chip-text,
+.addr-chip-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------- 卡片底部：托管 / 手动 */
+
+/* 域名单独占一行（倒数第二行）。和归属胶囊挤在同一行时，绑了域名的卡片会多折
+   一行，同一排卡片的归属就高低不齐；拆出来以后归属永远贴着底边对齐。 */
+.card-dns-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.card-foot {
+  margin-top: auto;
+  padding-top: 11px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* -------------------------------------------------------------- 费用行 */
+
+.cost-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  row-gap: 4px;
+  flex-wrap: wrap;
+  /* 四边对称：原来是 10/8，右侧比左侧少 2px，居中之后这点偏差会被放大成「有点歪」 */
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--panel-inset);
+  border: 1px solid var(--line);
+}
+
+/* 卡片里的费用条：三段式 —— 本月贴左、余额落在正中间、尾部（告警 + 刷新）贴右。
+   上一版是「整组内容居中」，量出来左右空白确实相等（1440 档 47.1 / 47.1，
+   390 档 45.7 / 45.7），但看着并不协调：左端是文字、右端是个 27px 的按钮，
+   按钮内部还有 8px padding，SVG 离边缘比文字离边缘远一大截；再加上两端各空
+   47px，三个数字像飘在条子中间，读起来没有起点也没有落点。
+   改成 1fr auto 1fr 网格：两侧 1fr 等宽 → 中间列天然落在几何中心（余额严格居中），
+   首尾各自贴边 → 左中右三个锚点，扫一眼就知道从哪读起。
+   列表视图那个 compact 变体不套这条——它是表格里的一列，要按列左对齐。 */
+.cost-row:not(.compact) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  column-gap: 12px;
+  justify-content: initial;
+}
+
+.cost-row:not(.compact) > .cost-item:first-child {
+  justify-self: start;
+}
+
+.cost-row:not(.compact) > .cost-item:nth-child(2) {
+  justify-self: center;
+}
+
+.cost-row:not(.compact) > .cost-tail {
+  justify-self: end;
+}
+
+/* 尾部这一格：告警图标和刷新按钮并排贴右侧 */
+.cost-tail {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* 320 / 老小屏：条子只有 258px，内宽 238 拿去三分之后本月那格只剩 64px，
+   而「本月 ¥27.44」要 71px —— 三段式在这里必然溢出。退回「整组居中 + 允许换行」，
+   宁可临时丢掉严格居中，也不能把金额切掉。360 及以上宽度够（每侧 84px），
+   走上面的三段式。 */
+@media (max-width: 340px) {
+  .cost-row:not(.compact) {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+}
+
+.cost-item {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+}
+
+.cost-key {
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--muted-soft);
+  flex-shrink: 0;
+}
+
+.cost-item b {
+  font-size: 13px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+/* 没查到数字时压暗，和「真的是 0 元」区分开 */
+.cost-item b.dim {
+  color: var(--muted-soft);
+  font-weight: 500;
+}
+
+.cost-stale {
+  font-style: normal;
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: var(--line);
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+/* 刷新按钮跟着内容居中（不再 margin-left:auto 顶到右边缘）。
+   表格里那支由 .server-table-cost .cost-refresh 改成绝对定位贴右边，另有规则。 */
+.cost-refresh {
+  flex-shrink: 0;
+}
+
+.owner-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 560;
+  line-height: 1;
+  letter-spacing: 0.008em;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel-inset);
+  color: var(--muted);
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.owner-tag svg {
+  flex: none;
+  opacity: 0.85;
+}
+
+/* 归属胶囊按**类型**上色，不再按「托管中 / 已暂停」：
+   换班组绿、均衡组蓝、单机保活紫，闲散手动不上色。
+   以前四种状态只有三种颜色，换班组和均衡组都是蓝，扫一眼分不出是哪套逻辑。
+
+   闲散手动刻意不上色：颜色只用来标「这台被哪个自动化流程接管」，
+   没人管的机器用中性色反而最清楚 —— 一排卡片里没颜色的那几台就是可以随便动的。
+   但底色不能留空：透明底在深色卡片上只剩一圈极淡的描边，看着像一块被抠掉的黑洞，
+   和旁边带 soft 底的绿 / 蓝 / 紫胶囊完全不在一个层级。用「中性灰块」这套
+   （和禁用按钮同一配方：--fill-subtle 底 + --line-strong 边 + --muted 字），
+   有底色、有边界，仍然不带任何色彩倾向。 */
+.owner-tag.free {
+  color: var(--muted);
+  border-color: var(--line-strong);
+  background: color-mix(in srgb, var(--fill-subtle) 56%, transparent);
+}
+
+/* 闲散那颗手掌图标不压透明度：托管那三种有底色衬托，压到 85% 还看得见；
+   中性灰本来就和文字同色，再压一档会比字还淡，像没加载出来 */
+.owner-tag.free svg {
+  opacity: 1;
+}
+
+.owner-tag.kind-shift {
+  color: var(--green);
+  border-color: color-mix(in srgb, var(--run-2) 34%, transparent);
+  background: var(--green-soft);
+}
+
+.owner-tag.kind-balance {
+  color: var(--blue-line);
+  border-color: color-mix(in srgb, var(--blue-line) 24%, transparent);
+  background: color-mix(in srgb, var(--blue-line) 10%, transparent);
+}
+
+.owner-tag.kind-keepalive {
+  color: var(--violet);
+  border-color: color-mix(in srgb, var(--violet) 26%, transparent);
+  background: var(--violet-soft);
+}
+
+/* 换班组 / 均衡组的非当班成员：整枚胶囊退回中性灰，和「中国站 / 国际站」
+   的 .site-tag 同一套变量。组色只留给当班那台，扫一眼就知道谁在服务。
+   图标要一起退回：.owner-icon-shift/-balance 有自己的组色，单改胶囊壳会
+   留下绿 / 蓝图标浮在灰底上。 */
+.owner-tag.as-site {
+  color: var(--site-ink);
+  border-color: var(--site-line);
+  background: var(--site-fill);
+}
+
+.owner-tag.as-site .owner-icon {
+  color: var(--site-ink);
+}
+
+/* 当班 / 非当班：胶囊里独立成段，不参与收缩 —— 组名太长时只截组名，
+   这半句必须留着（它才是按钮锁没锁的原因）。margin-left 把它推回组名边上，
+   靠文本里的空格分隔，和均衡组原来的写法一致。只管排版，不改任何颜色。 */
+.owner-duty {
+  flex: none;
+  margin-left: -4px;
+}
+
+/* 暂停中的自动化流程：颜色还是这套流程的，只加虚线边 —— 一眼看出「还挂着但没在管」 */
+.owner-tag.paused {
+  border-style: dashed;
+  opacity: 0.86;
+}
+
+/* ------------------------------------------------ 实例管理的归属筛选 */
+
+/* 机器一多，卡片墙就看不出「那台保活的」在第几行。
+   顶部按归属分档，点一下只剩这一档；颜色沿用 .owner-tag 那套映射
+   （换班绿 / 均衡蓝 / 保活紫 / 闲散中性），筛选结果和卡片上的归属是同一个说法。 */
+.owner-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: -4px 0 16px;
+}
+
+.owner-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-inset);
+  color: var(--ink-soft);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 550;
+  line-height: 1.35;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+
+.owner-chip svg {
+  flex: none;
+  opacity: 0.72;
+}
+
+.owner-chip:hover {
+  border-color: var(--line-strong);
+  color: var(--ink);
+}
+
+.owner-chip:hover svg {
+  opacity: 1;
+}
+
+/* 未选中时图标就先带上归属色：不用点开也知道哪颗是换班、哪颗是均衡 */
+.owner-chip.tone-shift svg {
+  color: var(--green);
+  opacity: 0.9;
+}
+
+.owner-chip.tone-balance svg {
+  color: var(--blue-line);
+  opacity: 0.9;
+}
+
+.owner-chip.tone-keepalive svg {
+  color: var(--violet);
+  opacity: 0.9;
+}
+
+.owner-chip-count {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 选中基础态：「全部」这一档没有 tone 类，走这里。
+   和卡片里「运行中」胶囊完全同款：浅天蓝底 + 深蓝字 + 蓝描边，
+   下面各归属 .tone-*.on 会各自覆盖成自己的颜色。 */
+.owner-chip.on {
+  background: var(--status-fill);
+  border-color: var(--status-border);
+  color: var(--status-ink);
+  font-weight: 600;
+}
+
+.owner-chip.on .owner-chip-count {
+  background: color-mix(in srgb, currentColor 16%, transparent);
+  color: inherit;
+}
+
+/* 闲散手动选中态：比「全部」再淡一档，避免白底过实抢视觉 */
+.owner-chip.tone-free.on {
+  background: color-mix(in srgb, var(--panel-solid) 56%, transparent);
+  border-color: var(--line-strong);
+  color: var(--ink);
+}
+
+.owner-chip.tone-shift.on {
+  background: var(--green-soft);
+  border-color: color-mix(in srgb, var(--run-2) 38%, transparent);
+  color: var(--green);
+}
+
+.owner-chip.tone-balance.on {
+  background: color-mix(in srgb, var(--blue-line) 10%, transparent);
+  border-color: color-mix(in srgb, var(--blue-line) 26%, transparent);
+  color: var(--blue-line);
+}
+
+.owner-chip.tone-keepalive.on {
+  background: var(--violet-soft);
+  border-color: color-mix(in srgb, var(--violet) 28%, transparent);
+  color: var(--violet);
+}
+
+.foot-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.foot-actions .btn.sm {
+  padding: 5px 10px;
+  font-size: 13px;
+}
+
+/* 卡片底部的开关机按钮沿用全局禁用态（--muted on --fill-subtle）；图标只退后
+   一点，别像以前那样连字一起虚掉 —— 那正是「开机按钮看不清」的来源 */
+.card-foot .btn:disabled svg,
+.foot-actions .btn:disabled svg {
+  opacity: 0.75;
+}
+
+/* -------------------------------------------------------------- 服务器视图切换 / 拖拽 / 表格 */
+
+.view-toggle {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--panel-inset);
+}
+
+.view-toggle .btn {
+  border-radius: var(--radius-xs);
+}
+
+/* 拖拽排序：卡片可拖动，拖动中与悬停目标给出视觉反馈 */
+.server-card {
+  cursor: grab;
+}
+
+.server-card.dragging {
+  opacity: 0.45;
+  cursor: grabbing;
+}
+
+.server-card.drag-over {
+  border-color: var(--line-strong);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ink) 10%, transparent);
+}
+
+.drag-handle {
+  color: var(--muted-soft);
+  flex: none;
+}
+
+/* 列表视图：紧凑表格，一屏看全 */
+.server-table-card {
+  padding: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.server-table {
+  width: 100%;
+  /* 按内容自然分配列宽：定宽布局（table-layout: fixed）配合百分比时，
+     只要容器比内容窄一点，每列都会被削一刀 —— 实例名、实例 ID 首当其冲。
+     自动布局下 nowrap 的单元格最小宽度就是它自己的宽度，
+     容器装不下时整表在卡片里横向滚动，而不是把某一列切成省略号 */
+  table-layout: auto;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.server-table th {
+  text-align: left;
+  padding: 10px;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-inset);
+  white-space: nowrap;
+}
+
+.server-table td {
+  /* 8 列挤在一行，横向内边距从 12 收到 10：8 列共省 32px，
+     正好够 1366 这类常见笔记本宽度不用横向滚动 */
+  padding: 10px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+
+.server-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.server-table tbody tr:hover {
+  background: var(--panel-inset);
+}
+
+/* 名字与实例 ID 上下两行：ID 单独占一列太费宽度，塞进名字下面一屏能少拉一格 */
+.server-table-title {
+  font-size: 13px;
+  font-weight: 620;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.server-table-sub {
+  display: block;
+  margin-top: 2px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+  color: var(--muted-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.server-table-region {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  /* 站点在上、地域在下后整体右移一点点，别与左列/表头贴边看着像重叠 */
+  padding-left: 6px;
+}
+
+/* 状态两行：徽章（运行中/已停机）+ 停机模式小字。
+   并排写成「已停机 · 节省停机」时宽度比整列还大，会压到右边的站点/地域列 */
+.server-table-status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  min-width: 0;
+}
+
+.server-table-status-sub {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted-soft);
+  white-space: nowrap;
+}
+
+.server-table-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.server-table-cell svg {
+  flex: none;
+}
+
+/* 地域名比列宽时收成省略号，绝不压到下一列（padding-left 已经把内容推开一点） */
+.server-table-cell-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.server-table-mono {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 13px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.server-table-muted {
+  color: var(--muted-soft);
+  white-space: nowrap;
+}
+
+.server-table-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+/* 费用两行（本月 / 余额），刷新按钮浮在右侧，别占掉一整行宽度 */
+.server-table td.server-table-cost {
+  position: relative;
+  padding-right: 30px;
+}
+
+.server-table-cost .cost-row.compact {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  background: none;
+  border: none;
+  padding: 0;
+  /* 自动布局给这一列算宽度时，如果让 flex 容器自己算收缩宽度，会漏掉 item 之间的 gap
+     （「本月」+「¥1.42」中间那 5px），表头列宽就永远差一点点，金额末尾被吃掉。
+     显式声明 max-content，列宽按真实内容算，一分不差 */
+  width: max-content;
+}
+
+.server-table-cost .cost-refresh {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  margin-left: 0;
+}
+
+/* 公网 IP / 域名合成一列：上行 IP（重点），下行域名（没绑显示「—」）。
+   竖向堆叠的宽度只取两行里较宽的那一个，并排则要两段相加 */
+.server-table-net {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* 域名框：一行放得下就并排，放不下换行，绝不撑宽表格 */
+.server-table-dns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* 表格里省一点内边距，20 字符的域名才装得进这一列 */
+.server-table-dns .dns-chip {
+  gap: 3px;
+  padding: 1px 5px;
+  font-size: 11px;
+  /* 自动布局下列宽跟着内容走：一个超长域名（CDN 那种三四十个字符）会把整张表顶宽，
+     逼得旁边所有列让位。这里封顶 168px（约 26 个字符），再长收成省略号、
+     完整值在 title 里，列宽就不会被单个域名绑架 */
+  max-width: 168px;
+}
+
+/* 公网 IP 列更窄，胶囊再收一号，完整 IP 才放得下 */
+.server-table .addr-chip {
+  padding: 0 6px;
+  font-size: 11px;
+}
+
+.server-table-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+  gap: 3px;
+}
+
+/* 表格里的按钮压到 22px 上下，5 个图标才排得进一行 */
+.server-table-actions .btn {
+  padding: 3px 4px;
+}
+
+.server-table-actions .btn svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* 换班组名字长的别把单元格顶开，超了直接省略 */
+.server-table .owner-tag {
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.owner-tag-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cost-row.compact {
+  flex-wrap: nowrap;
+  gap: 8px;
+}
+
+/* 半屏 / 平板：列宽交给内容自己算，装不下就在卡片里横滑，绝不切文本。
+   （这段以前是「1100 以下退回 auto」，现在全宽度都是 auto，只剩费用格需要保持两行） */
+
+/* 手机：表格整体改成「一行一张卡」，每格前面带字段名，彻底不用左右拖 */
+@media (max-width: 700px) {
+  .server-table-card {
+    padding: 0;
+    overflow: visible;
+    background: none;
+    border: 0;
+    box-shadow: none;
+    backdrop-filter: none;
+  }
+
+  .server-table,
+  .server-table tbody,
+  .server-table tr,
+  .server-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .server-table colgroup,
+  .server-table thead {
+    display: none;
+  }
+
+  .server-table {
+    min-width: 0;
+    font-size: 13px;
+  }
+
+  .server-table tbody tr {
+    /* 手机卡片按 flex 竖排：DOM 里状态在实例前面（桌面要这个顺序），
+       手机靠 order 把「实例」提回第一行当标题 */
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 10px;
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+    background: var(--panel-solid);
+  }
+
+  .server-table tbody tr:last-child {
+    margin-bottom: 0;
+  }
+
+  .server-table tbody tr:hover {
+    background: var(--panel-solid);
+  }
+
+  .server-table td {
+    display: grid;
+    grid-template-columns: 68px minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+    padding: 4px 0;
+    border: 0;
+  }
+
+  .server-table td::before {
+    content: attr(data-label);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  /* grid 子项默认 stretch，徽标/标签会被拉成整行，这里让它们保持自身宽度 */
+  .server-table td > .badge,
+  .server-table td > .owner-tag {
+    justify-self: start;
+  }
+
+  /* 地域原本竖排（地域在上、站点标签在下），手机上横排更省一行高度 */
+  .server-table td > .server-table-region {
+    justify-self: start;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+
+  /* 第一格是标题，压满整行、下面一条虚线分隔。
+     按 data-label 认「实例」而不是 :first-child —— 桌面把状态挪到最前面之后，
+     :first-child 会变成那枚状态徽章，手机上就没有标题行了 */
+  .server-table td[data-label='实例'] {
+    order: -1;
+    grid-template-columns: minmax(0, 1fr);
+    padding: 0 0 8px;
+    margin-bottom: 6px;
+    border-bottom: 1px dashed var(--line);
+  }
+
+  .server-table td[data-label='实例']::before {
+    display: none;
+  }
+
+  /* 操作按钮不需要字段名，横排贴在卡片底部 */
+  .server-table td[data-label='操作'] {
+    grid-template-columns: minmax(0, 1fr);
+    padding-top: 8px;
+    margin-top: 6px;
+    border-top: 1px dashed var(--line);
+  }
+
+  .server-table td[data-label='操作']::before {
+    display: none;
+  }
+
+  .server-table-actions {
+    justify-content: flex-start;
+    gap: 6px;
+  }
+
+  .server-table-actions .btn {
+    padding: 5px 7px;
+  }
+
+  /* 费用那格原来是「绝对定位刷新按钮 + 右内边距」，堆叠后恢复普通流 */
+  .server-table td.server-table-cost {
+    padding-right: 0;
+  }
+
+  .server-table-cost .cost-row.compact {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .server-table-cost .cost-refresh {
+    position: static;
+    transform: none;
+    margin-left: auto;
+  }
+
+  .server-table-title {
+    font-size: 13px;
+    max-width: 100%;
+  }
+
+  .server-table-sub {
+    max-width: 100%;
+  }
+}
+
+
+/* -------------------------------------------------------------- 运行中卡片 */
+
+/* 运行中的卡片不再加任何额外底色 / 描边（之前铺渐变会被说「丑死了」）：
+   卡片本身和普通卡一致，「在跑」只由卡片里那颗实心绿胶囊表达。 */
+
+/* -------------------------------------------------------------- 当班槽位 */
+
+.slot {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 13px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  background: var(--panel-inset);
+  min-width: 0;
+  transition:
+    border-color var(--t-base) var(--ease),
+    background var(--t-base) var(--ease);
+}
+
+.slot.is-duty {
+  /* 默认（流量均衡）用归属色主题蓝；换班页的槽位多带一个 .is-shift，走流量条那个绿 */
+  --duty: var(--blue-line);
+  border-color: color-mix(in srgb, var(--duty) 34%, var(--line));
+  box-shadow: 0 10px 24px -18px color-mix(in srgb, var(--duty) 34%, transparent);
+}
+
+.slot.is-duty.is-shift {
+  --duty: var(--run-2);
+}
+
+.slot-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.slot-top .duty-tag,
+.slot-side .duty-tag,
+.inst-owner-line .duty-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 999px;
+  /* 比归属正文（12px）小一号：它只是「这台此刻在当班」的注脚，
+     字号和正文齐平时，实心底会把旁边的组名压下去，整行显脏 */
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 1.5;
+  /* 浅玻璃：换班用绿、均衡用主题蓝（下面 .duty-tag-balance 覆盖），
+     不再是实心深绿块——那枚压在卡片上太厚重。
+     描边用 inset shadow 而不是 border，胶囊外框尺寸和原来保持一致。 */
+  color: var(--green);
+  background: var(--green-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--green) 22%, transparent);
+}
+
+/* 流量均衡的「当班」用归属色主题蓝：和换班那枚（深字+淡底）完全对称。
+   之前直接套 --blue-soft（运行中那枚实心浅蓝底）太浓——当班只是 11px 注脚，
+   不该和运行中胶囊同份量。这里主题蓝字 + 10% 淡蓝底，扫一眼仍是蓝色语义。 */
+.duty-tag.duty-tag-balance {
+  color: var(--blue-line);
+  background: color-mix(in srgb, var(--blue-line) 10%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue-line) 22%, transparent);
+}
+
+/* 槽位主体：左信息 / 右 IP+流量。列宽写在样式里而不是内联，
+   窄屏才能在不改 DOM 的前提下堆成一列。
+
+   右列 190px 是量出来的，不是拍脑袋：两行标签最宽的一种组合是
+   「123.45 GB」+「68.6% / 阈值 1024 GB」，11px 等宽数字下要吃掉 162px，
+   再加上中间 8px 间距，150px 那一档必然把「GB」挤到第二行（12.06 GB 那种
+   7 位数字就会触发，只剩 6px 余量）。190px 留 28px 余量，顺带把流量条拉长
+   27%，右侧的 IP / 用量 / 阈值不用再挤在一起 */
+.slot-body {
+  /* 右列宽度与列间距抽成变量：下面的「当班」胶囊要靠它们把自己的右端
+     顶到卡片内容区右边缘，硬写字面量改一处就会失效 */
+  --side-col: 190px;
+  --side-gap: 14px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--side-col);
+  gap: var(--side-gap);
+}
+
+/* 「当班」胶囊跟 IP、流量条、阈值数字一起排在右列，右端统一贴齐卡片内容区边缘。
+   以前它长在左列的标题行上，靠负边距往右顶，最后停在流量条起点附近、还比流量条
+   高一行，两个方向都没对齐，看着像悬在卡片中间。 */
+.slot-side .duty-tag {
+  align-self: flex-end;
+}
+
+.slot-main {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.slot-side {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  justify-content: center;
+  min-width: 0;
+}
+
+.slot-ip {
+  font-size: 12px;
+  color: var(--muted);
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slot-name {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.012em;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slot-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+  min-width: 0;
+}
+
+.slot-line code {
+  font-size: 12px;
+  padding: 1.5px 6px;
+  border-radius: 6px;
+  background: var(--panel-inset);
+  border: 1px solid var(--line);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.group-head h3 {
+  font-size: 14px;
+  font-weight: 620;
+  letter-spacing: -0.012em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* 头部多了「立即换班」按钮后，窄屏要靠它把组名压成省略号，别把操作区挤出去 */
+  min-width: 0;
+}
+
+.group-head .group-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+/* 「立即换班」/「立即均衡」是带文字的主操作，和概览页「立即同步」等主按钮
+   同一套 .btn.primary：浅天蓝实心底 + 深墨蓝字。这里只补一个右边距把它和
+   旁边的编辑/删除图标隔开，颜色/描边/扫光全交给 .btn.primary，不再单独覆盖。 */
+.group-head .switch-btn {
+  margin-right: 5px;
+}
+
+/* 距下次切换：挂在状态胶囊后面。秒数每秒跳一次，用 tabular-nums 固定数字宽度，
+   否则整行会跟着字宽来回抖。
+
+   数字跟正文用同一套系统字体（不再用硬朗的等宽字体），字重 550：比标签重一档就够跳，
+   700 那档压在玻璃卡片上太粗太抢。标签仍留 --muted，靠「灰标签 + 深数字」的
+   明暗差把数字顶出来，两截一起加粗反而没有层次。
+   字号 15px、与卡片标题（14px）同级偏上一档：手机端这枚倒计时落在元信息行（周围全是
+   12px 灰字），13px 在窄屏被上下文压得看不出来；电脑端也跟着统一到 15px，两端观感一致。 */
+.group-countdown {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.group-countdown b {
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 550;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+/* 桌面只看标题行那份，元信息行那份是给手机准备的（≤700 反过来） */
+.group-countdown.in-meta {
+  display: none;
+}
+
+/* ------------------------------------------- 概览：实例状态（替换原换班卡片） */
+
+/* 列表形态：一台实例一行。整张卡片仍是概览的圆角玻璃面板，
+   表格只借用「列对齐」这件事——去掉表头底色和粗边框，只留细线和行悬停，
+   免得在概览里突然出现一块「后台表格」的硬边 */
+.inst-list {
+  /* 左右不缩进，表格满幅到卡片边框；底部也不留空 —— 最后一行直接贴到
+     卡片的圆角弧边上，弧线由卡片自己裁出来。留 16px 反倒会让末行底下
+     多出一条灰带，看着像被切了一刀 */
+  padding: 0;
+  /* 用 clip 而不是 hidden 裁圆角：hidden 会把这行表格（border-collapse）
+     的末行边框多算 15px 进卡片高度，末行底下就凭空多一条灰带 */
+  overflow: clip;
+}
+
+/* 窄屏（≤1100）列宽装不下时让表格在卡片内横滑，不把整页撑宽。
+   纵向仍用 clip：跟着 hidden 会再把那 15px 末行留白带回来 */
+@media (max-width: 1100px) {
+  .inst-list {
+    overflow-x: auto;
+    overflow-y: clip;
+  }
+}
+
+.inst-table {
+  width: 100%;
+  /* 定宽：列宽由 colgroup 定，长实例名只会省略，不会把别的列挤歪 */
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.inst-table th {
+  padding: 9px 12px;
+  text-align: left;
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  white-space: nowrap;
+  border-bottom: 1px solid var(--line);
+}
+
+.inst-table td {
+  padding: 9px 12px;
+  vertical-align: middle;
+  border-top: 1px solid var(--line);
+}
+
+/* 首尾列多留 4px，和卡片的内边距对齐，别让徽章/流量条贴着圆角 */
+.inst-table th:first-child,
+.inst-table td:first-child {
+  padding-left: 16px;
+}
+
+.inst-table th:last-child,
+.inst-table td:last-child {
+  padding-right: 16px;
+}
+
+/* 第一行紧贴表头，不再重复一条线 */
+.inst-table tbody tr:first-child td {
+  border-top: 0;
+}
+
+/* 行悬停：和左侧菜单「鼠标放上去」完全同一套 —— 只铺一层极淡的 --panel-inset，
+   130ms 淡入；不加竖条（那是菜单「当前页」才有的），也不改文字颜色，
+   行本身不是可点条目。包在 hover:hover 里：手机、平板手指划过去不留残影。 */
+@media (hover: hover) and (pointer: fine) {
+  .inst-table tbody tr {
+    transition: background var(--t-fast) var(--ease);
+  }
+
+  .inst-table tbody tr:hover {
+    background: var(--panel-inset);
+  }
+}
+
+/* 概览：运行中的行不再上渐变，整块表格保持同一张卡片的底色，
+   运行中与否交给「状态」那一列的徽标去说明，行本身不再发亮。
+   原来那条 180deg 的 accent 渐变换行时会把相邻行染出深浅差，表格看着发花。 */
+
+/* 实例格两行：第一行别名 +「当班」，第二行实例 ID 胶囊 */
+.inst-main {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  min-width: 0;
+}
+
+.inst-name-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.inst-name {
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 620;
+  letter-spacing: -0.012em;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 实例 ID：等宽、灰色胶囊。ID 很长（i-j6c… / 23 位），窄列交给省略号，完整值在 title */
+.inst-id {
+  max-width: 100%;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel-inset);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.7;
+  letter-spacing: -0.01em;
+  /* 用 --muted 而不是 --muted-soft：11px 小字落在运行中行的浅绿渐层上，
+     muted-soft 只有 4.42，刚好差一点点过不了 4.5 */
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 表格里的 IP 胶囊收一档：15% 列宽在 1200 档只剩 104px 内容宽度，
+   标准胶囊（12px 字号 + 14px 内边距）量出来要 110px，差这一点就切掉尾号 */
+.inst-table .addr-chip {
+  padding: 1px 6px;
+  font-size: 11.5px;
+}
+
+.inst-region {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.inst-region svg {
+  flex: none;
+}
+
+.inst-region-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 归属 + 「当班」排一行：文字过长只省略文字，胶囊永远完整 */
+.inst-owner-line {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.inst-owner-line .duty-tag {
+  flex: none;
+  padding: 1px 6px;
+}
+
+.inst-owner {
+  /* 图标 + 文字同一行；省略号交给内层 .inst-owner-text —— 容器是 flex，
+     直接在这里写 text-overflow 截不到文字节点 */
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.inst-owner svg {
+  flex: none;
+}
+
+.inst-owner-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inst-owner.is-idle {
+  color: var(--muted);
+}
+
+/* 「· 已暂停」：托管暂停是异常状态，别和正常归属混成一个颜色 */
+.inst-owner i {
+  font-style: normal;
+  color: var(--amber);
+}
+
+/* 费用拆成上下两行（本月 / 余额）：并排写成一句时最窄要 128px，
+   1200 上下那一档的列宽根本给不起，拆开后每行只要 75px，
+   顺便自带字段名，手机上不用靠表头也能读懂 */
+.inst-cost {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.inst-cost em {
+  margin-right: 4px;
+  font-style: normal;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+/* 平板（≤1199）：定宽百分比在这段会把「归属」和「地域」压成省略号
+   （16% 的归属列要 118px 内容，1200 以下给不到），
+   退回自动列宽 + 卡片内横滑，和「实例管理 · 列表模式」同一套行为。
+   1200 是实测出来的：再窄 20px 就开始截「换班组「HK」」。 */
+@media (max-width: 1199px) {
+  .inst-table {
+    table-layout: auto;
+    min-width: 780px;
+  }
+
+  /* 自动列宽会把归属格压到 63px 把「换班组「HK」」截成省略号（flex 默认 min-width:0），
+     这里让它的最小宽度等于内容宽度，宁可多滚一点也别截字 */
+  .inst-table .inst-owner-line {
+    min-width: max-content;
+  }
+}
+
+/* 手机 / 竖屏平板（≤820）：表格拆成「一台实例一张小卡」。
+   820 这条线是量出来的：7 列内容在 auto 布局下最小要 858px，
+   iPad 竖屏 768 也放不下（卡片内横滑 135px），干脆一起走小卡。
+
+   卡里是两列网格，左列贴左、右列贴右，固定五行：
+     状态徽章 ⋯⋯⋯⋯⋯⋯ 地域
+     实例名（太长就省略）
+     实例 ID ⋯⋯⋯⋯⋯ IP
+     归属 ⋯⋯⋯⋯⋯⋯⋯ 费用
+     流量条（整行）
+   每一行左右两端都咬住同一条边界，8 张卡叠起来是齐的；
+   多占一点高度没关系，整齐比省地方重要。 */
+@media (max-width: 820px) {
+  /* 关掉全局颗粒层。它是一张 120×120 的 feTurbulence 噪点图平铺全屏，
+     DPR 2/3 的手机上这张图会被放大成 2×2 / 3×3 的色块——浅灰胶囊、输入框这种
+     低对比度区域一垫底，肉眼看就是一层方格噪点；而且 feTurbulence 每帧重算，
+     是低端安卓滚动和点击掉帧的大头。手机上本来也不需要它防色带（卡片已是实色）。 */
+  body::after {
+    display: none;
+  }
+
+  /* 手机滑动时地址栏收放会改布局视口高度。背景层用 inset:0 会跟着重算
+     background-size:cover，照片突然缩放/位移，看起来就是「跳动」。
+     锁定为 top+100vh（手机上的稳定大视口高度），不让 bottom 参与计算，
+     照片尺寸就不再随地址栏变化；桌面仍用 inset:0 保持整屏铺满。 */
+  body::before {
+    inset: auto;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    transform: translateZ(0);
+  }
+
+  /* iOS Safari 对字号 <16px 的输入框，聚焦时会强制把整页放大一档，
+     放大后 13px 等宽字形重排、发虚，退出聚焦还留着轻微缩放。
+     16px 是 safari 不触发缩放的下限，只在手机上提，桌面仍按 13px 排版 */
+  .input,
+  .input.mono,
+  .select,
+  .textarea {
+    font-size: 16px;
+  }
+
+  /* 手机端玻璃和桌面统一：卡片 / 统计格不再改实色，直接走 .card / .stat
+     自己的 var(--panel) + blur(10px) saturate(1.25)，和顶栏、桌面同一档。
+     以前这里改实色是因为实例小卡当时是 #fff 实色，怕玻璃卡和实色卡白度不搭；
+     现在全站统一 --panel，那个前提不存在了，手机不该反而丢掉玻璃质感。
+     .is-live 自己带淡绿渐变，桌面/手机都保留它那条例外。 */
+
+  /* 手机上不再套一层大卡片：外框彻底透明化，每台实例的小卡直接落在页面上。
+     否则就是「卡片里再放三张卡」，白的套白的，两层边框加一圈内边距全是浪费 */
+  .inst-list {
+    overflow: visible;
+    padding: 0;
+    border: 0;
+    background: none;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  /* .card 顶部那道高光条是给大面板用的，外框没了它就成了悬空的细线 */
+  .inst-list::before {
+    display: none;
+  }
+
+  /* ≤1199 那条 min-width:780px 是给横滑用的，手机上必须清掉，
+     否则整张「卡」会被撑到 780 宽、字段全部挤在一行 */
+  .inst-table,
+  .inst-table tbody {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .inst-table colgroup,
+  .inst-table thead {
+    display: none;
+  }
+
+  .inst-table tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'status region'
+      'name   name'
+      'ident  ip'
+      'owner  cost'
+      'meter  meter';
+    align-items: center;
+    column-gap: 12px;
+    row-gap: 6px;
+    /* 拆掉外框后卡与卡之间直接面对页面背景，间距比原来（挤在大卡里）放松一点 */
+    margin-bottom: 10px;
+    padding: 11px 12px;
+    border: 1px solid var(--line);
+    /* 和其他子界面的卡片（.card / .stat）用同一个圆角：拆掉外层大卡之后，
+       小卡就是页面上唯一的卡片，弧边跟别处不一致会显得是另一套组件 */
+    border-radius: var(--radius-lg);
+    /* 和 .card / .stat 同一档玻璃：外框透明化后这些行卡就是页面上唯一的卡，
+       实色白会不透背景、和概览其他卡片不是一套质感 */
+    background: var(--panel);
+    backdrop-filter: blur(10px) saturate(1.25);
+    -webkit-backdrop-filter: blur(10px) saturate(1.25);
+    /* 阴影也跟 .card / .stat 用同一档：没有这层，同屏卡片一个浮一个平 */
+    box-shadow: var(--shadow-2);
+  }
+
+  .inst-table tbody tr:last-child {
+    margin-bottom: 0;
+  }
+
+  /* 拆掉单元格盒子：里面的元素直接落进上面那五个格位。
+     表格在手机上已经是列表，td 的 padding / 分隔线在这里全是噪音 */
+  .inst-table td {
+    display: contents;
+  }
+
+  .inst-table td[data-label='状态'] > .badge {
+    grid-area: status;
+    justify-self: start;
+  }
+
+  .inst-table .inst-main {
+    display: contents;
+  }
+
+  .inst-table .inst-name-line {
+    grid-area: name;
+    min-width: 0;
+  }
+
+  .inst-table .inst-region {
+    grid-area: region;
+    justify-self: end;
+    min-width: 0;
+  }
+
+  .inst-table .inst-id {
+    grid-area: ident;
+    justify-self: start;
+    max-width: 100%;
+    font-size: 10.5px;
+  }
+
+  .inst-table td[data-label='IP'] .addr-chip {
+    grid-area: ip;
+    justify-self: end;
+  }
+
+  /* 手机小卡上「当班」不跟归属挤一行 —— 归属这行本来就只剩半行宽。
+     把 flex 壳拆成 contents，胶囊就成了格子里的独立项，直接落回
+     别名那行、贴着卡片右边；归属文字独占 owner 行 */
+  .inst-table .inst-owner-line {
+    display: contents;
+  }
+
+  .inst-table .inst-owner-line .inst-owner {
+    grid-area: owner;
+  }
+
+  .inst-table .inst-owner {
+    font-size: 11.5px;
+  }
+
+  /* 小卡里纵向紧张，胶囊缩一点 */
+  .inst-table .inst-owner-line .duty-tag {
+    grid-area: name;
+    align-self: center;
+    justify-self: end;
+    padding: 0 6px;
+    font-size: 10.5px;
+  }
+
+  /* 有「当班」的行才给别名右侧让位；没有的行别名照旧顶到卡片右边 */
+  .inst-table tbody tr:has(.duty-tag) .inst-name-line {
+    padding-right: 44px;
+  }
+
+  /* 「本月 ¥1.42  余额 ¥97.48」排一行，右边对齐 */
+  .inst-table .inst-cost {
+    grid-area: cost;
+    flex-direction: row;
+    gap: 10px;
+    justify-self: end;
+  }
+
+  .inst-table .inst-flow {
+    grid-area: meter;
+  }
+}
+
+/* 换班卡片内的组员块：一行两个并排；卡片太窄（≤1120px）时回落一列，
+   免得右列 190px 的 IP/流量把左边的实例名挤没 */
+.slot-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+/* 成员数是奇数（3 台、5 台）时，最后一个独占整行：
+   否则右下会空出半个格子，看着像卡片没排满。
+   ≤1120px 只有一列，这条规则不产生任何影响 */
+.slot-grid > .slot:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 1120px) {
+  .slot-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+
+
+/* 排班比列条 */
+.timeline {
+  display: flex;
+  gap: 3px;
+  height: 9px;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.timeline-seg {
+  flex: 1 1 0;
+  min-width: 2px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--ink) 10%, transparent);
+  transition: background var(--t-base) var(--ease);
+}
+
+/* 当班时段不再用归属绿，改成中性深一点的墨色：靠深浅而非颜色区分现在轮到谁 */
+.timeline-seg.duty {
+  background: color-mix(in srgb, var(--ink) 34%, transparent);
+}
+
+/* -------------------------------------------------------------- 事件流 */
+
+.events {
+  display: flex;
+  flex-direction: column;
+  /* 首尾行原本靠少给 8px 内边距来贴齐卡片，悬停底色就比中间行矮一截。
+     改成所有行内边距一致、整块用负边距收回那 8px：内容位置分毫不动，
+     每行悬停高亮都是同一个完整矩形。 */
+  margin: -8px 0;
+}
+
+/* 事件列表底部「显示更多事件」：整行宽、居中、低调，别抢事件本身的注意力。
+   关键：关掉 .btn 基础那层 backdrop-filter——按钮本身底色/边框/阴影都是透明的，
+   但 blur(8px) 会把身后的樱花背景糊成一条白杠，卡片就不沉浸了。关掉后回到
+   旧版那样直接透出卡片玻璃，只剩文字浮在上面。 */
+.events-more {
+  width: 100%;
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--muted);
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: none;
+}
+
+.events-more:hover:not(:disabled) {
+  color: var(--ink);
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.event {
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid var(--line);
+}
+
+.event:last-child {
+  border-bottom: 0;
+}
+
+.event-main {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: start;
+  gap: 11px;
+  padding: 10px 0;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  border-radius: 8px;
+  transition: background var(--t-fast) var(--ease);
+}
+
+/* 悬停和左侧菜单「鼠标放上去」一个口径：只有 --panel-inset 这一层淡底，
+   不加竖条、不改文字。只在真有指针的设备上生效，手机手指划过、点开都不留高亮。 */
+@media (hover: hover) and (pointer: fine) {
+  .event-main:hover {
+    background: var(--panel-inset);
+  }
+}
+
+.event.is-open .event-main {
+  padding-bottom: 6px;
+}
+
+.event-icon {
+  width: 27px;
+  height: 27px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  background: var(--panel-inset);
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.event-icon.error {
+  color: var(--red);
+  background: var(--red-soft);
+  border-color: color-mix(in srgb, var(--red) 24%, transparent);
+}
+
+.event-icon.warning {
+  color: var(--amber);
+  background: var(--amber-soft);
+  border-color: color-mix(in srgb, var(--amber) 24%, transparent);
+}
+
+/* 普通事件（info）前面的图标跟「完成」胶囊同一套色板：浅色 = 深墨蓝图标 +
+   浅天蓝底，深色 = 深墨图标 + 亮蓝底，随 --status-* 自动切换。旧版 v1.8.2
+   这里就是蓝色（--accent / --accent-soft），本轮玻璃改写成了中性灰，这里改回来。 */
+.event-icon.info {
+  color: var(--status-ink);
+  background: var(--status-fill);
+  border-color: var(--status-border);
+}
+
+.event-body {
+  min-width: 0;
+}
+
+.event-title-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.event-body strong {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.008em;
+  color: var(--ink);
+}
+
+.event-body p {
+  margin-top: 1px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--muted);
+  word-break: break-word;
+  /* detail 里是「摘要 + 换行 + 补充说明」（比如 DNS 绑定那两条）。
+     默认 white-space 会把换行压成空格，窄屏上就断成「绑定后立 / 即同步」这种
+     拦腰截断的中文。pre-line 保留换行、其余照常折行。 */
+  white-space: pre-line;
+}
+
+.event-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 999px;
+  line-height: 1.5;
+}
+
+.event-status.running,
+.event-status.done {
+  color: var(--status-ink);
+  background: var(--status-fill);
+}
+
+.event-status.failed {
+  color: var(--red);
+  background: var(--red-soft);
+}
+
+.event-time {
+  font-size: 12px;
+  color: var(--muted-soft);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  padding-top: 2px;
+}
+
+.event-chevron {
+  color: var(--muted-soft);
+  padding-top: 2px;
+  transition: transform var(--t-fast) var(--ease);
+}
+
+.event-chevron.open {
+  transform: rotate(180deg);
+}
+
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.event-detail {
+  margin-left: 38px;
+  padding: 4px 0 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.event-detail-summary {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.6;
+  margin: 0;
+  white-space: pre-line;
+}
+
+.event-progress {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.event-progress li {
+  display: grid;
+  grid-template-columns: auto 9px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 3px 0;
+}
+
+.event-progress-time {
+  color: var(--muted-soft);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.event-progress-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  /* 用主题蓝而不是 --status-dot：深色下 --status-dot 是深墨色 #04212f，
+     那是给「完成」胶囊内部圆点用的（亮蓝底配深点），落在深色卡片上就看不见。
+     这里直接用 --accent，浅色仍是 #2589c2，深色是亮蓝 #55bce8（= 完成胶囊底色）。 */
+  background: var(--accent);
+  margin-top: 5px;
+  position: relative;
+}
+
+.event-progress li:not(:last-child) .event-progress-dot::after {
+  content: '';
+  position: absolute;
+  top: 7px;
+  left: 3px;
+  width: 1px;
+  height: 18px;
+  background: var(--line-strong);
+}
+
+.event-progress-text {
+  color: var(--ink);
+  word-break: break-word;
+}
+
+.event-finished {
+  font-size: 12px;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.event-finished.running-hint {
+  color: var(--status-dot);
+}
+
+/* -------------------------------------------------------------- 空状态 */
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  padding: 40px 20px;
+  text-align: center;
+}
+
+.empty-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  border: 1px solid var(--line-strong);
+  margin-bottom: 2px;
+}
+
+.empty strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.empty p {
+  font-size: 12px;
+  color: var(--muted-soft);
+  max-width: 380px;
+  line-height: 1.65;
+}
+
+/* -------------------------------------------------------------- 模态 / 抽屉 */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  /* 编辑弹窗直接以整张樱花照片为底：页面内容在弹窗打开时退场（见下方
+     :has(.overlay) 规则），遮罩完全透明，透视全交给弹窗自己那层薄玻璃。 */
+  background: transparent;
+  animation: overlay-in var(--t-base) var(--ease);
+}
+
+/* 弹窗打开时让主界面退场，露出 body 上那张真实樱花背景，
+   这样弹窗的白灰玻璃能直接透出花朵，而不是叠在一堆卡片上显脏。
+   只藏侧栏与主内容，toast / 弹窗本身照常显示。 */
+body:has(.overlay) .sidebar,
+body:has(.overlay) .main-area {
+  visibility: hidden;
+}
+
+:root[data-theme='dark'] .overlay {
+  /* 页面内容已退场，不必再压 52% 黑；body::before 自带暗 veil，
+     这里只留薄薄一层，暗色樱花照样透得上弹窗玻璃。 */
+  background: rgba(10, 16, 23, 0.14);
+  background: color-mix(in srgb, #0a1017 14%, transparent);
+}
+
+/* 深色弹窗和普通卡片同一档玻璃（--panel + blur10），深浅两套都和卡片逐字节一致 */
+:root[data-theme='dark'] .modal {
+  background: var(--panel);
+  backdrop-filter: blur(10px) saturate(1.25);
+  -webkit-backdrop-filter: blur(10px) saturate(1.25);
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.modal {
+  position: relative;
+  width: min(560px, 100%);
+  max-height: min(88vh, 900px);
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--line);
+  /* 编辑弹窗和普通卡片同一档玻璃（--panel + blur10），不再单独做更透的特例。
+     之前这里是 40% 白 + 2px 模糊，明显比卡片透，用户反馈不一致后统一。 */
+  background: var(--panel);
+  backdrop-filter: blur(10px) saturate(1.25);
+  -webkit-backdrop-filter: blur(10px) saturate(1.25);
+  box-shadow: var(--shadow-pop);
+  animation: modal-in var(--t-base) var(--ease-snap);
+  outline: none;
+  overflow: hidden;
+}
+
+.modal.wide {
+  width: min(760px, 100%);
+}
+
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.975);
+  }
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 15px 18px;
+  border-bottom: 1px solid var(--line);
+  /* 这里原来叠了一层 2.5% --ink 的渐变（模拟顶光）。差异只有 6 个色阶，
+     但在冷灰页面旁边，这点暗度会被读成「米黄/脏」，尤其 OLED 手机和窄色域屏。
+     标题栏本来靠底边那条分割线就能立住，底色不如直接留白。 */
+  background: transparent;
+}
+
+.modal-head h3 {
+  font-size: 14px;
+  font-weight: 640;
+  letter-spacing: -0.014em;
+}
+
+.modal-head .close {
+  margin-left: auto;
+}
+
+.modal-body {
+  padding: 18px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.modal-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 13px 18px;
+  border-top: 1px solid var(--line);
+  background: transparent;
+}
+
+/* 底部左侧的说明文字，跟右侧按钮形成一左一右的平衡 */
+.modal-foot .foot-note {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--muted-soft);
+}
+
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  z-index: 95;
+  /* 抽屉底部就是「取消 / 保存」。iOS Safari 的 100vh 按地址栏收起时算，
+     比可视区高 60–100px，只写 100vh 会让保存按钮落在屏幕外点不到。 */
+  height: 100vh;
+  height: 100dvh;
+  width: min(540px, 100vw);
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--line);
+  background: var(--panel);
+  backdrop-filter: blur(10px) saturate(1.25);
+  -webkit-backdrop-filter: blur(10px) saturate(1.25);
+  box-shadow: var(--shadow-pop);
+  animation: drawer-in 280ms var(--ease);
+}
+
+@keyframes drawer-in {
+  from {
+    transform: translateX(24px);
+    opacity: 0.6;
+  }
+}
+
+.tabs {
+  display: flex;
+  gap: 1px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  scrollbar-width: none;
+  background: var(--panel-soft);
+}
+
+.tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.tabs button {
+  position: relative;
+  border: 0;
+  background: transparent;
+  padding: 10px 11px 9px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--t-fast) var(--ease);
+}
+
+.tabs button:hover {
+  color: var(--ink);
+}
+
+.tabs button.on {
+  color: var(--accent);
+}
+
+.tabs button.on::after {
+  content: '';
+  position: absolute;
+  left: 9px;
+  right: 9px;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--accent);
+}
+
+/* -------------------------------------------------------------- 关于面板 */
+
+.about-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--ink);
+}
+
+.about-repo {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel-inset);
+  color: var(--ink-soft);
+  font-size: 13px;
+  font-family: ui-monospace, Consolas, monospace;
+  text-decoration: none;
+  transition: border-color var(--t-base) var(--ease), color var(--t-base) var(--ease);
+}
+
+.about-repo:hover {
+  color: var(--ink);
+  border-color: var(--line-strong);
+}
+
+.about-versions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.about-version-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.about-key {
+  color: var(--muted);
+  min-width: 64px;
+}
+
+.about-version-row b {
+  font-family: ui-monospace, Consolas, monospace;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.about-latest {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 13px;
+}
+
+.about-latest .about-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* 已是最新：绿色圆点 */
+.about-latest.latest {
+  color: var(--green);
+}
+
+.about-latest.latest .about-dot {
+  background: var(--green);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 18%, transparent);
+}
+
+/* 有新版：黄色圆点 */
+.about-latest.newer {
+  color: var(--amber);
+}
+
+.about-latest.newer .about-dot {
+  background: var(--amber);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--amber) 18%, transparent);
+}
+
+.about-latest.dim {
+  color: var(--muted-soft);
+}
+
+.about-latest.checking {
+  color: var(--muted);
+}
+
+.about-latest.error {
+  color: var(--red);
+}
+
+/* -------------------------------------------------------------- 提示条 */
+
+.toasts {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 120;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.toast {
+  position: relative;
+  min-width: 190px;
+  max-width: 330px;
+  padding: 10px 14px 10px 15px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line-strong);
+  background: var(--panel-solid);
+  color: var(--ink);
+  font-size: 13px;
+  box-shadow: var(--shadow-3);
+  overflow: hidden;
+  animation: toast-in 260ms var(--ease-snap);
+}
+
+.toast::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--muted-soft);
+}
+
+.toast.error::before {
+  background: var(--red);
+}
+
+.toast.info::before {
+  background: var(--muted);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+}
+
+/* -------------------------------------------------------------- 登录 / 初始化 */
+
+.auth {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  position: relative;
+}
+
+/* 卡片背后一团很淡的品牌色光晕，让登录页和概览页的环境光一个气质；
+   双色：主绿为主、右上角补一点青色，层次比单色光晕更立体 */
+.auth::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 680px;
+  height: 680px;
+  transform: translate(-50%, -52%);
+  border-radius: 50%;
+  background:
+    radial-gradient(closest-side, color-mix(in srgb, var(--ink) 7%, transparent), transparent 68%),
+    radial-gradient(closest-side at 68% 30%, color-mix(in srgb, var(--ink) 4%, transparent), transparent 56%);
+  pointer-events: none;
+}
+
+.auth-card {
+  position: relative;
+  z-index: 1;
+  width: min(420px, 100%);
+  padding: 30px 32px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  box-shadow: var(--shadow-pop);
+  /* 登录卡片和「设置子菜单」用同一档白灰玻璃：--panel(56% 白) + blur10，
+     不再用 40%/blur2 那档过透（花枝会压到文字）。保留自己的渐变描边那一圈。 */
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--panel), var(--panel)) padding-box,
+    linear-gradient(
+        165deg,
+        var(--line-strong),
+        var(--line) 44%,
+        var(--line-strong)
+      )
+      border-box;
+  backdrop-filter: blur(10px) saturate(1.25);
+  -webkit-backdrop-filter: blur(10px) saturate(1.25);
+}
+
+.auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.auth-brand .brand-mark {
+  width: 44px;
+  height: 44px;
+  border-radius: 13px;
+}
+
+.auth-brand .brand-text strong {
+  display: block;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+.auth-brand .brand-text span {
+  display: block;
+  margin-top: 2px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.auth-card h1 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+.auth-card .lede {
+  margin: 7px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+}
+
+.auth-form .field {
+  margin-bottom: 15px;
+}
+
+/* 登录 / 注册页输入框：加高一点，手感更从容；
+   改成和设置页容器/卡片同一层白灰玻璃，不再是实色白块。
+   选择器带满 :not 链以压过通用 .input:not(...) 的实色 --fill-field。 */
+.auth-form .input:not([type='color']):not([type='checkbox']):not([type='radio']) {
+  height: 42px;
+  font-size: 13px;
+  padding: 0 13px;
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  backdrop-filter: blur(10px) saturate(1.25);
+  -webkit-backdrop-filter: blur(10px) saturate(1.25);
+}
+
+/* 悬停 / 聚焦也保持这层玻璃，别在交互时变回实色白；
+   聚焦光圈用主题蓝，跟登录按钮同一族 */
+.auth-form .input:hover:not(:disabled),
+.auth-form .input:focus {
+  background: var(--panel);
+}
+
+.auth-form .input:focus {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--sky-fill) 62%, transparent);
+}
+
+.auth-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 11px;
+  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--red) 28%, transparent);
+  background: var(--red-soft);
+  color: var(--red);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* 弹窗里的校验提示条贴在正文底部：保存按钮在 footer，正文往下滚的时候
+   提示条要是跟着滚走，点了保存看起来就像没反应。
+   --red-soft 是半透明的，得垫一层实底，否则下面的表单会透出来 */
+.modal-body > .auth-error {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  margin-top: 14px;
+  background: linear-gradient(var(--red-soft), var(--red-soft)), var(--panel-solid);
+}
+
+.auth-foot {
+  font-size: 13px;
+  /* 卡片变玻璃后，底部说明正好压在花枝上；用深墨色保证仍读得清 */
+  color: var(--ink-soft);
+  text-align: center;
+  line-height: 1.7;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+/* -------------------------------------------------------------- 启动 / 致命错误 */
+
+.boot {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.spinner {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--ink) 12%, transparent);
+  border-top-color: var(--muted);
+  animation: spin 800ms linear infinite;
+}
+
+/* -------------------------------------------------------------- 表单行 */
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+/* -------------------------------------------------------------- 成员编辑器 */
+
+.member-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.member-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.member-row {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  background: var(--panel-inset);
+}
+
+.member-row .select {
+  flex: 1 1 150px;
+  min-width: 128px;
+}
+
+.member-order {
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  flex-shrink: 0;
+  margin-bottom: 6px;
+}
+
+.member-row .select,
+.member-row .input {
+  height: 32px;
+}
+
+.member-slot {
+  flex: 1 1 110px;
+  min-width: 72px;
+}
+
+.member-times {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+}
+
+.member-times .input {
+  width: 68px;
+}
+
+.member-time-sep {
+  font-size: 12px;
+  color: var(--muted-soft);
+}
+
+/* 一月一轮：起止日号，宽度和时刻框对齐，一眼能看出「几号到几号」 */
+.member-days {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+}
+
+.member-days .input {
+  width: 58px;
+  text-align: center;
+}
+
+.member-days .input[readonly] {
+  color: var(--muted);
+  background: var(--panel);
+}
+
+.member-days > span:last-child {
+  flex: none;
+  font-size: 12px;
+  color: var(--muted-soft);
+}
+
+.member-hours {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 92px;
+  flex-shrink: 0;
+}
+
+.member-hours input {
+  flex: 1;
+  min-width: 0;
+}
+
+.member-hours span {
+  flex: none;
+  font-size: 12px;
+  color: var(--muted-soft);
+}
+
+/* 均衡组成员行的「下班后」：和换班行的时刻 / 工时同高，不额外撑高整行 */
+.member-off {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  height: 32px;
+}
+
+.member-off > span {
+  font-size: 12px;
+  color: var(--muted-soft);
+  white-space: nowrap;
+}
+
+.segmented.mini {
+  padding: 2px;
+  gap: 1px;
+}
+
+.segmented.mini button {
+  padding: 4px 9px;
+  font-size: 12px;
+}
+
+/* 成员行里的「选择服务器」：长得像下拉框，点开是带归属状态的列表 */
+.member-pick {
+  flex: 1 1 150px;
+  min-width: 128px;
+  display: flex;
+  align-items: center;
+  text-align: left;
+  cursor: pointer;
+}
+
+.member-pick-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.member-pick.is-empty .member-pick-text {
+  color: var(--muted-soft);
+}
+
+/* ---- 选服务器：右侧标出现有归属，灰的不能选 ---- */
+
+.server-pick-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 46vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.server-pick-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  background: var(--panel-inset);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease);
+}
+
+.server-pick-row:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: var(--panel-solid);
+}
+
+.server-pick-row.is-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.server-pick-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.server-pick-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.server-pick-id {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.server-pick-note {
+  flex: none;
+  font-size: 12px;
+  color: var(--muted-soft);
+}
+
+.server-pick-row .owner-tag {
+  flex: none;
+}
+
+/* -------------------------------------------------------------- 手机（≤700px） */
+
+/* 手机上一律不横向滚动：能堆就堆，能换行就换行。
+   但「一行本来放得下」的不要换行 —— 换行会让卡片看起来错位，
+   所以同一行的元素宁可缩图标 / 缩内边距，超长文本用省略号。 */
+@media (max-width: 700px) {
+  /* 换班组标题：组名 + 状态 + 操作挤一行。不动字号（手机上看不清），
+     靠收窄按钮内边距与图标腾空间；组名过长才省略，按钮永不下行 */
+  .group-head {
+    flex-wrap: nowrap;
+    gap: 6px;
+  }
+
+  .group-head h3 {
+    flex: 0 1 auto;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .group-head .group-actions {
+    margin-left: auto;
+    gap: 0;
+    flex: none;
+  }
+
+  .group-head .switch-btn {
+    margin-right: 4px;
+    padding: 0 8px;
+    font-size: 12px;
+    gap: 4px;
+  }
+
+  /* 一行里要同时装下组名 + 状态 + 倒计时 + 三个操作时组名会被挤成 1px，
+     所以手机上把倒计时挪回下面的元信息行（那边本来就换行堆叠） */
+  .group-countdown.in-head {
+    display: none;
+  }
+
+  .group-countdown.in-meta {
+    display: inline-flex;
+  }
+
+  .group-head .group-actions .btn.icon.sm {
+    width: 24px;
+    height: 24px;
+  }
+
+  /* 槽位：左信息 / 右 IP+流量 改成上下两段 */
+  .slot-body {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 9px;
+  }
+
+  /* 窄屏「当班」胶囊跟 IP 同一列、天然右对齐，不用再处理负边距 */
+
+  /* IP 单独一行、进度条占满下方整宽；并排会把进度条挤成半截 */
+  .slot-side {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+  }
+
+  .slot-ip {
+    text-align: left;
+    flex: none;
+  }
+
+  .slot-side .meter {
+    min-width: 0;
+  }
+
+  /* 槽位里那行「状态 + 实例 ID」保持一行：徽章不缩，实例 ID 过长走省略号 */
+  .slot-line {
+    flex-wrap: nowrap;
+    gap: 5px;
+  }
+
+  .slot-line .badge {
+    flex: none;
+  }
+
+  .slot-line code {
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  /* 轮换顺序是长句，窄屏允许折行 */
+  .rotate-order {
+    flex-wrap: wrap;
+    line-height: 1.6;
+  }
+
+  /* DNS 每条记录：图标 + 域名占第一行，状态和按钮掉到第二行 */
+  .dns-row-head {
+    flex-wrap: wrap;
+    row-gap: 7px;
+  }
+
+  .dns-row-head .dns-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: visible;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  /* 窄屏单列，卡片几乎占满整行：归属名允许折行，别让省略号把名字吃掉 */
+  .dns-target-text {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .dns-row-head .badge {
+    order: 3;
+  }
+
+  .dns-row-actions {
+    order: 4;
+    margin-left: auto;
+  }
+
+  /* 绑定下拉与「绑定到」标签在窄屏上下排 */
+  .dns-bind {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+
+  .dns-bind .select {
+    min-width: 0;
+    flex: 1 1 100%;
+    /* 这张下拉是整行宽的大框，跟着 .select 的 16px 走会显得又粗又笨
+       （下面是那条「iOS <16px 会放大」的规则）。13px 和旁边的「绑定到」
+       完全同号，下拉里再留 16px 反而比标签大一圈。降到 13px 与标签对齐；
+       代价是 iOS 聚焦时会放大一档，权衡后按用户要求的观感优先。 */
+    font-size: 13px;
+    height: 34px;
+  }
+
+  /* 自绘下拉的壳也要占满整行，否则它按 .select 的 flex:1 收缩、
+     标签和下拉又挤回同一行了 */
+  .dns-bind .bind-picker {
+    flex: 1 1 100%;
+  }
+
+  /* 小卡里一行只有半屏，菜单给矮一点，免得整页被撑出长滚动 */
+  .bind-menu {
+    max-height: 264px;
+  }
+}
+
+/* 手机上：卡片一列到底，列宽只跟屏幕走（1fr 的下限是内容最小宽度，
+   不改成 minmax(0,1fr) 的话一张卡内部挤一点就能把整页顶宽） */
+@media (max-width: 700px) {
+  .server-grid,
+  .dns-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* 单列时 grid-auto-rows:1fr 会把每张卡拉成最高那张的高度，
+     卡片之间留一大截空白，这里改回自然高度 */
+  .server-grid {
+    grid-auto-rows: auto;
+  }
+
+  .server-card {
+    min-width: 0;
+  }
+
+  /* 卡片头：状态徽章 + 名称 + 操作图标挤一行。图标按钮收窄一档，
+     名称过长省略，操作区永远留在右侧同一行（原来 wrap 会把图标甩到第二行） */
+  .server-card .head {
+    flex-wrap: nowrap;
+    gap: 4px;
+  }
+
+  /* 「已停机 · 节省停机」这种长状态占 130px 以上，会把实例名挤成两个字母。
+     徽章收一档字号与内边距（不删字，普通/节省停机的区别得看得见），
+     省下的宽度留给名称 */
+  .server-card .head .badge,
+  .slot-line .badge {
+    font-size: 11.5px;
+    padding: 2px 7px 2px 6px;
+    gap: 4px;
+  }
+
+  .server-card .head strong {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .server-card .head .actions {
+    flex: none;
+    gap: 0;
+  }
+
+  .server-card .head .actions .btn.icon.sm {
+    width: 24px;
+    height: 24px;
+  }
+
+  /* 卡片脚：归属标签 + 域名胶囊 + 开关按钮挤一行。
+     谁让位：域名截掉尾缀还认得出是哪条记录，先让它缩；开关按钮不能让。
+     归属标签允许「缩到只截组名」—— 胶囊里「· 当班 / · 非当班」是独立一段、
+     不参与收缩，所以组名被截时当班状态仍然留着，不至于把按钮挤出屏幕。
+     （手机上组名普遍很短，正常情况根本不会触发截断。） */
+  .card-foot {
+    flex-wrap: nowrap;
+    gap: 6px;
+  }
+
+  .card-foot .owner-tag {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+
+  .card-foot .owner-tag-text,
+  .card-foot .dns-chip-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .card-foot .dns-chip {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+
+  .card-foot .foot-actions {
+    flex: none;
+    gap: 4px;
+  }
+
+  .card-foot .btn.sm {
+    padding: 5px 8px;
+    font-size: 12px;
+    gap: 4px;
+  }
+
+  /* 保活卡「域名 + 运行窗口」挤一行：窗口时间固定不缩（缩了就看不懂几点到几点），
+     域名截掉尾缀（cd.365888.xyz → cd.3658…）仍能认出是哪条记录 */
+  .meta-line.dns-line {
+    flex-wrap: nowrap;
+    row-gap: 0;
+  }
+
+  .meta-line.dns-line .dns-chip {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+}
+
+/* -------------------------------------------------------------- 小屏微调 */
+
+/* 360 一档（安卓常见宽度）：再挤一档，让实例名不被截成半截。
+   手机上拖拽排序本来就难用，手柄只是视觉提示，藏掉省 17px。 */
+@media (max-width: 380px) {
+  .server-card .head .drag-handle {
+    display: none;
+  }
+
+  .server-card .head .actions .btn.icon.sm {
+    width: 22px;
+    height: 22px;
+  }
+
+  .server-card .head .badge,
+  .slot-line .badge {
+    font-size: 11px;
+    padding: 2px 6px 2px 5px;
+  }
+
+  /* 再窄一档：归属标签的内边距和字号各收一点，省下的给域名，
+     但组名本身仍然整句显示（只剩它能说明这台机器归谁） */
+  .card-foot .owner-tag {
+    font-size: 11.5px;
+    padding: 4px 6px;
+    gap: 3px;
+  }
+
+  /* 上一档的胶囊 gap 是 3px，当班那半句的负边距要跟着收 1px，
+     否则「·」会压在组名的收尾括号上 */
+  .card-foot .owner-duty {
+    margin-left: -3px;
+  }
+}
+
+@media (max-width: 560px) {
+  .grid-2 {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+  .stat-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  .stat {
+    padding: 13px 14px;
+    gap: 10px;
+  }
+  .stat .value {
+    font-size: 24px;
+  }
+  .stat .ring {
+    display: none;
+  }
+  /* 单列后网格里最后一格的下边距被 .field:last-child 抹成 0，紧跟其后的下一格会直接
+     贴上（下拉框底边和下一个标签零间距）。补回桌面的 15px；只作用于弹窗内的网格，
+     设置页那几处 grid-2 的节奏不受影响。 */
+  .modal-body .grid-2 + .field {
+    margin-top: 15px;
+  }
+  /* minmax(0, 1fr) 而不是 1fr：1fr 的下限是 min-content，卡片里只要有一句
+     不能断行的长内容（长组名的归属胶囊、超长实例 ID），整列会被顶到比屏幕还宽，
+     同屏所有卡片一起溢出、右侧按钮看不见。700 那一档本来就是 minmax(0,1fr)，
+     这里必须跟着，否则更窄的机型反而破功。 */
+  .server-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .modal-foot {
+    flex-wrap: wrap;
+  }
+  .modal-foot .foot-note {
+    width: 100%;
+    order: 9;
+  }
+}
+
+/* -------------------------------------------------------------- 减少动效 */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ---------------------------------------------------- 二次确认弹窗 */
+
+.confirm-body {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.confirm-text {
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--ink);
+}
+
+.confirm-hint {
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--muted-soft);
+}
+
+/* ------------------------------------------------------------ 设置子界面 */
+
+/* 设置从右侧抽屉改成独立页面：左侧竖向子菜单 + 右侧内容卡片 + 吸底保存条 */
+.settings-layout {
+  display: grid;
+  grid-template-columns: 196px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+/* 子菜单跟着页面滚动固定在左上角，长表单翻到哪都点得到 */
+.settings-nav {
+  position: sticky;
+  top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  /* 和卡片同一档白灰玻璃：从侧栏进来，这块分类栏不该突然变蓝或变实心 */
+  background: var(--panel);
+  backdrop-filter: blur(10px) saturate(1.25);
+  -webkit-backdrop-filter: blur(10px) saturate(1.25);
+}
+
+/* 设置页左侧分类：配色跟主菜单（.nav-item）对齐 —— 未选中是正文灰 + 品牌绿图标，
+   悬停压一层和侧栏同档的灰，选中是一颗实心品牌绿药丸（白字白图标）。
+   这样从侧栏点进设置，两套导航是同一套语言，不会一个青绿一个白卡。 */
+.settings-nav button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 11px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ink-soft);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+
+/* 图标同样是品牌绿；选中时跟着白字走 currentColor，一颗药丸只有一个色相 */
+.settings-nav button svg {
+  color: var(--muted-soft);
+  opacity: 0.9;
+  flex-shrink: 0;
+  transition: opacity var(--t-fast) var(--ease);
+}
+
+/* 悬停只对真指针生效：触屏上 :hover 会在 tap 后一直挂着，那层灰底留在按钮上
+   像「卡住了」。底色与侧栏菜单、实例状态行用的是同一层 --panel-inset */
+@media (hover: hover) and (pointer: fine) {
+  .settings-nav button:hover:not(.on) {
+    color: var(--ink);
+    background: var(--panel-inset);
+  }
+
+  .settings-nav button:hover svg {
+    opacity: 1;
+  }
+
+  :root[data-theme='dark'] .settings-nav button:hover:not(.on) {
+    background: var(--fill-subtle);
+  }
+}
+
+/* 选中：和侧栏 .nav-item.on 一模一样（登录按钮同款浅天蓝 + 深蓝字，无渐变、无蓝外晕） */
+.settings-nav button.on {
+  background: var(--sky-fill);
+  color: var(--sky-ink);
+  box-shadow: inset 0 1px 0 var(--glass-hilite);
+}
+
+.settings-nav button.on svg {
+  color: currentColor;
+  opacity: 1;
+}
+
+/* 浅天蓝块两套主题都是深字，这里只留一条兜底 */
+:root[data-theme='dark'] .settings-nav button.on {
+  color: var(--sky-ink);
+}
+
+.settings-main {
+  min-width: 0;
+}
+
+.settings-body {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  /* 和卡片同款玻璃：白灰半透 + 高斯模糊，背景樱花能透上来 */
+  background: var(--panel);
+  backdrop-filter: blur(10px) saturate(1.25);
+  -webkit-backdrop-filter: blur(10px) saturate(1.25);
+  box-shadow: var(--shadow-2);
+}
+
+/* 小节标题紧跟在「开关 + 其展开字段」那一块后面时，间距是 0：
+   编辑态字段是包裹 div 的 :last-child，媒体查询外的 .field:last-child
+   把 margin-bottom 清成了 0，而 .section-head 本身只有 margin-bottom。
+   表现就是「外观」直接贴在「推送时间」输入框下沿（实测 0px）。
+   上边留得比下边（12px）松一点，标题才会归属到它下面那组内容。 */
+.settings-body > div + .section-head {
+  margin-top: 18px;
+}
+
+/* 吸底操作条：表单很长时不用滚回顶部找保存 */
+.settings-actions {
+  position: sticky;
+  bottom: 12px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  backdrop-filter: blur(10px) saturate(1.25);
+  -webkit-backdrop-filter: blur(10px) saturate(1.25);
+  box-shadow: var(--shadow-2);
+}
+
+.settings-actions .foot-note {
+  font-size: 13px;
+  color: var(--muted-soft);
+}
+
+/* 窄屏放不下侧栏：子菜单退回内容上方一条可横滑的标签，内容占满整行 */
+@media (max-width: 860px) {
+  .settings-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .settings-nav {
+    position: static;
+    flex-direction: row;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .settings-nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .settings-nav button {
+    width: auto;
+    flex: 0 0 auto;
+  }
+}
+
+@media (max-width: 700px) {
+  .settings-body {
+    padding: 14px;
+  }
+
+  /* 手机上正文下的说明会独占一行、标题块本身已经变高，间距收一档，
+     与 .notify-cat-head 的 18 → 14 同一处逻辑 */
+  .settings-body > div + .section-head {
+    margin-top: 15px;
+  }
+
+  .settings-actions {
+    bottom: 8px;
+    padding: 10px 12px;
+  }
+
+  .settings-actions .foot-note {
+    display: none;
+  }
+}
+
+/* -------------------------------------------------------------- 小屏：分段控件 */
+/* 均衡组弹窗的「评估周期」有五个选项，390px 下每颗只剩 56–63px，
+   加上默认的 15px 左右内边距，文字会被挤成两行（「1 小 / 时」）。
+   小屏收一档内边距让它仍然是一行；再窄的机器（≤400）连字号也收半号。 */
+@media (max-width: 700px) {
+  .segmented button {
+    padding: 5px 10px;
+  }
+}
+
+@media (max-width: 400px) {
+  .segmented button {
+    padding: 5px 8px;
+    font-size: 11.5px;
+  }
+}

@@ -1,0 +1,1104 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  AlertTriangle,
+  Gauge,
+  Globe2,
+  HeartPulse,
+  LoaderCircle,
+  LogOut,
+  RefreshCw,
+  Repeat,
+  Scale,
+  Server as ServerIcon,
+  Settings as SettingsIcon,
+  Zap,
+} from 'lucide-react'
+import { APIError, SLOW_TIMEOUT_MS, api, del, post } from './api'
+import type {
+  BalanceGroup,
+  InitStatus,
+  Keepalive,
+  Managed,
+  Overview,
+  Server,
+  Settings,
+  ShiftGroup,
+} from './types'
+import Auth from './components/Auth'
+import DashboardView from './components/DashboardView'
+import KeepaliveView from './components/KeepaliveView'
+import KeepaliveDialog from './components/KeepaliveDialog'
+import ServersView from './components/ServersView'
+import ShiftView from './components/ShiftView'
+import ServerDialog from './components/ServerDialog'
+import BalanceDialog from './components/BalanceDialog'
+import BalanceView from './components/BalanceView'
+import GroupDialog from './components/GroupDialog'
+import SettingsView from './components/SettingsView'
+import ConfirmDialog from './components/ConfirmDialog'
+import DNSView from './components/DNSView'
+import { Badge, Modal, OwnerIcon } from './components/ui'
+import { ownerIcon, ownerLabel, ownerTone } from './owners'
+import { syncClock } from './time'
+import { applyTheme, watchSystemTheme } from './theme'
+
+type Phase = 'loading' | 'setup' | 'login' | 'ready' | 'fatal'
+type View =
+  | 'dashboard'
+  | 'keepalive'
+  | 'shift'
+  | 'balance'
+  | 'servers'
+  | 'dns'
+  | 'settings'
+type Toast = { id: number; tone: 'success' | 'error' | 'info'; message: string }
+
+/** 删除这类不可撤销的操作，统一走应用内二次确认（window.confirm 在桌面壳里可能被吞掉） */
+type ConfirmRequest = {
+  title: string
+  message: string
+  hint?: string
+  confirmText?: string
+  failText?: string
+  run: () => Promise<void>
+}
+
+const REFRESH_MS = 10_000
+
+type NavEntry = {
+  key: View
+  label: string
+  hint: string
+  icon: typeof Gauge
+  /** 归属色只在需要区分的两项上覆盖（保活紫 / 均衡蓝），其余统一品牌绿 */
+  tone?: 'shift' | 'keepalive' | 'balance'
+}
+
+/**
+ * 侧栏分两段，中间一条线断开。
+ *
+ * 上段是三个「看数据」的页面，彼此平级、互不隶属 —— 以前把「实例管理」缩进挂在
+ * 「概览」下面，读起来像是概览里的一个标签页，其实它是独立页面。
+ *
+ * 下段是「托管方式」：三种自动化流程，一台实例一次只能归其中一个管。
+ * 没归属的机器不再单开一页 —— 它在「实例管理」里用顶部的归属选择筛出来，
+ * 省得为了看一眼闲散机器就在两页之间来回跳。
+ *
+ * 每行都带一句副标题（鼠标停留可见）。只看「联合换班」四个字，第一次装的人
+ * 判断不出它是按时段轮换几台机器；一句 11px 的说明比排得再整齐都管用。
+ */
+const NAV_PAGES: NavEntry[] = [
+  { key: 'dashboard', label: '运行概览', hint: '运行状态与事件', icon: Gauge },
+  { key: 'servers', label: '实例管理', hint: '全部实例与流量', icon: ServerIcon },
+  { key: 'dns', label: 'DNS解析', hint: '解析记录与绑定', icon: Globe2 },
+]
+
+const NAV_MODES: NavEntry[] = [
+  { key: 'keepalive', label: '单机保活', hint: '一台常驻在线', icon: HeartPulse, tone: 'keepalive' },
+  { key: 'shift', label: '联合换班', hint: '多台按时段轮换', icon: Repeat, tone: 'shift' },
+  { key: 'balance', label: '流量均衡', hint: '多台按月摊流量', icon: Scale, tone: 'balance' },
+]
+
+/**
+ * 服务器 id → 归属，**含已停用的组员和保活**。
+ *
+ * 不能只看 server.managed：后端 managed_map 只标启用中的组员，停用的换班组 /
+ * 均衡组成员在那里是空的，会被当成闲散机器 —— 既让归属筛选漏人，也会把卡片
+ * 上的归写成「闲散手动」，和换班组成员选择器里的说法对不上。
+ * 优先级照后端：换班 > 均衡 > 保活（正常库里不会两头都占，这里只求一个确定答案）。
+ */
+function ownerMap(overview: Overview): Map<number, Managed> {
+  const owners = new Map<number, Managed>()
+  for (const item of overview.keepalives) {
+    owners.set(item.server_id, {
+      kind: 'keepalive',
+      name: item.label,
+      active: item.enabled,
+      keepalive_id: item.id,
+    })
+  }
+  for (const group of overview.balances ?? []) {
+    for (const member of group.members) {
+      owners.set(member.server_id, {
+        kind: 'balance',
+        name: group.name,
+        active: group.enabled && member.enabled,
+        group_id: group.id,
+        duty: member.is_duty,
+      })
+    }
+  }
+  for (const group of overview.groups) {
+    for (const member of group.members) {
+      owners.set(member.server_id, {
+        kind: 'group',
+        name: group.name,
+        active: group.enabled && member.enabled,
+        group_id: group.id,
+        // 换班组也有当班：胶囊和均衡组一样写「· 当班 / · 非当班」，
+        // 非当班成员按钮锁着的时候才说得清为什么
+        duty: member.is_duty,
+      })
+    }
+  }
+  return owners
+}
+
+function navCount(key: View, overview: Overview): number {
+  if (key === 'dns') return overview.dns?.records.length ?? 0
+  if (key === 'servers') return overview.servers.length
+  if (key === 'keepalive') return overview.keepalives.length
+  if (key === 'shift') return overview.groups.length
+  if (key === 'balance') return overview.balances?.length ?? 0
+  return 0
+}
+
+export default function App() {
+  const [phase, setPhase] = useState<Phase>('loading')
+  const [view, setView] = useState<View>('dashboard')
+  // 设置页有没有未保存的草稿：切页 / 退出登录前先问一句，别让改动静默丢失
+  const [settingsDirty, setSettingsDirty] = useState(false)
+  const [meta, setMeta] = useState<InitStatus>({
+    initialized: false,
+    brand: 'CDT-Management',
+    version: '',
+    repo: '',
+  })
+  const [overview, setOverview] = useState<Overview | null>(null)
+  const [settings, setSettings] = useState<Settings | null>(null)
+  const [fatal, setFatal] = useState('')
+  const [toasts, setToasts] = useState<Toast[]>([])
+  const [busyServer, setBusyServer] = useState<number | null>(null)
+  const [billingServer, setBillingServer] = useState<number | null>(null)
+  const [busyGroup, setBusyGroup] = useState<number | null>(null)
+  const [serverDialog, setServerDialog] = useState<{ open: boolean; server: Server | null }>({
+    open: false,
+    server: null,
+  })
+  const [busyBalance, setBusyBalance] = useState<number | null>(null)
+  const [balanceDialog, setBalanceDialog] = useState<{ open: boolean; group: BalanceGroup | null }>({
+    open: false,
+    group: null,
+  })
+  const [groupDialog, setGroupDialog] = useState<{ open: boolean; group: ShiftGroup | null }>({
+    open: false,
+    group: null,
+  })
+  const [keepalivePicker, setKeepalivePicker] = useState(false)
+  // 单机保活设置页：新建时带 server，编辑时带 item
+  const [keepaliveDialog, setKeepaliveDialog] = useState<{
+    server: Server | null
+    item: Keepalive | null
+  } | null>(null)
+  const [confirmBox, setConfirmBox] = useState<ConfirmRequest | null>(null)
+  const [confirmBusy, setConfirmBusy] = useState(false)
+  const [busyDns, setBusyDns] = useState<string | null>(null)
+  const [dnsSyncingAll, setDnsSyncingAll] = useState(false)
+  const [reconciling, setReconciling] = useState(false)
+  const [busyKeepalive, setBusyKeepalive] = useState<number | null>(null)
+  // 轮询连续失败两轮以上才置 true：偶发一次抖动静默跳过，别每分钟弹一次提示
+  const [stale, setStale] = useState(false)
+  const polling = useRef<number | null>(null)
+  const pollingBusy = useRef(false)
+  const failedRounds = useRef(0)
+  // settings 只在这里存一份，供 loadAll 判断「这次失败后还有没有旧值可用」
+  const settingsRef = useRef<Settings | null>(null)
+
+  const toast = useCallback((message: string, tone: Toast['tone'] = 'info') => {
+    const id = Date.now() + Math.random()
+    setToasts((current) => [...current, { id, message, tone }])
+    window.setTimeout(() => setToasts((current) => current.filter((item) => item.id !== id)), 4200)
+  }, [])
+
+  const loadAll = useCallback(async (): Promise<void> => {
+    // 两个接口各自成败：settings 偶发一次 500 不该把已经取到的 overview 一起丢掉，
+    // 否则整页停在旧数据上，看起来像同步坏了。
+    const [overviewResult, settingsResult] = await Promise.allSettled([
+      api<Overview>('/api/v1/overview'),
+      api<Settings>('/api/v1/settings'),
+    ])
+
+    if (overviewResult.status === 'rejected') {
+      const error = overviewResult.reason
+      if (error instanceof APIError && error.status === 401) {
+        setPhase('login')
+        return
+      }
+      // 概览是整页的地基，取不到就没法渲染，如实抛给调用方
+      throw error
+    }
+    setOverview(overviewResult.value)
+
+    if (settingsResult.status === 'fulfilled') {
+      settingsRef.current = settingsResult.value
+      setSettings(settingsResult.value)
+    } else if (!settingsRef.current) {
+      // 一次都没成功过：页脚的同步间隔、SDK 状态都没有来源，这时报错比空着诚实
+      throw settingsResult.reason
+    }
+    setPhase('ready')
+  }, [])
+
+  /** 弹窗保存成功后统一刷新：刷新失败也要给用户一句提示，不能吞成 unhandled rejection */
+  async function refreshAfterSave(message: string) {
+    try {
+      await loadAll()
+      toast(message, 'success')
+    } catch (error) {
+      toast(`已保存，但刷新数据失败：${error instanceof Error ? error.message : '请稍后重试'}`, 'error')
+    }
+  }
+
+  // 界面上的时间显示全部以后端为准：每次拿到 overview 就把时区 / 今天 / 当前时刻
+  // 同步给时间模块，各组件不再自己 new Date()（跨国访问时浏览器时区会和排班错开）。
+  useEffect(() => {
+    if (overview) syncClock(overview)
+  }, [overview])
+
+  // 外观：主题是后端存的设置，不是浏览器偏好。首屏已经由后端把真实主题注入
+  // index.html（见 main.py 的 __BOOT_THEME__），loading 阶段不能再 applyTheme ——
+  // 否则已登录用户刷新时会先被这里强制成 light，等 settings 回来再切回去，
+  // 首屏那一下就闪两次。loading 时保留首屏注入值，等 ready 用后端设置对齐；
+  // 只有明确落到登录 / 引导页才固定浅色。
+  useEffect(() => {
+    if (phase === 'loading') return
+    const mode = phase === 'ready' ? settings?.theme : 'light'
+    applyTheme(mode)
+    // 只有「跟随系统」才订阅系统深浅变化；选死浅色 / 深色时系统怎么变都不动
+    if (mode !== 'system') return
+    return watchSystemTheme((resolved) => applyTheme(resolved))
+  }, [phase, settings?.theme])
+
+  // 离开设置页就清掉草稿标记：拦截只管「离开时」，出去之后不该残留到下次进来
+  useEffect(() => {
+    if (view !== 'settings') setSettingsDirty(false)
+  }, [view])
+
+  // 切页回到顶部。单页应用换视图不换文档，浏览器不会自己重置滚动位置：
+  // 在运行概览滚到底、点侧栏切走，新页会直接停在中段，还得手动滚回去。
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
+  }, [view])
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const init = await api<InitStatus>('/api/v1/system/init-status')
+        setMeta(init)
+        if (!init.initialized) {
+          setPhase('setup')
+          return
+        }
+        await loadAll()
+      } catch (error) {
+        if (error instanceof APIError && error.status === 401) {
+          setPhase('login')
+          return
+        }
+        setFatal(error instanceof Error ? error.message : '无法连接后端')
+        setPhase('fatal')
+      }
+    })()
+  }, [loadAll])
+
+  useEffect(() => {
+    if (phase !== 'ready') {
+      if (polling.current) window.clearInterval(polling.current)
+      return
+    }
+    polling.current = window.setInterval(() => {
+      // 后端慢于轮询间隔时别再叠一个请求上去，等上一轮回来再说
+      if (pollingBusy.current) return
+      pollingBusy.current = true
+      void api<Overview>('/api/v1/overview')
+        .then((next) => {
+          setOverview(next)
+          failedRounds.current = 0
+          setStale(false)
+        })
+        .catch((error) => {
+          if (error instanceof APIError && error.status === 401) {
+            setPhase('login')
+            return
+          }
+          failedRounds.current += 1
+          if (failedRounds.current >= 2) setStale(true)
+        })
+        .finally(() => {
+          pollingBusy.current = false
+        })
+    }, REFRESH_MS)
+    return () => {
+      if (polling.current) window.clearInterval(polling.current)
+    }
+  }, [phase])
+
+  async function reconcile() {
+    if (reconciling) return
+    setReconciling(true)
+    try {
+      const result = await post<{ busy?: boolean }>('/api/v1/reconcile', undefined, SLOW_TIMEOUT_MS)
+      await loadAll()
+      if (result?.busy) {
+        // 后台还在跑上一轮，这一次请求被直接放弃了：不能说「已触发」。
+        toast('上一轮同步还没结束，稍等几秒再试', 'info')
+      } else {
+        toast('已触发一轮同步', 'success')
+      }
+    } catch (error) {
+      toast(error instanceof Error ? error.message : '同步失败', 'error')
+    } finally {
+      setReconciling(false)
+    }
+  }
+
+  async function serverAction(serverId: number, action: 'start' | 'stop') {
+    setBusyServer(serverId)
+    try {
+      const result = await post<{
+        status?: string
+        target_status?: string
+        stopped_mode?: string
+        managed_note?: string
+      }>(`/api/v1/servers/${serverId}/actions/${action}`)
+      await loadAll()
+      // 手动开关机是异步的：指令已下发，实例状态由后台轮询确认到位后打完成标志。
+      // 概览「最近事件」里能看到这条事件的转圈过程。
+      toast(
+        action === 'start' ? '已下发开机指令，正在确认状态…' : '已下发停机指令，正在确认状态…',
+        'success',
+      )
+      // 托管中的机器：后端按流程给不同说法（换班组会被下一轮纠正、
+      // 均衡组非当班不会被自动拉起），这里原样展示，不再自己拼一句通用文案。
+      if (result?.managed_note) {
+        toast(result.managed_note, 'info')
+      }
+    } catch (error) {
+      toast(error instanceof Error ? error.message : '操作失败', 'error')
+    } finally {
+      setBusyServer(null)
+    }
+  }
+
+  /** 实例手动排序：拖拽结束后把完整有序 id 列表持久化 */
+  async function reorderServers(orderedIds: number[]) {
+    try {
+      await post('/api/v1/servers/reorder', { ids: orderedIds })
+      await loadAll()
+    } catch (error) {
+      toast(error instanceof Error ? error.message : '排序保存失败', 'error')
+    }
+  }
+
+  async function refreshServer(serverId: number) {
+    setBusyServer(serverId)
+    try {
+      await post(`/api/v1/servers/${serverId}/refresh`)
+      await loadAll()
+      toast('已刷新', 'success')
+    } catch (error) {
+      toast(error instanceof Error ? error.message : '刷新失败', 'error')
+    } finally {
+      setBusyServer(null)
+    }
+  }
+
+  /** 手动重查费用：BSS 接口慢，单独一个 loading，不跟状态刷新抢同一个 busy */
+  async function serverBilling(server: Server) {
+    setBillingServer(server.id)
+    try {
+      const result = await post<{ error?: string }>(
+        `/api/v1/servers/${server.id}/billing`,
+        undefined,
+        SLOW_TIMEOUT_MS,
+      )
+      await loadAll()
+      if (result?.error) {
+        toast(`费用已刷新，但${result.error}`, 'info')
+      } else {
+        toast('费用已更新', 'success')
+      }
+    } catch (error) {
+      toast(error instanceof Error ? error.message : '费用查询失败', 'error')
+    } finally {
+      setBillingServer(null)
+    }
+  }
+
+  function deleteServer(server: Server) {
+    setConfirmBox({
+      title: '删除实例',
+      message: `确定删除「${server.label}」？`,
+      hint: '只删除本机保存的账号配置与密钥，阿里云上的实例本身不受影响，也不会被停机。',
+      confirmText: '删除实例',
+      failText: '删除失败',
+      run: async () => {
+        await del(`/api/v1/servers/${server.id}`)
+        await loadAll()
+        toast('实例已删除', 'success')
+      },
+    })
+  }
+
+  async function switchGroup(group: ShiftGroup) {
+    setBusyGroup(group.id)
+    try {
+      // 手动换班要等引擎锁（后台可能正在对账），再走完整轮换班流程
+      await post(`/api/v1/groups/${group.id}/switch`, undefined, SLOW_TIMEOUT_MS)
+      await loadAll()
+      toast('正在切到下一台，完成后会推送通知', 'success')
+    } catch (error) {
+      toast(error instanceof Error ? error.message : '换班失败', 'error')
+    } finally {
+      setBusyGroup(null)
+    }
+  }
+
+  function deleteGroup(group: ShiftGroup) {
+    setConfirmBox({
+      title: '解散换班组',
+      message: `确定解散「${group.name}」？`,
+      hint: `组内 ${group.members.length} 台实例保持当前状态：跑着的继续跑，停着的继续停着。解散后它们回到闲散手动，不会被单机保活拉起；组绑定的域名会一并解除。`,
+      confirmText: '解散换班组',
+      failText: '解散失败',
+      run: async () => {
+        await del(`/api/v1/groups/${group.id}`)
+        await loadAll()
+        toast('换班组已解散，组员已回到闲散手动', 'success')
+      },
+    })
+  }
+
+  async function switchBalance(group: BalanceGroup) {
+    setBusyBalance(group.id)
+    try {
+      const res = await post<{ result?: { state?: string; note?: string } }>(
+        `/api/v1/balances/${group.id}/switch`,
+        undefined,
+        SLOW_TIMEOUT_MS,
+      )
+      await loadAll()
+      // 当班自己就是全组最少时后端什么都不做，别提示「正在交给…」让人以为切了
+      if (res?.result?.state === 'best') {
+        toast(res.result.note || '当班已是用量最少的成员，无需切换', 'info')
+      } else {
+        toast('正在交给流量最少的成员，完成后会推送通知', 'success')
+      }
+    } catch (error) {
+      toast(error instanceof Error ? error.message : '均衡失败', 'error')
+    } finally {
+      setBusyBalance(null)
+    }
+  }
+
+  function deleteBalance(group: BalanceGroup) {
+    setConfirmBox({
+      title: '解散均衡组',
+      message: `确定解散「${group.name}」？`,
+      hint: `组内 ${group.members.length} 台实例保持当前状态，不会被停机。解散后它们回到闲散手动，组绑定的域名会一并解除。`,
+      confirmText: '解散均衡组',
+      failText: '解散失败',
+      run: async () => {
+        await del(`/api/v1/balances/${group.id}`)
+        await loadAll()
+        toast('均衡组已解散，组员已回到闲散手动', 'success')
+      },
+    })
+  }
+
+  function openKeepaliveDialog(server: Server) {
+    // 先关掉选择器，避免两个弹窗叠在一起
+    setKeepalivePicker(false)
+    setKeepaliveDialog({ server, item: null })
+  }
+
+  async function toggleKeepalive(item: Keepalive, enabled: boolean) {
+    if (busyKeepalive !== null) return
+    setBusyKeepalive(item.id)
+    try {
+      await post(`/api/v1/keepalives/${item.id}/toggle`, { enabled })
+      await loadAll()
+    } catch (error) {
+      toast(error instanceof Error ? error.message : '操作失败', 'error')
+    } finally {
+      setBusyKeepalive(null)
+    }
+  }
+
+  function removeKeepalive(item: Keepalive) {
+    setConfirmBox({
+      title: '移出单机保活',
+      message: `确定把「${item.label}」移出单机保活？`,
+      hint: '移出后这台机器不再自动拉起，实例记录本身保留，可以随时重新加入。',
+      confirmText: '移出保活',
+      failText: '操作失败',
+      run: async () => {
+        await del(`/api/v1/keepalives/${item.id}`)
+        await loadAll()
+        toast('已移出保活', 'success')
+      },
+    })
+  }
+
+  // -- DNS -----------------------------------------------------------
+  /** DNS 记录手动排序：拖拽结束后把完整有序记录名列表持久化 */
+  async function reorderDns(ordered: string[]) {
+    try {
+      await post('/api/v1/dns/reorder', { records: ordered })
+      await loadAll()
+    } catch (error) {
+      toast(error instanceof Error ? error.message : '排序保存失败', 'error')
+    }
+  }
+
+  async function bindDns(record: string, kind: string, id: number) {
+    setBusyDns(record)
+    try {
+      const result = await post<{
+        records?: string[]
+        sync?: { status: string; detail?: string }
+      }>(
+        `/api/v1/dns/records/${encodeURIComponent(record)}/bind`,
+        { kind, id },
+        // 绑完会立刻同步一次解析（Cloudflare 走网络），给慢接口的超时
+        SLOW_TIMEOUT_MS,
+      )
+      await loadAll()
+      // 绑定会立刻同步一次解析，把这次同步的结果带上，省得用户再去点「立即同步」
+      const sync = result?.sync?.status ? `，解析${result.sync.status}` : ''
+      if (!kind) {
+        toast('已解绑，这条记录不再被动', 'success')
+      } else if ((result?.records?.length ?? 0) > 1) {
+        // 一个目标可以挂多条域名，链第二条时提醒一下总量，免得以为是重复绑定
+        toast(`已绑定${sync}，该目标现在有 ${result?.records?.length} 条域名`, 'success')
+      } else {
+        toast(`已绑定${sync}`, 'success')
+      }
+    } catch (error) {
+      toast(error instanceof Error ? error.message : '绑定失败', 'error')
+    } finally {
+      setBusyDns(null)
+    }
+  }
+
+  async function syncDns(record: string) {
+    setBusyDns(record)
+    try {
+      const result = await post<{ status?: string; detail?: string }>(
+        `/api/v1/dns/records/${encodeURIComponent(record)}/sync`,
+        undefined,
+        // 单条同步内部还要重试 3 次、每次 12 秒超时，别用普通接口的 20 秒掐掉它
+        SLOW_TIMEOUT_MS,
+      )
+      await loadAll()
+      const ok = (result?.status ?? '').startsWith('✅')
+      toast(`${record}：${result?.status ?? '已处理'}${result?.detail && !ok ? `（${result.detail}）` : ''}`,
+        ok ? 'success' : 'info')
+    } catch (error) {
+      toast(error instanceof Error ? error.message : '同步失败', 'error')
+    } finally {
+      setBusyDns(null)
+    }
+  }
+
+  async function syncAllDns() {
+    setDnsSyncingAll(true)
+    try {
+      const result = await post<{ items?: { record: string; status: string }[] }>(
+        '/api/v1/dns/sync',
+        undefined,
+        SLOW_TIMEOUT_MS,
+      )
+      await loadAll()
+      const items = result?.items ?? []
+      if (items.length === 0) {
+        toast('没有需要同步的记录（目标都没在跑，或解析已经是最新的）', 'info')
+      } else {
+        const failed = items.filter((item) => !item.status.startsWith('✅'))
+        toast(
+          failed.length === 0
+            ? `${items.length} 条记录已同步`
+            : `${items.length - failed.length} 条成功，${failed.length} 条失败：${failed
+                .map((item) => item.record)
+                .join('、')}`,
+          failed.length === 0 ? 'success' : 'error',
+        )
+      }
+    } catch (error) {
+      toast(error instanceof Error ? error.message : '同步失败', 'error')
+    } finally {
+      setDnsSyncingAll(false)
+    }
+  }
+
+  /** 返回 true 表示加成功了，DNS 页据此收起输入框 */
+  async function addDnsRecord(name: string): Promise<boolean> {
+    try {
+      await post('/api/v1/dns/records', { record: name })
+      await loadAll()
+      toast(`已添加 ${name}`, 'success')
+      return true
+    } catch (error) {
+      toast(error instanceof Error ? error.message : '添加失败', 'error')
+      return false
+    }
+  }
+
+  function removeDnsRecord(record: string) {
+    setConfirmBox({
+      title: '删除记录名',
+      message: `确定删除「${record}」？`,
+      hint: '只从本机列表里移除，Cloudflare 上的 DNS 记录不会被删；如果它绑了机器，绑定会一并解除。',
+      confirmText: '删除记录名',
+      failText: '删除失败',
+      run: async () => {
+        await del(`/api/v1/dns/records/${encodeURIComponent(record)}`)
+        await loadAll()
+        toast('记录名已删除', 'success')
+      },
+    })
+  }
+
+  async function runConfirm() {
+    if (!confirmBox) return
+    setConfirmBusy(true)
+    try {
+      await confirmBox.run()
+    } catch (error) {
+      toast(error instanceof Error ? error.message : (confirmBox.failText ?? '操作失败'), 'error')
+    } finally {
+      setConfirmBusy(false)
+      setConfirmBox(null)
+    }
+  }
+
+  /** 设置页有没保存的改动时先拦一下；真正要做的动作放在 run 里 */
+  function guardSettingsDirty(actionLabel: string, run: () => void) {
+    if (view !== 'settings' || !settingsDirty) {
+      run()
+      return
+    }
+    setConfirmBox({
+      title: '有未保存的修改',
+      message: `${actionLabel}会丢掉还没保存的改动。`,
+      hint: '想保留的话，先点「保存」再离开。',
+      confirmText: '放弃修改并离开',
+      run: async () => {
+        setSettingsDirty(false)
+        run()
+      },
+    })
+  }
+
+  /** 站内跳转统一入口：离开设置页时才有拦截，进设置页不拦 */
+  function goTo(next: View) {
+    if (next === view) {
+      // 已经在这一页：再点一次当「回到顶部」，长页面滑到底不用手动滚回去
+      window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
+      return
+    }
+    if (next === 'settings') {
+      setView(next)
+      return
+    }
+    guardSettingsDirty('离开设置页', () => setView(next))
+  }
+
+  async function doLogout() {
+    try {
+      await post('/api/v1/auth/logout')
+    } catch {
+      // 后端吊销失败不阻断本地登出；票据仍由服务端 14 天 TTL 兜底
+    } finally {
+      setPhase('login')
+      setOverview(null)
+    }
+  }
+
+  function logout() {
+    guardSettingsDirty('退出登录', () => void doLogout())
+  }
+
+  if (phase === 'loading') {
+    return (
+      <div className="boot">
+        <div className="spinner" />
+        正在连接…
+      </div>
+    )
+  }
+
+  if (phase === 'fatal') {
+    return (
+      <div className="boot">
+        <AlertTriangle size={22} style={{ color: 'var(--red)' }} />
+        <div>{fatal}</div>
+        <button className="btn" onClick={() => window.location.reload()}>
+          重试
+        </button>
+      </div>
+    )
+  }
+
+  if (phase === 'setup' || phase === 'login') {
+    return (
+      <Auth
+        mode={phase}
+        brand={meta.brand || 'CDT-Management'}
+        onDone={() => {
+          setPhase('loading')
+          void loadAll().catch(() => setPhase('login'))
+        }}
+      />
+    )
+  }
+
+  if (!overview || !settings) {
+    return (
+      <div className="boot">
+        <div className="spinner" />
+      </div>
+    )
+  }
+
+  const keepaliveIds = new Set(overview.keepalives.map((item) => item.server_id))
+  // 已编进换班组的机器按班次自动启停，单机保活会自动让位，界面上不再给"加入"入口
+  const groupedIds = new Set(
+    overview.groups.flatMap((group) => group.members.map((member) => member.server_id)),
+  )
+  // 全量归属（含停用的组员）：实例管理顶部的归属筛选、加入保活选择器都用这一份
+  const owners = ownerMap(overview)
+
+  // 侧栏一行：图标 + 名称 +（有东西才显示的）数量胶囊。
+  // 上段页面和下段托管方式共用这一份，避免两处各写一遍、样式慢慢走偏。
+  // 说明不再占一行：七项各带一句小字，一屏全是文字，反而是最挑不出项的那种排法；
+  // 改成 title，鼠标停上去照样能看到它说的是什么。
+  const navRow = (item: NavEntry) => {
+    const Icon = item.icon
+    const count = navCount(item.key, overview)
+    return (
+      <button
+        key={item.key}
+        className={`nav-item${item.tone ? ` nav-tone-${item.tone}` : ''}${
+          view === item.key ? ' on' : ''
+        }`}
+        title={item.hint}
+        aria-current={view === item.key ? 'page' : undefined}
+        onClick={() => goTo(item.key)}
+      >
+        <Icon size={15} />
+        <span className="nav-text">{item.label}</span>
+        {count > 0 && <span className="nav-count">{count}</span>}
+      </button>
+    )
+  }
+
+  return (
+    <div className="app-shell">
+      <aside className="sidebar">
+        <button
+          type="button"
+          className="brand"
+          title="回到运行概览"
+          aria-label="回到运行概览"
+          onClick={() => goTo('dashboard')}
+        >
+          <div className="brand-mark">
+            <Repeat size={18} />
+          </div>
+          <div className="brand-text">
+            <strong>{overview.brand}</strong>
+          </div>
+        </button>
+
+        <nav className="nav-list" aria-label="主视图">
+          <div className="nav-group">
+            <div className="nav-label">控制台</div>
+            {NAV_PAGES.map(navRow)}
+          </div>
+          <div className="nav-group">
+            <div className="nav-label">自动化</div>
+            {NAV_MODES.map(navRow)}
+          </div>
+        </nav>
+
+        <div className="sidebar-foot">
+          <button
+            className={`nav-item${view === 'settings' ? ' on' : ''}`}
+            onClick={() => goTo('settings')}
+          >
+            <SettingsIcon size={15} />
+            <span className="nav-text">设置</span>
+          </button>
+          <button className="nav-item" onClick={logout}>
+            <LogOut size={15} />
+            <span className="nav-text">退出</span>
+          </button>
+          <div className="meta" style={{ paddingLeft: 12, marginTop: 4 }}>
+            <Zap size={10} /> v{overview.version}
+          </div>
+        </div>
+      </aside>
+
+      <main className="main-area">
+        {view === 'dashboard' && (
+          <DashboardView
+            overview={overview}
+            onNavigate={goTo}
+          />
+        )}
+
+        {view === 'keepalive' && (
+          <KeepaliveView
+            keepalives={overview.keepalives}
+            servers={overview.servers}
+            groupedIds={groupedIds}
+            busyId={busyServer}
+            togglingId={busyKeepalive}
+            onAdd={() => setKeepalivePicker(true)}
+            onToggle={toggleKeepalive}
+            onEdit={(item) => setKeepaliveDialog({ server: null, item })}
+            onRemove={removeKeepalive}
+            onAction={serverAction}
+            onRefresh={refreshServer}
+          />
+        )}
+
+        {view === 'shift' && (
+          <ShiftView
+            groups={overview.groups}
+            serverCount={overview.servers.length}
+            monthDays={overview.month_days}
+            busyId={busyGroup}
+            onAdd={() => setGroupDialog({ open: true, group: null })}
+            onEdit={(group) => setGroupDialog({ open: true, group })}
+            onDelete={deleteGroup}
+            onSwitch={switchGroup}
+          />
+        )}
+
+        {view === 'balance' && (
+          <BalanceView
+            groups={overview.balances ?? []}
+            serverCount={overview.servers.length}
+            busyId={busyBalance}
+            onAdd={() => setBalanceDialog({ open: true, group: null })}
+            onEdit={(group) => setBalanceDialog({ open: true, group })}
+            onDelete={deleteBalance}
+            onSwitch={switchBalance}
+          />
+        )}
+
+        {view === 'servers' && (
+          <ServersView
+            servers={overview.servers}
+            owners={owners}
+            busyId={busyServer}
+            billingId={billingServer}
+            onAdd={() => setServerDialog({ open: true, server: null })}
+            onEdit={(server) => setServerDialog({ open: true, server })}
+            onDelete={deleteServer}
+            onRefresh={(server) => refreshServer(server.id)}
+            onAction={(server, action) => serverAction(server.id, action)}
+            onBilling={serverBilling}
+            onReorder={reorderServers}
+            onAddToKeepalive={(server) => {
+              if (keepaliveIds.has(server.id)) {
+                toast('这台已经在单机保活里了', 'info')
+                return
+              }
+              openKeepaliveDialog(server)
+            }}
+          />
+        )}
+
+        {view === 'dns' && (
+          <DNSView
+            dns={overview.dns}
+            servers={overview.servers}
+            keepalives={overview.keepalives}
+            groups={overview.groups}
+            balances={overview.balances}
+            owners={owners}
+            busy={busyDns}
+            syncingAll={dnsSyncingAll}
+            onBind={bindDns}
+            onSync={syncDns}
+            onSyncAll={syncAllDns}
+            onAddRecord={addDnsRecord}
+            onRemoveRecord={removeDnsRecord}
+            onReorder={reorderDns}
+            onOpenSettings={() => goTo('settings')}
+          />
+        )}
+
+        {view === 'settings' && settings && (
+          <SettingsView
+            settings={settings}
+            onSaved={refreshAfterSave}
+            onDirtyChange={setSettingsDirty}
+          />
+        )}
+
+        <div
+          style={{
+            marginTop: 28,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            fontSize: 12,
+            color: 'var(--muted-soft)',
+          }}
+        >
+          <button className="btn primary sm" onClick={reconcile} disabled={reconciling}>
+            {reconciling ? <LoaderCircle size={12} className="spin" /> : <RefreshCw size={12} />} 立即同步
+          </button>
+          {stale && (
+            <Badge tone="amber" dot>
+              连不上后端，数据可能已过期
+            </Badge>
+          )}
+          <span>
+            {`同步间隔 ${settings.reconcile_interval} 秒${
+              Number(settings.reconcile_offset) > 0
+                ? `（第 ${settings.reconcile_offset} 秒）`
+                : ''
+            } · ${overview.timezone}`}
+          </span>
+          {!settings.sdk_ready && <Badge tone="amber">阿里云 SDK 未就绪</Badge>}
+          {settings.dry_run && <Badge tone="amber">DRY RUN</Badge>}
+        </div>
+      </main>
+
+      {serverDialog.open && (
+        <ServerDialog
+          server={serverDialog.server}
+          defaultThresholdPercent={Number(settings.traffic_threshold_pct) || 90}
+          onClose={() => setServerDialog({ open: false, server: null })}
+          onSaved={(message) => {
+            setServerDialog({ open: false, server: null })
+            void refreshAfterSave(message)
+          }}
+        />
+      )}
+
+      {groupDialog.open && (
+        <GroupDialog
+          group={groupDialog.group}
+          servers={overview.servers}
+          monthDays={overview.month_days}
+          onClose={() => setGroupDialog({ open: false, group: null })}
+          onKeepaliveCleared={() => void loadAll()}
+          onSaved={(message) => {
+            setGroupDialog({ open: false, group: null })
+            void refreshAfterSave(message)
+          }}
+        />
+      )}
+
+      {balanceDialog.open && (
+        <BalanceDialog
+          group={balanceDialog.group}
+          servers={overview.servers}
+          onClose={() => setBalanceDialog({ open: false, group: null })}
+          onSaved={(message) => {
+            setBalanceDialog({ open: false, group: null })
+            void refreshAfterSave(message)
+          }}
+        />
+      )}
+
+      {keepalivePicker && (
+        <Modal
+          title="加入单机保活"
+          icon={<HeartPulse size={16} style={{ color: 'var(--green)' }} />}
+          onClose={() => setKeepalivePicker(false)}
+          footer={
+            <>
+              <span style={{ fontSize: 12, color: 'var(--muted)' }}>
+                已加入单机保活或换班组的机器是灰的，一台机器只能进一个
+              </span>
+              <span className="spacer" />
+              <button className="btn" onClick={() => setKeepalivePicker(false)}>
+                关闭
+              </button>
+            </>
+          }
+        >
+          {overview.servers.length === 0 ? (
+            <div className="hint">还没有实例，先去「实例管理」页添加</div>
+          ) : (
+            <div className="server-pick-list">
+              {overview.servers.map((server) => {
+                const inKeepalive = keepaliveIds.has(server.id)
+                const inGroup = groupedIds.has(server.id)
+                const blocked = inKeepalive || inGroup
+                const reason = inGroup
+                  ? '已加入联合换班组，一台机器只能进一个组'
+                  : inKeepalive
+                    ? '已加入单机保活，先移出后再添加'
+                    : ''
+                // 归属标签：全量归属表优先（含停用组员），再退回后端 managed
+                const display = owners.get(server.id) ?? server.managed ?? null
+                return (
+                  <button
+                    type="button"
+                    key={server.id}
+                    className={`server-pick-row${blocked ? ' is-disabled' : ''}`}
+                    disabled={blocked}
+                    title={reason || `选择「${server.label}」`}
+                    onClick={() => openKeepaliveDialog(server)}
+                  >
+                    <span className="server-pick-main">
+                      <span className="server-pick-name">{server.label}</span>
+                      <code className="server-pick-id">{server.instance_id || '未填实例 ID'}</code>
+                    </span>
+                    <span
+                      className={`owner-tag ${ownerTone(display)}${display && !display.active ? ' paused' : ''}`}
+                    >
+                      <OwnerIcon kind={ownerIcon(display)} />
+                      <span className="owner-tag-text">{ownerLabel(display)}</span>
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </Modal>
+      )}
+
+      {keepaliveDialog && (
+        <KeepaliveDialog
+          server={keepaliveDialog.server}
+          item={keepaliveDialog.item}
+          onClose={() => setKeepaliveDialog(null)}
+          onSaved={(message) => {
+            setKeepaliveDialog(null)
+            void loadAll()
+            toast(message, 'success')
+          }}
+        />
+      )}
+
+      {confirmBox && (
+        <ConfirmDialog
+          title={confirmBox.title}
+          message={confirmBox.message}
+          hint={confirmBox.hint}
+          confirmText={confirmBox.confirmText}
+          busy={confirmBusy}
+          onCancel={() => setConfirmBox(null)}
+          onConfirm={() => void runConfirm()}
+        />
+      )}
+
+      <div className="toasts">
+        {toasts.map((item) => (
+          <div className={`toast ${item.tone}`} key={item.id}>
+            {item.message}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}

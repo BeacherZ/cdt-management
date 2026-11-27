@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- 默认浅色：主题由后端设置决定，由 theme.ts 在运行时改写这两个 meta -->
+    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#eceff3" />
+    <!-- 首屏防主题闪变：后端在返回 index.html 时把真实主题写进 __BOOT_THEME__
+         （见 app/main.py 的 spa 路由），首屏直接用它，不再靠 localStorage 猜。
+         之前靠 localStorage 预测，残留值和后端设置不一致时会先按旧值渲染、
+         几百毫秒后再被 theme.ts 纠正，那一下就是刷新时闪出来的未暗化背景。
+         localStorage / 系统偏好只作兜底：Vite 开发模式没有后端注入，仍走原逻辑。 -->
+    <script>
+      /* 后端注入的真实主题由 spa 路由在 <head> 最前面写入；这里只兜开发模式 */
+      if (typeof window.__BOOT_THEME__ === 'undefined') window.__BOOT_THEME__ = null
+    </script>
+    <script>
+      (function () {
+        try {
+          var boot = window.__BOOT_THEME__
+          var saved = localStorage.getItem('cdt_theme')
+          // 优先级：后端注入 > localStorage（开发兜底）> 系统偏好
+          var mode =
+            boot === 'light' || boot === 'dark' || boot === 'system'
+              ? boot
+              : saved === 'dark' || saved === 'light'
+                ? saved
+                : 'system'
+          var theme =
+            mode === 'dark'
+              ? 'dark'
+              : mode === 'light'
+                ? 'light'
+                : window.matchMedia('(prefers-color-scheme: dark)').matches
+                  ? 'dark'
+                  : 'light'
+          if (theme === 'dark') document.documentElement.dataset.theme = 'dark'
+          var scheme = document.querySelector('meta[name="color-scheme"]')
+          if (scheme) scheme.setAttribute('content', theme)
+          var color = document.querySelector('meta[name="theme-color"]')
+          if (color) color.setAttribute('content', theme === 'dark' ? '#080b0f' : '#eceff3')
+        } catch (e) {
+          /* localStorage 被禁用（隐私模式）：退回 index.html 的默认浅色 */
+        }
+      })()
+    </script>
+    <title>CDT-Management</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%232589c2'/%3E%3Cg transform='translate(4 4) scale(1)' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m17 2 4 4-4 4'/%3E%3Cpath d='M3 11v-1a4 4 0 0 1 4-4h14'/%3E%3Cpath d='m7 22-4-4 4-4'/%3E%3Cpath d='M21 13v1a4 4 0 0 1-4 4H3'/%3E%3C/g%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,356 @@
+export type SiteType = 'china' | 'international'
+
+/** 停机模式：节省停机（不计规格费）/ 普通停机（照常收规格费） */
+export type StopMode = 'StopCharging' | 'Stop'
+
+/** 服务器被哪个自动化流程托管；null 表示闲散机器，可随时手动开关机 */
+export type Managed = {
+  kind: 'keepalive' | 'group' | 'balance'
+  name: string
+  active: boolean
+  /** 换班组或流量均衡组的 id（kind 为 group / balance 时有效） */
+  group_id?: number
+  keepalive_id?: number
+  /** 均衡组里这一台是不是当班；只有 kind=balance 有意义 */
+  duty?: boolean
+}
+
+/** 费用快照：本月账单 + 账户余额，来自 BSS（慢数据，后台定时刷新） */
+export type Billing = {
+  /** 本月税前消费；null = 还没查到（刚添加 / 缺 BSS 权限） */
+  monthly_cost: number | null
+  /** 账户可用额度；null = 还没查到 */
+  balance: number | null
+  currency: string
+  /** 账单所属账期 YYYY-MM */
+  cycle: string
+  /** true = 这份数字是上个月的，跨月后还没刷新 */
+  stale: boolean
+  updated_at: number
+  error: string
+}
+
+/** DNS 绑定的目标：一台服务器（含单机保活）、一个换班组或一个均衡组 */
+export type DnsTarget = {
+  kind: 'server' | 'group' | 'balance'
+  id: number
+  label: string
+  status: string
+  running: boolean
+  ip: string
+  /** 换班组 / 均衡组专用：此刻当班那台叫什么 */
+  duty?: string
+}
+
+/** 一条域名记录 + 它绑给了谁 + 上次同步结果 */
+export type DnsRecord = {
+  record: string
+  target: DnsTarget | null
+  last_ip: string
+  last_status: string
+  last_at: number
+  /** 目标现在在跑的话，应该解析到的 IP；没跑就是空串 */
+  desired_ip: string
+  state: 'unbound' | 'idle' | 'pending' | 'synced' | 'error'
+}
+
+export type DnsState = {
+  enabled: boolean
+  provider: string
+  configured: boolean
+  ttl: string
+  proxied: boolean
+  records: DnsRecord[]
+}
+
+export type Server = {
+  id: number
+  label: string
+  access_key_masked: string
+  region_id: string
+  site: SiteType
+  instance_id: string
+  quota_gb: number
+  threshold_gb: number
+  remark: string
+  traffic_used: number | null
+  traffic_percent: number | null
+  instance_status: string
+  /** 实例设置里选的停机模式：StopCharging 节省停机 / Stop 普通停机 */
+  stop_mode: StopMode
+  /** 阿里云返回的真实停机模式（选了节省停机但规格不支持时会是 KeepCharging） */
+  stopped_mode: string
+  public_ip: string
+  traffic_checked_at: number
+  status_checked_at: number
+  secret_configured: boolean
+  managed?: Managed | null
+  billing: Billing
+  /** 绑定的 DNS 域名；空串 = 没占任何记录 */
+  dns_record?: string
+}
+
+export type Keepalive = {
+  id: number
+  server_id: number
+  enabled: boolean
+  created_at: number
+  /** 每天允许运行的时段（HH:MM，不跨零点）；空串 = 全天 */
+  start_time: string
+  end_time: string
+  /** 每月允许运行的日子（1–31，不跨月）；0 = 全月 */
+  start_day: number
+  end_day: number
+  /** 当前是否落在运行窗口内（后端按同一套判定算好）；没设窗口时恒为 true */
+  in_window?: boolean
+  label: string
+  instance_status: string
+  stop_mode?: StopMode
+  stopped_mode: string
+  public_ip: string
+  traffic_used: number | null
+  quota_gb: number
+  threshold_gb: number
+  instance_id: string
+  region_id: string
+  site?: SiteType
+  status_checked_at: number
+  dns_record?: string
+}
+
+export type ShiftMember = {
+  id: number
+  server_id: number
+  position: number
+  hours: number
+  /** 一月一轮：本月该成员连上多少天（0 = 没排上，历史超额数据才会出现） */
+  days: number
+  /** 这一班怎么写：月模式「1–15 日」、时刻表「08:00–20:00」；空串＝按小时累加 */
+  span_label: string
+  enabled: boolean
+  is_duty: boolean
+  /** 班次名称，如「白班」「夜班」 */
+  slot_name: string
+  /** 固定起止时刻 HH:MM（时刻表模式）；空串 = 走老 hours 累加 */
+  start_time: string
+  end_time: string
+  server: Server | null
+}
+
+export type ShiftGroup = {
+  id: number
+  name: string
+  enabled: boolean
+  failover_enabled: boolean
+  /** 排班周期：day = 一天一轮（按小时 / 固定时刻），month = 一月一轮（按天） */
+  cycle: 'day' | 'month'
+  ddns_record: string
+  anchor_at: number
+  cycle_hours: number
+  members: ShiftMember[]
+  duty_server_id: number
+  shift_started_at: number
+  next_switch_at: number
+  phase: string
+  phase_label: string
+  /** 实时状态：按「实际状态 vs 排班表」判出来的，界面徽章用它而不是 phase */
+  state: string
+  state_label: string
+  note: string
+  updated_at: number
+  current_index: number
+}
+
+export type BalanceMember = {
+  id: number
+  server_id: number
+  position: number
+  /** 下班动作：keep 保持运行 / stop 按实例设置停机 */
+  off_action: 'keep' | 'stop'
+  enabled: boolean
+  is_duty: boolean
+  label: string
+  instance_id: string
+  region_id: string
+  site: string
+  instance_status: string
+  public_ip: string
+  traffic_used: number | null
+  quota_gb: number
+  threshold_gb: number
+  over_limit: boolean
+}
+
+export type BalanceGroup = {
+  id: number
+  name: string
+  enabled: boolean
+  failover_enabled: boolean
+  /** 评估周期（分钟）：60/180/360/720/1440 */
+  interval_minutes: number
+  /** 差值阈值：当班比最少者多这么多 GB 才切 */
+  diff_gb: number
+  min_duty_minutes: number
+  ddns_record: string
+  members: BalanceMember[]
+  duty_server_id: number
+  phase: 'idle' | 'starting' | 'switching' | 'settling' | 'exhausted' | 'error'
+  note: string
+  last_switch_at: number
+  next_eval_at: number
+  updated_at: number
+}
+
+export type EventItem = {
+  id: number
+  ts: number
+  level: string
+  kind: string
+  group_id: number
+  server_id: number
+  title: string
+  detail: string
+  /** running 进行中 / done 完成 / error 失败 */
+  status: string
+  /** 完成过程日志 [{ts, text}]：几点几分干了什么 */
+  progress: { ts: number; text: string }[]
+  /** 完成 / 失败时间戳，0 = 还没结束 */
+  finished_at: number
+}
+
+export type Overview = {
+  now: string
+  now_ts: number
+  /** 后端时区下的「YYYY-MM-DD HH:MM」，页面头直接显示，不在前端二次格式化 */
+  now_label: string
+  /** 后端时区下的今天，YYYY-MM-DD */
+  today: string
+  /** 今天所在月份的天数：一月一轮的平摊、"本月 N 天" 都读它 */
+  month_days: number
+  timezone: string
+  version: string
+  brand: string
+  repo: string
+  servers: Server[]
+  keepalives: Keepalive[]
+  groups: ShiftGroup[]
+  balances: BalanceGroup[]
+  dns: DnsState
+  notifications: {
+    channels: string[]
+    telegram: boolean
+    email: boolean
+    webhook: boolean
+  }
+  events: EventItem[]
+}
+
+/** 外观：存在后端，light / dark 固定，system 才跟随客户端系统主题 */
+export type ThemeMode = 'light' | 'dark' | 'system'
+
+/** 皮肤：classic 青色沉浸 / glass 蓝色玻璃，整份前端 bundle 切换 */
+export type SkinMode = 'classic' | 'glass'
+
+export type Settings = {
+  admin_username: string
+  theme: ThemeMode
+  skin: SkinMode
+  timezone: string
+  traffic_threshold_pct: string
+  reconcile_interval: string
+  reconcile_offset: string
+  billing_enabled: boolean
+  billing_interval: string
+  daily_report_enabled: boolean
+  daily_report_time: string
+  notify_on_shift: boolean
+  notify_on_balance: boolean
+  notify_on_balance_error: boolean
+  notify_on_failover: boolean
+  notify_on_recovery: boolean
+  notify_on_breaker: boolean
+  notify_on_limit_stop: boolean
+  notify_on_error: boolean
+  notify_on_keepalive: boolean
+  ddns: {
+    enabled: boolean
+    provider: string
+    cf_auth_mode: string
+    cf_token_configured: boolean
+    cf_email: string
+    cf_key_configured: boolean
+    zone_id: string
+    record: string
+    records: string[]
+    ttl: string
+    proxied: boolean
+    last_ip: string
+    last_status: string
+  }
+  telegram: {
+    enabled: boolean
+    token_configured: boolean
+    chat_id: string
+    proxy: string
+  }
+  email: {
+    enabled: boolean
+    host: string
+    port: string
+    security: string
+    username: string
+    password_configured: boolean
+    to: string
+  }
+  webhook: {
+    enabled: boolean
+    url: string
+    method: string
+    headers_configured: boolean
+    body: string
+  }
+  channels: string[]
+  sdk_ready: boolean
+  dry_run: boolean
+  repo?: string
+  version?: string
+}
+
+export type InitStatus = {
+  initialized: boolean
+  brand: string
+  version: string
+  repo: string
+}
+
+export function emptyServer(): Server {
+  return {
+    id: 0,
+    label: '',
+    access_key_masked: '',
+    region_id: 'cn-hongkong',
+    site: 'china',
+    instance_id: '',
+    quota_gb: 200,
+    threshold_gb: 188,
+    remark: '',
+    traffic_used: null,
+    traffic_percent: null,
+    instance_status: 'Unknown',
+    stop_mode: 'StopCharging',
+    stopped_mode: '',
+    public_ip: '',
+    traffic_checked_at: 0,
+    status_checked_at: 0,
+    secret_configured: false,
+    billing: {
+      monthly_cost: null,
+      balance: null,
+      currency: 'CNY',
+      cycle: '',
+      stale: false,
+      updated_at: 0,
+      error: '',
+    },
+  }
+}

@@ -9,6 +9,8 @@ data
 data/**
 web/node_modules
 web/dist
+web-glass/node_modules
+web-glass/dist
 app/static
 docs
 *.log
