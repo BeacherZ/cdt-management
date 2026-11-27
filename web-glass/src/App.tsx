@@ -950,7 +950,7 @@ export default function App() {
             color: 'var(--muted-soft)',
           }}
         >
-          <button className="btn primary sm" onClick={reconcile} disabled={reconciling}>
+          <button className="btn ghost sm" onClick={reconcile} disabled={reconciling}>
             {reconciling ? <LoaderCircle size={12} className="spin" /> : <RefreshCw size={12} />} 立即同步
           </button>
           {stale && (

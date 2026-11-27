@@ -94,6 +94,16 @@
   flex-shrink: 0;
 }
 
+/* 深色下品牌 LOGO 保持浅色那套深绿渐变，不跟着全局 --accent-grad 变亮绿
+   （其它按钮/开关在深色下仍需亮绿白字的高对比，所以只覆盖这一处）。 */
+:root[data-theme='dark'] .brand-mark {
+  background: linear-gradient(135deg, #0f8b63 0%, #0b7a58 46%, #0a6d6b 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.32),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.14),
+    0 6px 16px -8px rgba(11, 122, 88, 0.22);
+}
+
 .brand-text {
   min-width: 0;
 }

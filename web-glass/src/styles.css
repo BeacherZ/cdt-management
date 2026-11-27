@@ -88,6 +88,14 @@
   --status-border: color-mix(in srgb, var(--accent) 28%, transparent);
   --status-dot: var(--accent);
 
+  /* 状态胶囊 / 事件图标专用：浅色和 --status-* 完全同值，观感不变。
+     深色下单独减淡成淡蓝玻璃 + 亮蓝字，不跟菜单/按钮那块实心亮蓝绑定
+     （菜单选中态继续用 --status-*，保持原来的亮蓝深墨字）。 */
+  --pill-fill: var(--status-fill);
+  --pill-ink: var(--status-ink);
+  --pill-border: var(--status-border);
+  --pill-dot: var(--status-dot);
+
   /* 状态色 */
   /* 流量均衡归属色：直接复用「运行中」那套浅天蓝底 + 深墨蓝字（--status-*），
      不再单造一个 #2589c2 纯蓝 —— 那个比主菜单/运行中明显暗一档，不是一种蓝。 */
@@ -180,6 +188,13 @@
   --status-ink: #04212f;
   --status-border: transparent;
   --status-dot: #04212f;
+
+  /* 状态胶囊 / 事件图标：淡蓝玻璃底 + 亮蓝字，比菜单那块实心亮蓝轻一档，
+     深色背景上不再像一排荧光药丸。菜单/按钮选中态不读这组，保持原样。 */
+  --pill-fill: rgba(85, 188, 232, 0.18);
+  --pill-ink: var(--sky-ink);
+  --pill-border: rgba(85, 188, 232, 0.3);
+  --pill-dot: var(--accent);
 
   /* 深色下和「运行中」同一套：实心亮蓝底 + 深墨字（--status-*），不再单造蓝 */
   --blue: var(--status-ink);
@@ -519,6 +534,22 @@ a:hover {
 /* 深色主按钮是实心亮蓝，hover 再提一档（--sky-fill-hi 是半透明，会变淡） */
 :root[data-theme='dark'] .btn.primary:hover:not(:disabled) {
   --btn-bg: #5ec6f0;
+}
+
+/* 「立即换班 / 立即均衡」卡片按钮：深色下跟状态胶囊同一档淡蓝玻璃 + 亮蓝字，
+   不再跟着通用主按钮那块实心亮蓝一起刺眼。只覆盖这两颗，其它 .btn.primary
+   （开机 / 立即同步等）保持不变。hover 也压在半透明档，别再跳回实心亮蓝。 */
+:root[data-theme='dark'] .btn.primary.shift-switch:not(:disabled),
+:root[data-theme='dark'] .btn.primary.balance-switch:not(:disabled) {
+  --btn-bg: var(--pill-fill);
+  --btn-border: var(--pill-border);
+  color: var(--pill-ink);
+}
+
+:root[data-theme='dark'] .btn.primary.shift-switch:hover:not(:disabled),
+:root[data-theme='dark'] .btn.primary.balance-switch:hover:not(:disabled) {
+  --btn-bg: rgba(85, 188, 232, 0.28);
+  color: var(--pill-ink);
 }
 
 .btn.danger {
@@ -1325,9 +1356,9 @@ input[type='number']::-webkit-inner-spin-button {
 }
 
 .badge.green {
-  color: var(--status-ink);
-  background: var(--status-fill);
-  border-color: var(--status-border);
+  color: var(--pill-ink);
+  background: var(--pill-fill);
+  border-color: var(--pill-border);
 }
 
 /* 概览页右上那两颗（DNS 记录 / telegram）坐在偏蓝的页头背景上：
@@ -1359,15 +1390,15 @@ input[type='number']::-webkit-inner-spin-button {
 /* 「运行中」专用：和登录按钮同一块浅天蓝，靠 600 字重 + 深蓝圆点
    与「已停止」的白灰底拉开差距；不再另起一套绿。 */
 .badge.live {
-  color: var(--status-ink);
-  background: var(--status-fill);
-  border-color: var(--status-border);
+  color: var(--pill-ink);
+  background: var(--pill-fill);
+  border-color: var(--pill-border);
   font-weight: 600;
 }
 
 .badge.live .dot {
-  background: var(--status-dot);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--status-dot) 16%, transparent);
+  background: var(--pill-dot);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pill-dot) 16%, transparent);
 }
 
 .badge.red {
@@ -3638,9 +3669,9 @@ input[type='number']::-webkit-inner-spin-button {
    浅天蓝底，深色 = 深墨图标 + 亮蓝底，随 --status-* 自动切换。旧版 v1.8.2
    这里就是蓝色（--accent / --accent-soft），本轮玻璃改写成了中性灰，这里改回来。 */
 .event-icon.info {
-  color: var(--status-ink);
-  background: var(--status-fill);
-  border-color: var(--status-border);
+  color: var(--pill-ink);
+  background: var(--pill-fill);
+  border-color: var(--pill-border);
 }
 
 .event-body {
@@ -3686,8 +3717,8 @@ input[type='number']::-webkit-inner-spin-button {
 
 .event-status.running,
 .event-status.done {
-  color: var(--status-ink);
-  background: var(--status-fill);
+  color: var(--pill-ink);
+  background: var(--pill-fill);
 }
 
 .event-status.failed {
