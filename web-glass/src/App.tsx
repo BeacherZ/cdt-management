@@ -947,10 +947,15 @@ export default function App() {
             alignItems: 'center',
             gap: 10,
             fontSize: 12,
-            color: 'var(--muted-soft)',
+            color: 'var(--muted)',
           }}
         >
-          <button className="btn ghost sm" onClick={reconcile} disabled={reconciling}>
+          <button
+            className="btn ghost sm"
+            style={{ color: 'var(--ink)' }}
+            onClick={reconcile}
+            disabled={reconciling}
+          >
             {reconciling ? <LoaderCircle size={12} className="spin" /> : <RefreshCw size={12} />} 立即同步
           </button>
           {stale && (

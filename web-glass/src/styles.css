@@ -1361,9 +1361,9 @@ input[type='number']::-webkit-inner-spin-button {
   border-color: var(--pill-border);
 }
 
-/* 概览页右上那两颗（DNS 记录 / telegram）坐在偏蓝的页头背景上：
-   淡蓝底怎么调都和背景糊在一起，干脆换成卡片同款白磨砂玻璃，一眼能从页头里跳出来。
-   只换底材质，状态色（绿/琥珀/灰）的文字和圆点仍按各自 tone 走。 */
+/* 概览页右上那两颗（DNS 记录 / telegram）坐在偏蓝的页头背景上，
+   还是卡片同款白磨砂玻璃最清楚；字色与「运行中 / 完成」胶囊一致，
+   蓝点只留纯色，不加扩散光环。深色下 --panel / --line 自动跟随。 */
 .page-actions .badge {
   background: var(--panel);
   backdrop-filter: blur(10px) saturate(1.25);
@@ -1374,14 +1374,17 @@ input[type='number']::-webkit-inner-spin-button {
     var(--shadow-1);
 }
 
-/* 正常态文字/圆点用主题亮蓝；圆点走 currentColor，跟着一起亮。
-   深色下磨砂底是深灰玻璃，亮蓝字仍然清楚，不再用深墨字。 */
 .page-actions .badge.green {
-  color: var(--accent);
+  color: var(--pill-ink);
 }
 
 :root[data-theme='dark'] .page-actions .badge.green {
-  color: var(--accent);
+  color: var(--pill-ink);
+}
+
+.page-actions .badge.green .dot {
+  background: var(--pill-dot);
+  box-shadow: none;
 }
 
 /* 均衡页状态徽章不再用归属色主题蓝，回落到 .badge.green 那套通用状态色
@@ -3033,6 +3036,17 @@ input[type='number']::-webkit-inner-spin-button {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* 卡片组名前面的图标按归属色走，和侧栏菜单那三项同一套：
+   联合换班=绿(--green)，流量均衡=蓝(--blue-line)。只上色这一颗图标，
+   倒计时 Clock3、编辑/删除按钮图标不受影响。 */
+.group-head .group-icon.shift {
+  color: var(--green);
+}
+
+.group-head .group-icon.balance {
+  color: var(--blue-line);
 }
 
 .group-head h3 {

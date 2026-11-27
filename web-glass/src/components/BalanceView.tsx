@@ -120,7 +120,7 @@ export default function BalanceView({
             return (
               <div className="card card-pad" key={group.id}>
                 <div className="group-head">
-                  <Scale size={16} />
+                  <Scale size={16} className="group-icon balance" />
                   <h3>{group.name}</h3>
                   <Badge tone={badge.tone} pulse={badge.pulse} className="badge-balance">
                     {badge.text}

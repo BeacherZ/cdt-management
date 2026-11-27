@@ -103,7 +103,7 @@ export default function ShiftView({
             return (
               <div className="card card-pad" key={group.id}>
                 <div className="group-head">
-                  <Repeat size={16} />
+                  <Repeat size={16} className="group-icon shift" />
                   <h3>{group.name}</h3>
                   <Badge tone={groupStateTone(group.state)} pulse={groupStatePulse(group.state)}>
                     {group.state_label}
