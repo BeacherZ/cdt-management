@@ -2774,7 +2774,13 @@ input[type='number']::-webkit-inner-spin-button {
     padding: 12px 14px;
     border: 1px solid var(--line);
     border-radius: var(--radius-md);
-    background: var(--panel-solid);
+    /* 列表行和同页卡片模式的 .inst-table 行用同一档玻璃：半透明 --panel +
+       10px 模糊 + --shadow-2。原来用 --panel-solid 是不透实的，深色下背景
+       照片一点都透不上来，看着就没有玻璃感。深浅色都走变量，不用单独覆盖。 */
+    background: var(--panel);
+    backdrop-filter: blur(10px) saturate(1.25);
+    -webkit-backdrop-filter: blur(10px) saturate(1.25);
+    box-shadow: var(--shadow-2);
   }
 
   .server-table tbody tr:last-child {
@@ -2782,7 +2788,7 @@ input[type='number']::-webkit-inner-spin-button {
   }
 
   .server-table tbody tr:hover {
-    background: var(--panel-solid);
+    background: var(--panel);
   }
 
   .server-table td {
