@@ -23,7 +23,7 @@
 
 ## 🖥️界面
 
-浅色 / 深色（`设置 → 常规设置 → 外观`，点击查看大图）
+浅色 / 深色（青色沉浸），另有实验性「蓝色玻璃」主题（设置 → 常规设置 → 外观，点击查看大图）
 
 <p align="center">
   <a href="docs/screenshots/02-dashboard.png"><img src="docs/screenshots/02-dashboard.png" width="48.2%" alt="运行概览（浅色）"></a>
